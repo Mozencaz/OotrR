@@ -8,7 +8,7 @@ lost (an event already playing, a save loaded meanwhile) is sent again after
 what it does not hold, and nothing is given twice.
 
 Only while the running game carries this seed's marker (a save of this seed is
-loaded). Memory access: ``tracker.live_memory`` (Hookshot).
+loaded). Memory access: ``tracker.live_memory`` (Hookshot or a yuzu-family emulator).
 """
 import time
 
