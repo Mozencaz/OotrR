@@ -118,7 +118,6 @@ def verify(nup_path, seed_dir):
         # Archipelago reception: the global sequence's watcher and its event row.
         from oot_rando.patching import ap_mailbox
         # Records rebuilt from the patch alone (the remote items of this world).
-        from oot_rando.formats import byml_codec
         expected = ap_mailbox.records((manifest.get('archipelago') or {}).get('remote', []))
         if expected != mailbox['items']:
             raise ValueError('Archipelago reception differs from the patch.')
@@ -178,9 +177,8 @@ def verify(nup_path, seed_dir):
                 # Key rings / dungeon boss keys, rebuilt from the spoiler alone.
                 from oot_rando.patching.key_adapter import add_key_hook, key_records
                 records = key_records(p['ap_item'] for p in full if p['ap_item'].startswith(('Small Key Ring (',))
-                                      or (p['ap_item'].startswith('Boss Key (')
-                                          and p.get('reward_actor', p['actor']).removeprefix('Obj_Rando_').removeprefix('Shop_Rando_')
-                                          .startswith('Item_BossKey_')))
+                                      or is_key_actor(p.get('reward_actor', p['actor']).removeprefix('Obj_Rando_')
+                                                      .removeprefix('Shop_Rando_')))
                 if records != skips['key_items']['records']:
                     raise ValueError('Dungeon keys differ from the spoiler.')
                 original = add_key_hook(original, records)[0]
@@ -361,9 +359,11 @@ def verify(nup_path, seed_dir):
     from oot_rando.logic.world import World
     from oot_rando.randomizer import full_randomizer
     data = World()
+    # Seed key of the generation: options drawn from it (random key rings) must match.
+    seed_key = (manifest['settings'].get('archipelago') or {}).get('seed_key') or manifest['seed_id']
     plan = full_randomizer.replay(data, manifest['settings']['full'], groups, enemies,
                                   {p['id']: p['ap_item'] for p in full}, manifest['settings']['open_forest'],
-                                  extra=extra)
+                                  extra=extra, seed_key=seed_key)
     multiworld = manifest.get('archipelago')
     warnings = []
     if multiworld is not None:

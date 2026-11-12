@@ -28,6 +28,13 @@ from oot_rando.game.remake_world import FOLDER_DUNGEON
 
 RING_PREFIX = 'Item_KeyRing_'
 BOSS_PREFIX = 'Item_BossKey_'
+MAP_PREFIX = 'Item_DungeonMap_'
+COMPASS_PREFIX = 'Item_DungeonCompass_'
+# Dungeon-specific items of this module: actor prefix -> (AP item kind, model, GameData field).
+SPECIFIC = {RING_PREFIX: ('Small Key Ring', 'Item_Dungeon_SmallKey', 'SmallKeyNum'),
+            BOSS_PREFIX: ('Boss Key', 'Item_Dungeon_BossKey', 'IsGetBossKey'),
+            MAP_PREFIX: ('Map', 'Item_Dungeon_Map', 'IsGetMap'),
+            COMPASS_PREFIX: ('Compass', 'Item_Dungeon_Compass', 'IsGetCompass')}
 APPLIED_PREFIX = 'RandoKeyRing.'
 SMALL_KEY_MODEL = 'Item_Dungeon_SmallKey'
 BOSS_KEY_MODEL = 'Item_Dungeon_BossKey'
@@ -82,12 +89,33 @@ def boss_actor(folder):
     return BOSS_PREFIX + folder
 
 
+def map_actor(folder):
+    return MAP_PREFIX + folder
+
+
+def compass_actor(folder):
+    return COMPASS_PREFIX + folder
+
+
+def specific_actor(item):
+    """Dungeon-specific actor of a ring, boss key, map or compass AP item."""
+    for prefix, (kind, _, _) in SPECIFIC.items():
+        if item.startswith(kind + ' ('):
+            return prefix + item_folder(item)
+    raise ValueError('Not a dungeon item: ' + item)
+
+
+def _split(actor):
+    for prefix in SPECIFIC:
+        if actor.startswith(prefix) and actor[len(prefix):] in FOLDER_DUNGEON:
+            return prefix, actor[len(prefix):]
+    return None, None
+
+
 def key_actor_item(actor):
     """AP item of a dungeon-specific key actor, or None."""
-    for prefix, kind in ((RING_PREFIX, 'Small Key Ring'), (BOSS_PREFIX, 'Boss Key')):
-        if actor.startswith(prefix) and actor[len(prefix):] in FOLDER_DUNGEON:
-            return f'{kind} ({FOLDER_DUNGEON[actor[len(prefix):]]})'
-    return None
+    prefix, folder = _split(actor)
+    return f'{SPECIFIC[prefix][0]} ({FOLDER_DUNGEON[folder]})' if prefix else None
 
 
 def is_key_actor(actor):
@@ -95,8 +123,10 @@ def is_key_actor(actor):
 
 
 def key_texts(actor, language):
-    folder = actor[len(RING_PREFIX):] if actor.startswith(RING_PREFIX) else actor[len(BOSS_PREFIX):]
-    ring = actor.startswith(RING_PREFIX)
+    prefix, folder = _split(actor)
+    ring = prefix == RING_PREFIX
+    if prefix in (MAP_PREFIX, COMPASS_PREFIX):
+        return dungeon_item_texts(prefix == MAP_PREFIX, folder, language)
     if language.endswith('fr'):
         name = FRENCH_DUNGEONS[folder]
         if ring:
@@ -114,6 +144,24 @@ def key_texts(actor, language):
                 'GetMessage': f'You got the {name} key ring!', 'GetCaption': 'Its locked doors can now open.'}
     return {'Name': f'Boss Key: {name}', 'Caption': f'The boss key of the {name}.',
             'GetMessage': f'You got the {name} boss key!', 'GetCaption': 'It opens the boss door of this dungeon.'}
+
+
+def dungeon_item_texts(is_map, folder, language):
+    if language.endswith('fr'):
+        name = FRENCH_DUNGEON_NAMES[folder]
+        if is_map:
+            return {'Name': f'Carte : {name}', 'Caption': f'La carte du donjon « {name} ».',
+                    'GetMessage': f'Vous avez obtenu la carte du donjon : {name} !',
+                    'GetCaption': 'Le plan du donjon apparaît dans le menu.'}
+        return {'Name': f'Boussole : {name}', 'Caption': f'La boussole du donjon « {name} ».',
+                'GetMessage': f'Vous avez obtenu la boussole du donjon : {name} !',
+                'GetCaption': 'Les coffres du donjon apparaissent sur la carte.'}
+    name = ENGLISH_DUNGEON_NAMES[folder]
+    if is_map:
+        return {'Name': f'Map: {name}', 'Caption': f'The dungeon map of the {name}.',
+                'GetMessage': f'You got the {name} map!', 'GetCaption': 'The dungeon layout is now shown in the menu.'}
+    return {'Name': f'Compass: {name}', 'Caption': f'The compass of the {name}.',
+            'GetMessage': f'You got the {name} compass!', 'GetCaption': 'The dungeon chests now show on the map.'}
 
 
 def start_dungeon_values(options):
@@ -160,11 +208,17 @@ def check_start_values(gamedata_raw, values):
             raise ValueError('Start value not found in the saved game data: ' + name)
 
 
+FRENCH_DUNGEON_NAMES = dict(FRENCH_DUNGEONS, InsideTheDekuTree='Arbre Mojo', DodongoCavern='Caverne Dodongo',
+                            InsideJabuJabuBelly='Ventre de Jabu-Jabu', IceCavern='Caverne Polaire')
+ENGLISH_DUNGEON_NAMES = dict(ENGLISH_DUNGEONS, InsideTheDekuTree='Deku Tree', DodongoCavern="Dodongo's Cavern",
+                             InsideJabuJabuBelly="Jabu-Jabu's Belly", IceCavern='Ice Cavern')
+
+
 def key_specs(actors):
     specs = []
     for actor in sorted(actors):
         name = 'RandoKey_' + actor[len('Item_'):] + '.event.root'
-        specs.append({'actor': actor, 'model': SMALL_KEY_MODEL if actor.startswith(RING_PREFIX) else BOSS_KEY_MODEL,
+        specs.append({'actor': actor, 'model': SPECIFIC[_split(actor)[0]][1],
                       'event_name': name, 'event_member': 'AI/' + name + '.ainb',
                       'event_ain': 'Work/AI/Root/Event/' + name + '.ain',
                       'texts': (lambda language, actor=actor: key_texts(actor, language))})
@@ -181,8 +235,10 @@ def key_records(items):
                             'count': RING_DUNGEONS[folder], 'applied': APPLIED_PREFIX + folder,
                             'gamedata': f'DungeonInfo.{folder}.SmallKeyNum'})
         else:
-            records.append({'kind': 'boss', 'actor': boss_actor(folder), 'folder': folder,
-                            'gamedata': f'DungeonInfo.{folder}.IsGetBossKey'})
+            actor = specific_actor(item)
+            kind = {BOSS_PREFIX: 'boss', MAP_PREFIX: 'map', COMPASS_PREFIX: 'compass'}[_split(actor)[0]]
+            records.append({'kind': kind, 'actor': actor, 'folder': folder,
+                            'gamedata': f'DungeonInfo.{folder}.{SPECIFIC[_split(actor)[0]][2]}'})
     return records
 
 
@@ -205,7 +261,7 @@ def check_dungeon_data(gamedata_raw, records):
     from oot_rando.formats.inspect_resources import Byml
     from oot_rando.patching.soul_adapter import murmur3
     data = Byml(gamedata_raw).root['Data']
-    types = {'ring': 'Int', 'boss': 'Bool'}
+    types = {'ring': 'Int', 'boss': 'Bool', 'map': 'Bool', 'compass': 'Bool'}
     for record in records:
         entries = {e['Hash']: e for e in data[types[record['kind']]]}
         entry = entries.get(murmur3(record['gamedata']))

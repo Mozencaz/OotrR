@@ -184,7 +184,7 @@ STATIC_TIER_SOURCES = {'GC Darunias Joy': ('Progressive Strength Upgrade', 0)}
 
 
 def actor_item(actor, folder):
-    if actor.startswith(('Item_KeyRing_', 'Item_BossKey_')):
+    if actor.startswith(('Item_KeyRing_', 'Item_BossKey_', 'Item_DungeonMap_', 'Item_DungeonCompass_')):
         from oot_rando.patching.key_adapter import key_actor_item
         item = key_actor_item(actor)
         if item:

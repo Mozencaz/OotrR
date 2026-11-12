@@ -21,8 +21,8 @@ if _VENDOR not in sys.path:
     sys.path.insert(0, _VENDOR)
 
 from BaseClasses import Item, ItemClassification, Location, LocationProgressType, Region  # noqa: E402
-from Options import (Choice, DefaultOnToggle, OptionError, PerGameCommonOptions, StartInventoryPool,  # noqa: E402
-                     Toggle)
+from Options import (Choice, DefaultOnToggle, OptionError, OptionSet, PerGameCommonOptions,  # noqa: E402
+                     StartInventoryPool, Toggle)
 from worlds.AutoWorld import World  # noqa: E402
 
 from oot_rando.archipelago import bridge  # noqa: E402
@@ -37,6 +37,9 @@ def _option_class(spec):
     attrs = {'__doc__': spec['help'] or spec['label'], 'display_name': spec['label'], '__module__': __name__}
     if spec['kind'] == 'bool':
         return type(name, (DefaultOnToggle if spec['default'] else Toggle,), attrs)
+    if spec['kind'] == 'list':
+        attrs.update(valid_keys=frozenset(spec['values']), default=frozenset(spec['default']))
+        return type(name, (OptionSet,), attrs)
     for index, value in enumerate(spec['values']):
         attrs['option_' + bridge.ap_value_name(value)] = index
     attrs['default'] = spec['values'].index(spec['default'])
@@ -77,7 +80,10 @@ class OoTRemakeWorld(World):
         values = {}
         for spec in SPECS:
             option = getattr(self.options, spec['name'])
-            values[spec['name']] = bool(option.value) if spec['kind'] == 'bool' else spec['values'][option.value]
+            if spec['kind'] == 'list':
+                values[spec['name']] = tuple(v for v in spec['values'] if v in option.value)
+            else:
+                values[spec['name']] = bool(option.value) if spec['kind'] == 'bool' else spec['values'][option.value]
         seed_key = f'archipelago|{self.multiworld.seed_name}|{self.player}'
         try:
             self.remake = bridge.PlayerWorld(CATALOG, values, seed_key)

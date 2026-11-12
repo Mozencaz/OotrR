@@ -64,7 +64,7 @@ def ap_option_specs():
         if option.kind == 'items':
             continue  # starting items: the apworld's own start_inventory_from_pool
         values = [v for v in option.allowed() if option.supported(v)]
-        if option.name in AP_SKIPPED or len(values) < 2:
+        if option.name in AP_SKIPPED or (len(values) < 2 and option.kind != 'list'):
             continue
         specs.append({'name': option.name, 'kind': option.kind, 'label': option.label, 'default': option.default,
                       'values': values, 'help': option.help})
@@ -94,7 +94,11 @@ def player_yaml(values, open_forest, name='Player'):
     for spec in ap_option_specs():
         value = current[spec['name']]
         # Quoted: YAML would read ``off`` as false and ``4`` as an index.
-        text = ('true' if value else 'false') if spec['kind'] == 'bool' else f"'{ap_value_name(value)}'"
+        if spec['kind'] == 'list':
+            import json
+            text = json.dumps(list(value), ensure_ascii=False)
+        else:
+            text = ('true' if value else 'false') if spec['kind'] == 'bool' else f"'{ap_value_name(value)}'"
         lines.append(f'  {spec["name"]}: {text}')
     lines.append(f'  accessibility: {"full" if values["accessibility"] == "full" else "minimal"}')
     if values['start_inventory_from_pool']:
