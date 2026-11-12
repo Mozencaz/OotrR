@@ -217,7 +217,8 @@ class PlayerWorld:
 
     def can_hold(self, gid, item=None):
         """Whether location ``gid`` can give ``item`` (None: another player's item)."""
-        return self.c.allowed(FOREIGN_STANDIN if item is None else item, gid)
+        from oot_rando.patching.ap_item import ap_item
+        return self.c.allowed(ap_item('?') if item is None else item, gid)
 
     def reach(self, counts):
         """(reachable virtual locations, victory) for these collected items. Cached."""
@@ -302,9 +303,21 @@ def settings_from_patch(patch):
                     archipelago=patch, **dict.fromkeys(SKIP_OPTIONS, True)).validate()
 
 
+def _label(placement):
+    return f'{placement["item"]} ({placement.get("player", "?")})'
+
+
 def assigned_items(patch):
-    """gid → item to place in this game (another player's item → its stand-in)."""
-    return {gid: (p['item'] if p['own'] else FOREIGN_STANDIN) for gid, p in patch['placements'].items()}
+    """gid → item to place in this game (another player's item → its Archipelago medallion)."""
+    from oot_rando.patching.ap_item import ap_item
+    return {gid: (p['item'] if p['own'] else ap_item(_label(p))) for gid, p in patch['placements'].items()}
+
+
+def foreign_items(patch):
+    """Planner item of each foreign item → (item name, player), for the get-item texts."""
+    from oot_rando.patching.ap_item import ap_item
+    return {ap_item(_label(p)): (p['item'], p.get('player', '?'))
+            for p in patch['placements'].values() if not p['own']}
 
 
 def patch_spheres(patch):
@@ -315,4 +328,4 @@ def patch_spheres(patch):
 
 def foreign_labels(patch):
     """gid → label shown in the spoiler for another player's item."""
-    return {gid: f'{p["item"]} ({p.get("player", "?")})' for gid, p in patch['placements'].items() if not p['own']}
+    return {gid: _label(p) for gid, p in patch['placements'].items() if not p['own']}

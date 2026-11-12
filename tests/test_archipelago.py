@@ -69,7 +69,8 @@ class Units(unittest.TestCase):
 
     def test_patch_helpers(self):
         patch = bridge.check_patch(sample_patch())
-        self.assertEqual(bridge.assigned_items(patch), {'A#1': 'Bow', 'A#2': bridge.FOREIGN_STANDIN})
+        self.assertEqual(bridge.assigned_items(patch), {'A#1': 'Bow', 'A#2': 'Archipelago: Sword (Ami)'})
+        self.assertEqual(bridge.foreign_items(patch), {'Archipelago: Sword (Ami)': ('Sword', 'Ami')})
         self.assertEqual(bridge.foreign_labels(patch), {'A#2': 'Sword (Ami)'})
         self.assertEqual(bridge.patch_spheres(patch), {'A#1': 2, 'A#2': 1})
         old = sample_patch(placements={'A#1': {'item': 'Bow', 'own': True}})
@@ -161,7 +162,8 @@ class WithGame(unittest.TestCase):
                                          copy.deepcopy(self.enemies), key, True, extra=copy.deepcopy(self.extra))
         placed = {p['id']: p['item'] for p in reference['placements']}
         self.assertEqual(set(placed), set(world.names))
-        foreign = [g for g, item in sorted(placed.items()) if world.classification(item) == 'filler'][:3]
+        foreign = [g for g, item in sorted(placed.items())
+                   if world.classification(item) == 'filler' and world.can_hold(g)][:3]
         placements = {g: {'item': 'Sword' if g in foreign else item, 'own': g not in foreign,
                           'player': 'Ami' if g in foreign else 'Moi', 'sphere': None}
                       for g, item in placed.items()}
@@ -173,8 +175,10 @@ class WithGame(unittest.TestCase):
                                                True, extra=copy.deepcopy(self.extra),
                                                labels=bridge.foreign_labels(patch))
         by_id = {p['id']: p for p in result['placements']}
+        from oot_rando.patching.ap_item import ap_actor
         for gid in foreign:
-            self.assertEqual(by_id[gid]['item'], bridge.FOREIGN_STANDIN)
+            self.assertEqual(by_id[gid]['item'], 'Archipelago: Sword (Ami)')
+            self.assertEqual(by_id[gid]['after'], ap_actor('Archipelago: Sword (Ami)'))
         labels = {row['id']: row['item'] for row in result['spoiler']}
         self.assertEqual(labels[foreign[0]], 'Sword (Ami)')
         with self.assertRaises(full_randomizer.FillError):

@@ -68,3 +68,19 @@ def add_resources(raw, sizes_by_path):
         result.extend(struct.pack('<II', crc, size))
     result.extend(raw[22 + count * 8:])
     return bytes(result), records
+
+
+def allocation(raw, path):
+    """Current RESTBL allocation of a resource, or None when it has no entry."""
+    version, block, count, names = struct.unpack_from('<IIII', raw, 6)
+    target = path.removesuffix('.zs')
+    for index in range(names):
+        position = 22 + count * 8 + index * (block + 4)
+        if raw[position:position + block].split(b'\0', 1)[0].decode() == target:
+            return struct.unpack_from('<I', raw, position + block)[0]
+    digest = zlib.crc32(target.encode())
+    for index in range(count):
+        crc, size = struct.unpack_from('<II', raw, 22 + index * 8)
+        if crc == digest:
+            return size
+    return None

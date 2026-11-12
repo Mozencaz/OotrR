@@ -27,7 +27,7 @@ from oot_rando.patching.qol_patches import (STATIC, STATIC_SOURCE_SHA256, DYNAMI
                          SWORD_CHEST_FLOW, skip_kokiri_sword_cutscene)
 from oot_rando.game.randomizer_categories import CATEGORIES
 from oot_rando.game.world_maps import SAFE_CATEGORIES, build_world, effective_members
-from oot_rando.game.resource_allocations import grow_resources, add_resources
+from oot_rando.game.resource_allocations import allocation, grow_resources, add_resources
 from oot_rando.formats.byml_writer import patch_strings
 from oot_rando.logic import rando_options
 
@@ -388,9 +388,11 @@ def generate(nup_path, output, settings, progress=None):
             growths[path] = max(len(raw) - len(decompress(source, d)), 0)
             compress(path, raw, source)
         new_sizes = {}
+        rest_raw = decompress(read(RESTBL), d) if new_files else None
         for path, (raw, template) in sorted(new_files.items()):
             compress(path, raw, read(template))
-            new_sizes[path] = (len(raw) + 0x1000 + 4095) & ~4095
+            # A copy of a resource (model, texture) needs at least the original's allocation.
+            new_sizes[path] = max((len(raw) + 0x1000 + 4095) & ~4095, allocation(rest_raw, template) or 0)
         if any(growths.values()) or new_sizes:
             rest_source = read(RESTBL)
             rest, allocations = grow_resources(decompress(rest_source, d), growths)
@@ -557,7 +559,8 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
     actors = {p['after'] for p in plan['placements']} - {p['before'] for p in plan['placements']}
     from oot_rando.patching.key_adapter import is_key_actor as _is_key_actor
     for actor in sorted(actors):
-        if actor.startswith('Item_Soul_') or is_derived(actor) or actor in repeatable_actors or _is_key_actor(actor):
+        if (actor.startswith(('Item_Soul_', 'Item_AP_')) or is_derived(actor) or actor in repeatable_actors
+                or _is_key_actor(actor)):
             continue
         if 'Pack/Actor/' + actor + '.pack.zs' not in members:
             raise ValueError('Reward actor missing from the game: ' + actor)
@@ -596,6 +599,21 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
         key_modified, key_new = build_key_files(key_read, plan['key_items'], messages)
         modified.update(key_modified)
         new.update(key_new)
+    if settings.archipelago is not None:
+        from oot_rando.archipelago.bridge import foreign_items
+        from oot_rando.patching.ap_item import build_ap_files
+        placed = {p['item'] for p in plan['placements']}
+        ap_items = {item: label for item, label in foreign_items(settings.archipelago).items() if item in placed}
+        if ap_items:
+            report(f'Building {len(ap_items)} Archipelago items (medallion with the logo, names)…')
+            messages = sorted(m for m in members if m.startswith('Mals/') and '.Product.110.' in m)
+
+            def ap_read(path):
+                return modified[path] if path in modified else decompress(read(path), dictionaries_)
+
+            ap_modified, ap_new = build_ap_files(ap_read, ap_items, messages)
+            modified.update(ap_modified)
+            new.update(ap_new)
     for resource, edits in sorted(event_changes.items()):
         report('Event: ' + resource.split('/')[-1])
         modified[resource] = patch_event_params(decompress(read(resource), dictionaries_), edits)

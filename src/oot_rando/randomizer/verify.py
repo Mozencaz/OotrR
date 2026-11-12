@@ -262,14 +262,14 @@ def verify(nup_path, seed_dir):
         if actor in once_actors:
             derived.add(actor)
             canonical = once_actors[actor]['canonical']
-            if canonical.startswith('Item_Soul_') or is_key_actor(canonical):
+            if canonical.startswith(('Item_Soul_', 'Item_AP_')) or is_key_actor(canonical):
                 soul_actors.add(canonical)
-        elif actor.startswith('Item_Soul_') or is_key_actor(actor):
+        elif actor.startswith(('Item_Soul_', 'Item_AP_')) or is_key_actor(actor):
             soul_actors.add(actor)
         elif is_derived(actor):
             derived.add(actor)
             canonical = canonical_of(actor)
-            if canonical.startswith('Item_Soul_') or is_key_actor(canonical):
+            if canonical.startswith(('Item_Soul_', 'Item_AP_')) or is_key_actor(canonical):
                 soul_actors.add(canonical)  # derived soul/key: the generated item must exist too
         elif 'Pack/Actor/' + actor + '.pack.zs' not in members:
             raise ValueError('Actor missing: ' + actor)

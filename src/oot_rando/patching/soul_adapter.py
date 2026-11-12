@@ -387,7 +387,8 @@ def build_soul_files(read_raw, soul_items, message_archives=()):
 def build_item_files(read_raw, specs, message_archives=()):
     """New key-item pouch actors from the Forest Medallion template (souls, dungeon keys).
 
-    ``specs``: dicts with ``actor``, ``model`` (native actor lending its model),
+    ``specs``: dicts with ``actor``, ``model`` (native actor lending its model; an
+    optional ``model_info`` overrides its ``FmdbName``/``ModelProjectName``),
     ``event_name``/``event_member``/``event_ain`` (cloned get event) and ``texts``
     (function(language) -> get-item texts). Reading goes through ``read_raw`` so
     that successive calls compose.
@@ -440,7 +441,9 @@ def build_item_files(read_raw, specs, message_archives=()):
             'EventUniqueAin': spec['event_ain'], 'UseEventUniqueAin': True}})
         components['EventPerformerRef'] = '?' + event_param
         files[f'Actor/{actor}.engine__actor__ActorParam.bgyml'] = byml_codec.dump(param)
-        files[f'Component/ModelInfo/{actor}.engine__component__ModelInfo.bgyml'] = byml_codec.dump(models[spec['model']])
+        model = copy.deepcopy(models[spec['model']])
+        model['root'].update(spec.get('model_info', {}))
+        files[f'Component/ModelInfo/{actor}.engine__component__ModelInfo.bgyml'] = byml_codec.dump(model)
         new[f'Pack/Actor/{actor}.pack.zs'] = (byml_codec.build_sarc(files), f'Pack/Actor/{TEMPLATE}.pack.zs')
     # 2. RSDB rows (sorted by row id), cloned from the template / model rows.
     for table, path in RSDB_FILES.items():
@@ -460,6 +463,7 @@ def build_item_files(read_raw, specs, message_archives=()):
                             'ModelVariationFmabName', 'AnimationResources', 'ASInfoAutoPlayMaterials'):
                     if key in model_row:
                         row[key] = copy.deepcopy(model_row[key])
+                row.update(spec.get('model_info', {}))
                 row['InstanceHeapSize'] = max(row['InstanceHeapSize'], model_row['InstanceHeapSize'])
             rows.append(row)
         rows.sort(key=lambda row: row['__RowId'])

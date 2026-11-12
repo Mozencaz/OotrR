@@ -76,6 +76,9 @@ def can_take(canonical, form):
     """Whether an item can be given by a location of ``form`` (statically)."""
     if canonical.startswith('Shop_'):
         return form == 'shop'           # shop-only purchases (bottle contents, refills…)
+    if canonical.startswith('Item_AP_'):
+        # Another player's item (Archipelago medallion): forms proven for new pouch actors.
+        return form in ('chest', 'world')
     if canonical.startswith('Item_Soul_'):
         # The soul flag is written by the soul's own get event: proven for pickups
         # (world) and planned for chests; shop purchases and NPC/cutscene gifts may

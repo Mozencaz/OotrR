@@ -202,6 +202,9 @@ def actor_item(actor, folder):
 
 def item_actor(item, folder, tier=None):
     """Remake actor for an AP item placed in ``folder`` (dungeon items stay generic)."""
+    from oot_rando.patching.ap_item import ap_actor, is_ap_item
+    if is_ap_item(item):
+        return ap_actor(item)
     if item.startswith('Small Key Ring ('):
         from oot_rando.patching.key_adapter import item_folder, ring_actor
         return ring_actor(item_folder(item))

@@ -20,7 +20,7 @@ VENDORED = ('__init__.py', 'paths.py',
             'randomizer/__init__.py', 'randomizer/full_randomizer.py',
             'game/__init__.py', 'game/remake_world.py', 'game/item_forms.py', 'game/extra_sources.py',
             'game/randomizer_categories.py',
-            'patching/__init__.py', 'patching/soul_adapter.py', 'patching/key_adapter.py',
+            'patching/__init__.py', 'patching/soul_adapter.py', 'patching/key_adapter.py', 'patching/ap_item.py',
             'archipelago/__init__.py', 'archipelago/bridge.py')
 # Becomes ``oot_remake/__init__.py``. Not a ``.py`` here: it imports Archipelago.
 TEMPLATE = 'archipelago/ap_world.py.in'
