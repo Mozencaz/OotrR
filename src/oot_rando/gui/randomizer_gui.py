@@ -21,6 +21,7 @@ from oot_rando.game.randomizer_categories import CATEGORIES
 from oot_rando.game.world_maps import SAFE_CATEGORIES
 from oot_rando.logic import rando_options
 from oot_rando.paths import data_dir, seeds_dir, state_dir
+from oot_rando.gui import theme
 
 STATE = state_dir()
 LABELS = dict(zip(POOL, ('Green Rupee', 'Blue Rupee', 'Red Rupee', 'Purple Rupee',
@@ -82,8 +83,8 @@ class Application:
     def __init__(self, root):
         self.root = root
         root.title('OoT Randomizer')
-        root.geometry('1140x850')
-        root.minsize(940, 720)
+        root.geometry('1220x860')
+        root.minsize(1040, 720)
         self.configure_theme()
         self.events, self.busy = queue.Queue(), False
         self.artifact, self.tracker, self.overlay, self.hud = None, None, None, None
@@ -125,29 +126,49 @@ class Application:
         self.result = tk.StringVar(value='No seed open. Generate a game or open an existing folder.')
         self.connection_status = tk.StringVar(value='Tracker not connected')
         self.tracker_summary = tk.StringVar(value='Open a seed to show its locations.')
-        outer = ttk.Frame(root, padding=(28, 22))
-        outer.pack(fill='both', expand=True)
-        header = ttk.Frame(outer)
+        self.seed_chip = tk.StringVar(value='No seed open')
+        self.sidebar = theme.Sidebar(root, self.fonts, self.show_page, footer=f'Version {GENERATOR_VERSION}')
+        self.sidebar.pack(side='left', fill='y')
+        outer = ttk.Frame(root, padding=(34, 26, 34, 18), style='Page.TFrame')
+        outer.pack(side='left', fill='both', expand=True)
+        header = ttk.Frame(outer, style='Page.TFrame')
         header.pack(fill='x', pady=(0, 18))
-        ttk.Label(header, text='OoT Randomizer', style='Title.TLabel').pack(side='left')
-        ttk.Label(header, text='Prepare your run. Explore Hyrule.', style='Muted.TLabel').pack(side='left', padx=22, pady=(8, 0))
-        self.tabs = ttk.Notebook(outer)
+        self.page_title, self.page_subtitle = tk.StringVar(), tk.StringVar()
+        titles = ttk.Frame(header, style='Page.TFrame')
+        titles.pack(side='left', fill='x', expand=True)
+        ttk.Label(titles, textvariable=self.page_title, style='PageTitle.TLabel').pack(anchor='w')
+        ttk.Label(titles, textvariable=self.page_subtitle, style='PageSub.TLabel').pack(anchor='w', pady=(2, 0))
+        ttk.Label(header, textvariable=self.seed_chip, style='Chip.TLabel').pack(side='right', anchor='n', pady=(8, 0))
+        self.tabs = ttk.Notebook(outer, style='Pages.TNotebook')
         self.tabs.pack(fill='both', expand=True)
-        self.party_tab, self.settings_tab = self.tab('Game'), self.tab('Settings')
-        self.tracker_tab, self.spoiler_tab = self.tab('Tracker'), self.tab('Spoiler')
-        self.help_tab = self.tab('Help')
-        self.party_body, self.settings_body = self.scrollable(self.party_tab), self.scrollable(self.settings_tab)
-        self.build_config()
+        self.pages = {}
+        self.seed_name, self.tracker_counts, self.tracker_filter = '', None, 'all'
+        self.home_tab = self.tab('home', 'Home', 'Welcome', 'Your adventure at a glance.')
+        self.settings_tab = self.tab('newseed', 'New seed', 'New seed', 'Pick an adventure, then generate it.')
+        self.tracker_tab = self.tab('tracker', 'Tracker', 'Tracker', 'What you found, and what you can reach now.')
+        self.multiworld_tab = self.tab('multiworld', 'Multiworld', 'Multiworld', 'Play with friends through Archipelago. Three steps.')
+        self.sidebar.gap()
+        self.setup_tab = self.tab('setup', 'Setup', 'Setup', 'Where your game lives. Set once.')
+        self.spoiler_tab = self.tab('spoiler', 'Spoiler', 'Spoiler', 'Every reward of the open seed. Reveal only if you want to know.')
+        self.help_tab = self.tab('help', 'Help', 'Help', 'How the application works, step by step.')
+        self.tabs.bind('<<NotebookTabChanged>>', lambda event: self.page_changed())
+        self.home_body, self.settings_body = self.scrollable(self.home_tab), self.scrollable(self.settings_tab)
+        self.multiworld_body, self.setup_body = self.scrollable(self.multiworld_tab), self.scrollable(self.setup_tab)
+        self.build_home()
+        self.build_setup()
         self.build_categories()
-        self.build_generation()
         self.build_tracker()
+        self.build_multiworld()
         self.build_spoiler()
         self.build_help()
-        bottom = ttk.Frame(outer)
-        bottom.pack(side='bottom', fill='x', pady=(16, 0), before=self.tabs)
-        self.progress = ttk.Progressbar(bottom, mode='indeterminate', length=110)
-        self.progress.pack(side='right', padx=(12, 0))
-        ttk.Label(bottom, textvariable=self.status, style='Muted.TLabel', wraplength=850).pack(side='left', fill='x')
+        for variable in (self.nup, self.mods, self.save_path):
+            variable.trace_add('write', lambda *args: self.update_home())
+        self.update_home()
+        bottom = ttk.Frame(outer, style='Page.TFrame')
+        bottom.pack(side='bottom', fill='x', pady=(12, 0), before=self.tabs)
+        self.progress = ttk.Progressbar(bottom, mode='indeterminate', length=120)
+        ttk.Label(bottom, textvariable=self.status, style='Page.TLabel', wraplength=760).pack(side='left', fill='x')
+        self.show_page('home')
         self.root.protocol('WM_DELETE_WINDOW', self.close)
         self.register_hotkey()
         self.tracker_search.trace_add('write', lambda *args: self.render_tracker())
@@ -157,47 +178,24 @@ class Application:
         root.after(60, self.start_turbo)
 
     def configure_theme(self):
-        self.colors = c = {'bg': '#111b18', 'panel': '#182720', 'field': '#20332a', 'text': '#edf4ef', 'muted': '#b0c6b8', 'accent': '#91d9b0', 'selected': '#315c44', 'line': '#3e5649'}
-        self.root.configure(background=c['bg'])
-        style = ttk.Style(self.root)
-        style.theme_use('clam')
-        style.configure('.', background=c['bg'], foreground=c['text'], font=('Segoe UI', 10), bordercolor=c['line'], lightcolor=c['line'], darkcolor=c['line'], troughcolor=c['panel'])
-        style.configure('TFrame', background=c['bg'])
-        style.configure('TLabel', background=c['bg'], foreground=c['text'])
-        style.configure('Muted.TLabel', foreground=c['muted'])
-        style.configure('Title.TLabel', font=('Segoe UI', 25, 'bold'))
-        style.configure('Heading.TLabel', font=('Segoe UI', 13, 'bold'), padding=(0, 0, 0, 5))
-        style.configure('TButton', background=c['field'], foreground=c['text'], padding=(13, 8), borderwidth=1, focuscolor=c['accent'])
-        style.map('TButton', background=[('active', '#2a4435'), ('disabled', c['panel'])], foreground=[('disabled', '#82968a')], bordercolor=[('focus', c['accent'])])
-        style.configure('Accent.TButton', background=c['accent'], foreground='#10251a', font=('Segoe UI', 10, 'bold'))
-        style.map('Accent.TButton', background=[('active', '#b1e9c8'), ('disabled', '#4b715b')], foreground=[('disabled', '#d1dfd5')])
-        style.configure('TCheckbutton', background=c['bg'], foreground=c['text'], focuscolor=c['accent'], padding=(0, 5))
-        style.map('TCheckbutton', background=[('active', c['bg'])], indicatorcolor=[('selected', c['accent']), ('!selected', c['field'])])
-        style.configure('TEntry', fieldbackground=c['field'], foreground=c['text'], insertcolor=c['text'], padding=7)
-        style.configure('TCombobox', fieldbackground=c['field'], foreground=c['text'], arrowcolor=c['accent'], padding=6)
-        style.map('TCombobox', fieldbackground=[('readonly', c['field'])], selectbackground=[('readonly', c['field'])], selectforeground=[('readonly', c['text'])])
-        style.configure('TSpinbox', fieldbackground=c['field'], foreground=c['text'], arrowcolor=c['accent'], padding=5)
-        style.configure('TNotebook', background=c['bg'], borderwidth=0, tabmargins=(0, 0, 0, 12))
-        style.configure('TNotebook.Tab', background=c['bg'], foreground=c['muted'], padding=(22, 10), borderwidth=0)
-        style.map('TNotebook.Tab', background=[('selected', c['field'])], foreground=[('selected', c['accent'])])
-        style.configure('Treeview', background=c['panel'], fieldbackground=c['panel'], foreground=c['text'], rowheight=31, borderwidth=0, font=('Segoe UI', 10))
-        style.configure('Treeview.Heading', background=c['field'], foreground=c['muted'], padding=(8, 8), font=('Segoe UI', 10, 'bold'), relief='flat')
-        style.map('Treeview', background=[('selected', c['selected'])], foreground=[('selected', '#ffffff')])
-        style.configure('Vertical.TScrollbar', background=c['field'], arrowcolor=c['muted'], borderwidth=0)
-        for key, value in [('background', c['field']), ('foreground', c['text']), ('selectBackground', c['selected'])]:
-            self.root.option_add('*TCombobox*Listbox.' + key, value)
-        for key, value in [('background', c['panel']), ('foreground', c['text']), ('insertBackground', c['text']), ('selectBackground', c['selected']), ('highlightBackground', c['line']), ('highlightColor', c['accent'])]:
-            self.root.option_add('*Text.' + key, value)
+        self.colors = dict(theme.COLORS, bg=theme.COLORS['surface'], accent=theme.COLORS['green'])
+        self.fonts, self.images = theme.apply(self.root)
 
+    # ------------------------------------------------------------ layout
     def scrollable(self, outer):
-        canvas = tk.Canvas(outer, highlightthickness=0, background=self.colors['bg'])
-        bar = ttk.Scrollbar(outer, orient='vertical', command=canvas.yview)
-        parent = ttk.Frame(canvas, padding=(0, 0, 14, 0))
+        canvas = tk.Canvas(outer, highlightthickness=0, background=self.colors['page'], borderwidth=0)
+        bar = ttk.Scrollbar(outer, orient='vertical', command=canvas.yview, style='Page.Vertical.TScrollbar')
+        parent = ttk.Frame(canvas, padding=(0, 0, 16, 6), style='Page.TFrame')
         parent.bind('<Configure>', lambda event: canvas.configure(scrollregion=canvas.bbox('all')))
         window = canvas.create_window((0, 0), window=parent, anchor='nw')
         canvas.bind('<Configure>', lambda event: canvas.itemconfigure(window, width=event.width))
-        canvas.configure(yscrollcommand=bar.set)
+        def autohide(first, last):
+            # The bar keeps its place (no relayout, so no flicker) and is only painted when needed.
+            needed = not (float(first) <= 0 and float(last) >= 1)
+            bar.configure(style='Page.Vertical.TScrollbar' if needed else 'Hidden.Vertical.TScrollbar')
+            bar.set(first, last)
         bar.pack(side='right', fill='y')
+        canvas.configure(yscrollcommand=autohide)
         canvas.pack(side='left', fill='both', expand=True)
         def wheel(event):
             if str(event.widget).startswith(str(outer)):
@@ -205,32 +203,69 @@ class Application:
         self.root.bind_all('<MouseWheel>', wheel, add='+')
         return parent
 
+    def card(self, parent, title=None, subtitle=None, fill='x', expand=False, side='top', padx=0):
+        """A rounded white card. Returns the frame to fill."""
+        frame = ttk.Frame(parent, style='Card.TFrame', padding=theme.CARD_PADDING)
+        frame.pack(side=side, fill=fill, expand=expand, pady=(0, 14), padx=padx)
+        if title:
+            ttk.Label(frame, text=title, style='Heading.TLabel').pack(anchor='w')
+        if subtitle:
+            ttk.Label(frame, text=subtitle, style='Muted.TLabel', wraplength=780, justify='left').pack(anchor='w', pady=(2, 0))
+        if title or subtitle:
+            ttk.Frame(frame, height=12).pack(fill='x')
+        return frame
+
+    def buttons(self, parent, pady=(0, 0)):
+        row = ttk.Frame(parent)
+        row.pack(fill='x', pady=pady)
+        return row
+
     def build_help(self):
         parent = self.scrollable(self.help_tab)
         sections = [
-            ('Prepare a game', 'In Game, choose your .nup file and the mods folder. In Settings, name the seed, adjust the settings, then click Generate and install at the bottom of the page: the seed is written straight into the mods folder. Close the game during installation.'),
+            ('Prepare a game', 'In Setup, choose your .nup file and the mods folder. In New seed, pick an adventure, then click Generate and install: the seed is written straight into the mods folder. Close the game during installation.'),
             ('Play on Hookshot', 'Choose the mods folder next to hookshot.exe. Each seed is installed in its own sub-folder. Only one seed of this application stays active at a time; the previous one is archived.'),
-            ('Track the exploration', 'Open the seed being played, then select its progress.sav file in Tracker. Locations are updated after the game saves. Rewards of completed checks appear next to their name.'),
+            ('Track the exploration', 'The tracker follows the most recent save by itself. Locations are updated after the game saves. Rewards of completed checks appear next to their name.'),
             ('Understand the states', 'Available: the logic estimates you can get the reward with your inventory. Blocked: a known condition is missing. Unknown: the data does not allow a conclusion. These locations stay visible by default.'),
-            ('Keep the right save', 'Generate a new seed, start a new game, then save after the intro. Choose the matching slot in Tracker. An old save cannot be linked automatically. The tracker never changes its files.'),
+            ('Keep the right save', 'Generate a new seed, start a new game, then save after the intro. The tracker picks the newest save; choose another in Setup. An old save cannot be linked automatically. The tracker never changes its files.'),
             ('Repeatable sources', 'In a new seed, the shuffled reward can only be picked up once. Then pots, bushes, crates, beehives and rocks go back to their vanilla loot. Old seeds keep their rules.'),
             ('Compatibility', 'The glitchless logic is built in (remake world, derived from the Archipelago OoT rules). Some remake matches are approximate. Small keys stay in place. Only settings supported by the generator are offered.')]
-        for heading, text in sections:
-            ttk.Label(parent, text=heading, style='Heading.TLabel').pack(anchor='w', pady=(14, 4))
-            ttk.Label(parent, text=text, style='Muted.TLabel', wraplength=900, justify='left').pack(anchor='w', pady=(0, 8))
-        ttk.Label(parent, text=f'Application version: {GENERATOR_VERSION}', style='Muted.TLabel').pack(anchor='w', pady=(18, 8))
+        grid = ttk.Frame(parent, style='Page.TFrame')
+        grid.pack(fill='x')
+        grid.columnconfigure((0, 1), weight=1, uniform='help')
+        for index, (heading, text) in enumerate(sections):
+            box = ttk.Frame(grid, style='Card.TFrame', padding=theme.CARD_PADDING)
+            box.grid(row=index // 2, column=index % 2, sticky='nsew', padx=(0, 7) if index % 2 == 0 else (7, 0), pady=(0, 14))
+            ttk.Label(box, text=f'{index + 1:02d}', style='Field.TLabel').pack(anchor='w')
+            ttk.Label(box, text=heading, style='Heading.TLabel').pack(anchor='w', pady=(2, 6))
+            ttk.Label(box, text=text, style='Muted.TLabel', wraplength=360, justify='left').pack(anchor='w')
+        ttk.Label(parent, text=f'Application version: {GENERATOR_VERSION}', style='Page.TLabel').pack(anchor='w', pady=(4, 8))
 
-    def tab(self, name):
-        frame = ttk.Frame(self.tabs, padding=18)
-        self.tabs.add(frame, text=name)
+    def tab(self, key, nav, title, subtitle):
+        frame = ttk.Frame(self.tabs, style='Page.TFrame')
+        self.tabs.add(frame, text=nav)
+        self.pages[key] = (frame, title, subtitle)
+        self.sidebar.add(key, nav)
         return frame
+
+    def show_page(self, key):
+        self.tabs.select(self.pages[key][0])
+        self.page_changed()
+
+    def page_changed(self):
+        current = self.tabs.select()
+        for key, (frame, title, subtitle) in self.pages.items():
+            if str(frame) == current:
+                self.sidebar.select(key)
+                self.page_title.set(title)
+                self.page_subtitle.set(subtitle)
 
     def path_row(self, parent, text, variable, kind):
         frame = ttk.Frame(parent)
-        frame.pack(fill='x', pady=(0, 10))
-        ttk.Label(frame, text=text).pack(anchor='w')
+        frame.pack(fill='x', pady=(0, 12))
+        ttk.Label(frame, text=text, style='Field.TLabel').pack(anchor='w')
         row = ttk.Frame(frame)
-        row.pack(fill='x', pady=(4, 0))
+        row.pack(fill='x', pady=(5, 0))
         ttk.Entry(row, textvariable=variable).pack(side='left', fill='x', expand=True)
         def choose():
             value = filedialog.askopenfilename(filetypes=[('NUP game', '*.nup')]) if kind == 'file' else filedialog.askdirectory()
@@ -238,66 +273,200 @@ class Application:
                 variable.set(value)
         ttk.Button(row, text='Browse…', command=choose).pack(side='right', padx=(8, 0))
 
-    def build_config(self):
-        parent = self.party_body
-        ttk.Label(parent, text='Your game', style='Heading.TLabel').pack(anchor='w')
-        ttk.Label(parent, text='Seeds are generated straight into the mods folder.', style='Muted.TLabel').pack(anchor='w', pady=(0, 14))
-        self.path_row(parent, 'Game file (.nup)', self.nup, 'file')
-        self.path_row(parent, 'Mods folder — Hookshot / mods or the emulator title folder', self.mods, 'directory')
-        ttk.Label(parent, text='Hookshot: choose the mods folder next to hookshot.exe. The original files stay in place.', style='Muted.TLabel', wraplength=940).pack(anchor='w', pady=(0, 14))
+    def build_setup(self):
+        parent = self.setup_body
+        box = self.card(parent, 'Game files', 'Seeds are generated straight into the mods folder. The original files stay in place.')
+        self.path_row(box, 'GAME FILE (.NUP)', self.nup, 'file')
+        self.path_row(box, 'MODS FOLDER — HOOKSHOT / MODS OR THE EMULATOR TITLE FOLDER', self.mods, 'directory')
+        ttk.Label(box, text='Hookshot: choose the mods folder next to hookshot.exe.', style='Small.TLabel').pack(anchor='w')
+        box = self.card(parent, 'Save', 'The tracker reads your progress.sav. It is found automatically; pick it by hand only if needed.')
+        ttk.Checkbutton(box, text='Follow the most recent save (every slot)', variable=self.auto_save,
+                        command=self.auto_save_toggled).pack(anchor='w', pady=(0, 12))
+        ttk.Label(box, text='SAVE FILE', style='Field.TLabel').pack(anchor='w')
+        row = self.buttons(box, pady=(5, 12))
+        ttk.Entry(row, textvariable=self.save_path).pack(side='left', fill='x', expand=True)
+        ttk.Button(row, text='Choose…', command=self.choose_save).pack(side='left', padx=(8, 0))
+        ttk.Button(row, text='Detect', command=self.detect_save).pack(side='left', padx=(8, 0))
+        ttk.Label(box, text='PROFILE', style='Field.TLabel').pack(anchor='w')
+        row = self.buttons(box, pady=(5, 12))
+        ttk.Entry(row, textvariable=self.slot, width=22).pack(side='left')
+        ttk.Button(row, text='Reload the tracker', command=self.load_tracker).pack(side='left', padx=(8, 0))
+        ttk.Label(box, textvariable=self.connection_status, style='Small.TLabel', wraplength=780).pack(anchor='w')
+        ttk.Label(box, textvariable=self.turbo_status, style='Small.TLabel').pack(anchor='w')
+
+    def build_home(self):
+        parent = self.home_body
+        self.home_seed, self.home_progress, self.home_available = tk.StringVar(), tk.StringVar(), tk.StringVar()
+        hero = ttk.Frame(parent, style='Hero.TFrame', padding=(28, 24, 28, 24))
+        hero.pack(fill='x', pady=(0, 6))
+        ttk.Label(hero, text='CURRENT ADVENTURE', style='HeroField.TLabel').pack(anchor='w')
+        ttk.Label(hero, textvariable=self.home_seed, style='HeroTitle.TLabel').pack(anchor='w', pady=(4, 14))
+        self.home_bar = ttk.Progressbar(hero, style='Hero.Horizontal.TProgressbar', maximum=1, value=0)
+        self.home_bar.pack(fill='x')
+        row = ttk.Frame(hero, style='HeroIn.TFrame')
+        row.pack(fill='x', pady=(14, 0))
+        ttk.Label(row, textvariable=self.home_progress, style='Hero.TLabel').pack(side='left')
+        ttk.Label(row, textvariable=self.home_available, style='HeroMuted.TLabel').pack(side='left', padx=(8, 0))
+        self.home_primary = ttk.Button(row, style='Hero.Accent.TButton')
+        self.home_primary.pack(side='right')
+        self.home_secondary = ttk.Button(row, style='Hero.TButton')
+        self.home_secondary.pack(side='right', padx=(0, 10))
+        links = ttk.Frame(parent, style='Page.TFrame')
+        links.pack(fill='x', pady=(0, 12))
+        for text, command in [('Open a seed…', self.open_artifact), ('Open the folder', self.open_folder),
+                              ('Spoiler', self.show_spoilers)]:
+            ttk.Button(links, text=text, style='Page.Link.TButton', command=command).pack(side='left', padx=(4, 14))
+        tiles = ttk.Frame(parent, style='Page.TFrame')
+        tiles.pack(fill='x', pady=(0, 14))
+        self.home_tiles = {}
+        for column, (key, title) in enumerate([('game', 'GAME FILE'), ('mods', 'MODS FOLDER'), ('save', 'SAVE'), ('live', 'LIVE TRACKING')]):
+            tiles.columnconfigure(column, weight=1, uniform='tiles')
+            box = ttk.Frame(tiles, style='Card.TFrame', padding=(18, 14, 18, 16))
+            box.grid(row=0, column=column, sticky='nsew', padx=(0 if column == 0 else 6, 0 if column == 3 else 6))
+            ttk.Label(box, text=title, style='Field.TLabel').pack(anchor='w')
+            line = ttk.Frame(box)
+            line.pack(anchor='w', pady=(7, 0))
+            dot = ttk.Label(line)
+            dot.pack(side='left', padx=(0, 7))
+            value = ttk.Label(line, style='Value.TLabel')
+            value.pack(side='left')
+            self.home_tiles[key] = {'dot': dot, 'value': value, 'fix': ttk.Button(box, text='Fix ›', style='Link.TButton')}
+        box = self.card(parent)
+        row = self.buttons(box, pady=(0, 6))
+        ttk.Label(row, text='Available now', style='Heading.TLabel').pack(side='left')
+        self.home_see_all = ttk.Button(row, text='See all ›', style='Link.TButton',
+                                       command=lambda: (self.set_tracker_filter('available'), self.show_page('tracker')))
+        self.home_see_all.pack(side='right')
+        self.home_list = ttk.Frame(box)
+        self.home_list.pack(fill='x')
+        self.render_home_list({})
+
+    def set_tile(self, key, state, text, fix=None):
+        tile = self.home_tiles[key]
+        tile['dot'].configure(image=self.images['dot_' + state])
+        tile['value'].configure(text=text)
+        if fix:
+            tile['fix'].configure(command=fix)
+            if not tile['fix'].winfo_manager():
+                tile['fix'].pack(anchor='w', pady=(4, 0))
+        else:
+            tile['fix'].pack_forget()
+
+    def update_home(self):
+        """Home shows the state of the adventure; only problems ask for an action."""
+        if not hasattr(self, 'home_tiles'):
+            return
+        counts = self.tracker_counts if self.tracker else None
+        self.home_seed.set(self.seed_name or 'No adventure yet')
+        if counts:
+            self.home_bar.configure(maximum=max(counts['total'], 1), value=counts['done'])
+            self.home_progress.set(f'{counts["done"]} / {counts["total"]} found')
+            self.home_available.set(f'·  {counts["available"]} available now')
+        else:
+            self.home_bar.configure(maximum=1, value=0)
+            self.home_progress.set('Seed installed' if self.artifact else 'Create a seed to start playing.')
+            self.home_available.set('')
+        if self.artifact:
+            self.home_primary.configure(text='Continue', command=lambda: self.show_page('tracker'))
+            self.home_secondary.configure(text='New seed', command=lambda: self.show_page('newseed'))
+        else:
+            self.home_primary.configure(text='Create a seed', command=lambda: self.show_page('newseed'))
+            self.home_secondary.configure(text='Open a seed…', command=self.open_artifact)
+        setup = lambda: self.show_page('setup')
+        if self.nup.get() and Path(self.nup.get()).is_file():
+            self.set_tile('game', 'ok', 'Found')
+        else:
+            self.set_tile('game', 'warn', 'Missing', setup)
+        if self.mods.get() and Path(self.mods.get()).is_dir():
+            self.set_tile('mods', 'ok', 'Hookshot' if self.hookshot_root() else 'Emulator')
+        else:
+            self.set_tile('mods', 'warn', 'Missing', setup)
+        linked = bool(self.save_path.get()) and Path(self.save_path.get()).is_file()
+        if linked:
+            self.set_tile('save', 'ok', 'Linked')
+        else:
+            self.set_tile('save', 'warn', 'Not linked', setup)
+        if self.tracker and self.tracker.live and not self.tracker.live_status:
+            self.set_tile('live', 'ok', 'On')
+        else:
+            self.set_tile('live', 'off', 'Game not running' if self.tracker else 'Waiting for a seed')
+        if hasattr(self, 'sync_dot'):
+            self.sync_dot.configure(image=self.images['dot_ok' if linked and self.tracker else 'dot_warn' if self.tracker else 'dot_off'])
+        if self.pages['home'][1] != ('Welcome back' if self.artifact else 'Welcome'):
+            frame, _, subtitle = self.pages['home']
+            self.pages['home'] = (frame, 'Welcome back' if self.artifact else 'Welcome', subtitle)
+            self.page_changed()
+
+    def render_home_list(self, states):
+        for child in self.home_list.winfo_children():
+            child.destroy()
+        reachable = [check for check in self.current_checks
+                     if not states.get(check['id'], {}).get('completed') and states.get(check['id'], {}).get('access') == 'available']
+        self.home_see_all.configure(text=f'See all {len(reachable)} ›' if reachable else 'Open the tracker ›')
+        if not reachable:
+            text = 'Nothing new in reach right now.' if self.tracker else 'Open or create a seed to see what you can reach.'
+            ttk.Label(self.home_list, text=text, style='Muted.TLabel').pack(anchor='w', pady=(6, 0))
+            return
+        for index, check in enumerate(reachable[:5]):
+            if index:
+                theme.rule(self.home_list).pack(fill='x')
+            row = ttk.Frame(self.home_list)
+            row.pack(fill='x', pady=7)
+            ttk.Label(row, image=self.images['dot_ok']).pack(side='left', padx=(0, 10))
+            name = check['name'] if check.get('category') != 'world_chests' else 'Chest'
+            ttk.Label(row, text=f'{check.get("region") or "Other"} — {name}').pack(side='left')
+            ttk.Label(row, text=TRACKER_KINDS.get(check.get('category', ''), ''), style='Small.TLabel').pack(side='right')
 
     def build_seed_row(self, parent):
-        """Top of Settings: the seed name."""
-        ttk.Label(parent, text='A new adventure', style='Heading.TLabel').pack(anchor='w')
-        ttk.Label(parent, text='The same seed name and settings reproduce the same game.', style='Muted.TLabel').pack(anchor='w', pady=(0, 10))
-        row = ttk.Frame(parent)
-        row.pack(fill='x', pady=(0, 20))
-        ttk.Label(row, text='Seed name', width=17).pack(side='left')
+        box = self.card(parent, 'Seed name', 'The same seed name and settings reproduce the same game.')
+        row = self.buttons(box)
         ttk.Entry(row, textvariable=self.seed).pack(side='left', fill='x', expand=True)
-        ttk.Button(row, text='Random', command=lambda: self.seed.set(secrets.token_hex(8))).pack(side='left', padx=(10, 0))
+        ttk.Button(row, text='Random', command=lambda: self.seed.set(secrets.token_hex(8))).pack(side='left', padx=(8, 0))
 
     def build_generate_section(self, parent):
-        """Bottom of Settings: generate button and generation log."""
-        ttk.Separator(parent).pack(fill='x', pady=(4, 16))
-        row = ttk.Frame(parent)
-        row.pack(fill='x', pady=(0, 8))
+        box = self.card(parent)
+        row = self.buttons(box)
         self.generate_button = ttk.Button(row, text='Generate and install', style='Accent.TButton', command=self.generate)
-        self.generate_button.pack(side='left')
-        ttk.Label(row, text='Close the game before installing. The previous seed is archived automatically.', style='Muted.TLabel', wraplength=700).pack(side='left', padx=(14, 0))
-        ttk.Label(parent, text='Activity', style='Heading.TLabel').pack(anchor='w', pady=(10, 0))
-        self.log = tk.Text(parent, height=8, wrap='word', font=('Segoe UI', 9), state='disabled', relief='flat', padx=12, pady=10)
-        self.log.pack(fill='x', pady=(3, 10))
+        self.generate_button.pack(side='right')
+        ttk.Label(row, text='Close the game first. The previous seed is archived.', style='Muted.TLabel').pack(side='right', padx=(0, 16))
+        self.log = tk.Text(box, height=5, wrap='word', state='disabled', padx=12, pady=10)
+        return box
 
-    def build_generation(self):
-        parent = self.party_body
-        row = ttk.Frame(parent)
-        row.pack(fill='x', pady=(4, 12))
-        ttk.Button(row, text='Open a seed…', command=self.open_artifact).pack(side='left')
-        ttk.Button(row, text='Prepare a new seed', command=lambda: self.tabs.select(self.settings_tab)).pack(side='left', padx=(10, 0))
-        ttk.Separator(parent).pack(fill='x', pady=(8, 18))
-        ttk.Label(parent, text='Open game', style='Heading.TLabel').pack(anchor='w')
-        ttk.Label(parent, textvariable=self.result, wraplength=940).pack(anchor='w', pady=(4, 10))
-        row = ttk.Frame(parent)
-        row.pack(fill='x', pady=(0, 16))
-        ttk.Button(row, text='Show the tracker', command=lambda: self.tabs.select(self.tracker_tab)).pack(side='left')
-        ttk.Button(row, text='Open the folder', command=self.open_folder).pack(side='left', padx=8)
-        ttk.Button(row, text='Reveal the rewards…', command=self.show_spoilers).pack(side='left')
+    PRESET_CARDS = [('prudent', 'Chests only', 'A gentle first run: chests are shuffled, keys and enemies stay as usual.'),
+                    ('ap_defaults', 'Classic', 'The standard Archipelago rules. The recommended balance.'),
+                    ('everything', 'Everything', 'Shops, pots, crates, grass, rocks and enemy souls join in.')]
 
     def build_categories(self):
         parent = self.settings_body
         self.full_enabled = tk.BooleanVar(value=True)
         self.full_vars, self.category_controls = {}, {}
         self.full_reason = tk.StringVar(value='Select a setting to read what it does.')
+        self.customize_label, self.customize_hint = tk.StringVar(value='Customize settings  ▸'), tk.StringVar()
+        grid = ttk.Frame(parent, style='Page.TFrame')
+        grid.pack(fill='x', pady=(0, 14))
+        self.preset_cards = {}
+        for column, (key, name, text) in enumerate(self.PRESET_CARDS):
+            grid.columnconfigure(column, weight=1, uniform='presets')
+            box = ttk.Frame(grid, style='Card.TFrame', padding=(18, 18, 18, 18), cursor='hand2')
+            box.grid(row=0, column=column, sticky='nsew', padx=(0 if column == 0 else 6, 0 if column == 2 else 6))
+            art = tk.Canvas(box, width=180, height=76, highlightthickness=0, background=self.colors['green_soft'])
+            art.pack(fill='x')
+            art.bind('<Configure>', lambda event, a=art, k=key: theme.preset_art(a, k, self.colors))
+            widgets = [box, art, ttk.Label(box, text=name, style='Preset.TLabel'),
+                       ttk.Label(box, text=text, style='Small.TLabel', wraplength=200, justify='left')]
+            widgets[2].pack(anchor='w', pady=(12, 2))
+            widgets[3].pack(anchor='w')
+            for widget in widgets:
+                widget.bind('<Button-1>', lambda event, k=key: self.apply_full(rando_options.preset(k), enable=True))
+            self.preset_cards[key] = (box, art)
         self.build_seed_row(parent)
-        ttk.Label(parent, text='A game made for you', style='Heading.TLabel').pack(anchor='w')
-        ttk.Label(parent, text='Only available settings are shown. Locations are checked by the glitchless logic.', style='Muted.TLabel', wraplength=940).pack(anchor='w', pady=(0, 12))
-        row = ttk.Frame(parent)
-        row.pack(fill='x', pady=(0, 16))
-        for key, label in [('ap_defaults', 'Classic'), ('everything', 'Shuffle everything'), ('prudent', 'Chests only')]:
-            ttk.Button(row, text=label, command=lambda k=key: self.apply_full(rando_options.preset(k), enable=True)).pack(side='left', padx=(0, 8))
-        ttk.Button(row, text='Import…', command=self.import_settings).pack(side='right')
-        ttk.Button(row, text='Export…', command=self.export_settings).pack(side='right', padx=8)
-        ttk.Label(parent, textvariable=self.full_reason, style='Muted.TLabel', wraplength=940).pack(anchor='w', pady=(0, 8))
+        row = ttk.Frame(parent, style='Page.TFrame')
+        row.pack(fill='x', pady=(0, 12))
+        ttk.Button(row, textvariable=self.customize_label, style='Page.Link.TButton', command=self.toggle_details).pack(side='left', padx=(4, 12))
+        ttk.Label(row, textvariable=self.customize_hint, style='Page.TLabel').pack(side='left')
+        self.details = ttk.Frame(parent, style='Page.TFrame')
+        details = self.details
+        ttk.Label(details, textvariable=self.full_reason, style='Page.TLabel', wraplength=780, justify='left').pack(anchor='w', padx=4, pady=(0, 10))
         grouped = {}
         for option in rando_options.OPTIONS:
             if option.kind == 'bool':
@@ -315,38 +484,65 @@ class Application:
             if not options:
                 continue
             title = {'Logic': 'Logic and accessibility', 'Items': 'Items and locations', 'Dungeons': 'Dungeon contents', 'Souls': 'Enemy souls'}.get(group, group)
-            ttk.Label(parent, text=title, style='Heading.TLabel').pack(anchor='w', pady=(18, 6))
-            frame = ttk.Frame(parent)
-            frame.pack(fill='x')
-            frame.columnconfigure(0, weight=1)
+            frame = self.card(details, title)
+            rows = ttk.Frame(frame)
+            rows.pack(fill='x')
+            rows.columnconfigure(0, weight=1)
             for index, option in enumerate(options):
-                self.option_row(frame, index, option)
-        ttk.Label(parent, text='Quality of life', style='Heading.TLabel').pack(anchor='w', pady=(20, 4))
-        ttk.Checkbutton(parent, text='Open the way from Kokiri Forest to Hyrule Field', variable=self.options['open_forest']).pack(anchor='w')
-        ttk.Label(parent, text='Always on: skippable cutscenes (hold X, or Plus), chests without cutscene, turbo A (hold A in a dialogue).',
-                  style='Muted.TLabel', wraplength=940).pack(anchor='w', pady=(2, 0))
-        ttk.Separator(parent).pack(fill='x', pady=(12, 16))
-        ttk.Label(parent, text='Settings in Archipelago format (YAML)', style='Heading.TLabel').pack(anchor='w')
-        row = ttk.Frame(parent)
-        row.pack(fill='x', pady=(0, 18))
-        ttk.Button(row, text='Import a YAML…', command=self.import_ap_yaml).pack(side='left')
-        ttk.Button(row, text='Export a YAML…', command=self.export_ap_yaml).pack(side='left', padx=8)
-        ttk.Label(parent, text='Archipelago multiworld', style='Heading.TLabel').pack(anchor='w')
-        ttk.Label(parent, text='Send your multiworld YAML to the host; the host puts the apworld in the '
-                  'custom_worlds folder of Archipelago and generates. Then generate here from your .aprmk patch '
-                  '(in the zip produced by Archipelago). Items of other players show as an Archipelago medallion; '
-                  'connect to the server in the Tracker tab to send your checks. Receiving items in game '
-                  'is not available yet.',
-                  style='Muted.TLabel', wraplength=940).pack(anchor='w')
-        row = ttk.Frame(parent)
-        row.pack(fill='x', pady=(4, 18))
-        ttk.Button(row, text='Export my multiworld YAML…', command=self.export_multiworld_yaml).pack(side='left')
-        ttk.Button(row, text='Build the apworld…', command=self.build_apworld).pack(side='left', padx=8)
-        ttk.Button(row, text='Generate from a patch (.aprmk)…', command=self.generate_from_patch).pack(side='left')
-        self.build_generate_section(parent)
+                self.option_row(rows, index, option)
+        box = self.card(details, 'Quality of life', 'Always on: skippable cutscenes (hold X, or Plus), chests without cutscene, turbo A (hold A in a dialogue).')
+        rows = ttk.Frame(box)
+        rows.pack(fill='x')
+        rows.columnconfigure(0, weight=1)
+        self.switch_row(rows, 0, 'Open the way from Kokiri Forest to Hyrule Field', self.options['open_forest'])
+        box = self.card(details, 'Share these settings')
+        row = self.buttons(box)
+        ttk.Button(row, text='Import…', command=self.import_settings).pack(side='left')
+        ttk.Button(row, text='Export…', command=self.export_settings).pack(side='left', padx=8)
+        ttk.Button(row, text='Export an Archipelago YAML…', style='Link.TButton', command=self.export_ap_yaml).pack(side='right')
+        ttk.Button(row, text='Import an Archipelago YAML…', style='Link.TButton', command=self.import_ap_yaml).pack(side='right', padx=14)
+        self.generate_card = self.build_generate_section(parent)
         for name in {o for opts in rando_options.CATEGORY_OPTIONS.values() for o, _, _ in opts}:
             self.full_vars[name].trace_add('write', lambda *args: self.sync_categories())
         self.apply_full(rando_options.preset('ap_defaults'), enable=True)
+
+    def toggle_details(self):
+        if self.details.winfo_manager():
+            self.details.pack_forget()
+            self.customize_label.set('Customize settings  ▸')
+        else:
+            self.details.pack(fill='x', before=self.generate_card)
+            self.customize_label.set('Customize settings  ▾')
+
+    def update_presets(self):
+        """Highlights the preset matching the current settings, if any."""
+        if not hasattr(self, 'preset_cards') or len(self.full_vars) != len(rando_options.OPTIONS):
+            return
+        try:
+            values = rando_options.validate(self.full_values())
+        except Exception:
+            return
+        current = next((key for key in self.preset_cards
+                        if rando_options.validate(rando_options.preset(key)) == values), None)
+        for key, (box, art) in self.preset_cards.items():
+            box.configure(style='CardSelected.TFrame' if key == current else 'Card.TFrame')
+            art.configure(background=self.colors['gold_soft' if key == current else 'green_soft'])
+        self.customize_hint.set('' if current else 'Custom settings')
+
+    def switch_row(self, parent, index, text, variable, command=None):
+        """Label on the left, switch on the right; clicking the label toggles too."""
+        label = ttk.Label(parent, text=text, wraplength=560, justify='left', cursor='hand2')
+        label.grid(row=index, column=0, sticky='w', pady=7)
+        widget = ttk.Checkbutton(parent, variable=variable, command=command)
+        widget.grid(row=index, column=1, sticky='e', pady=7)
+        def click(event):
+            if 'disabled' not in widget.state():
+                widget.invoke()
+                widget.focus_set()
+        label.bind('<Button-1>', click)
+        if index:
+            theme.rule(parent).grid(row=index, column=0, columnspan=2, sticky='new')
+        return widget
 
     def sync_categories(self):
         """Complete mode: each checkbox shows the state of its solver options."""
@@ -369,69 +565,89 @@ class Application:
 
     def build_tracker(self):
         parent = self.tracker_tab
-        ttk.Label(parent, text='Your exploration', style='Heading.TLabel').pack(anchor='w')
-        ttk.Label(parent, text='The tracker rereads the most recently written progress.sav (every slot) every 2 seconds: it updates as soon as the game writes its save. Rewards stay hidden until the checks are done.', style='Muted.TLabel', wraplength=940).pack(anchor='w', pady=(0, 12))
-        row = ttk.Frame(parent)
-        row.pack(fill='x', pady=(0, 10))
-        ttk.Label(row, text='Profile').pack(side='left')
-        ttk.Entry(row, textvariable=self.slot, width=20).pack(side='left', padx=(8, 12))
-        ttk.Button(row, text='Load the tracker', command=self.load_tracker).pack(side='left')
-        ttk.Button(row, text='Game window', command=self.toggle_overlay).pack(side='right')
-        ttk.Button(row, text='In-game overlay', command=self.toggle_hud).pack(side='right', padx=(0, 8))
-        ttk.Label(row, textvariable=self.hud_status, style='Muted.TLabel').pack(side='right', padx=(0, 10))
-        row = ttk.Frame(parent)
-        row.pack(fill='x', pady=(0, 8))
-        ttk.Label(row, text='Save').pack(side='left')
-        ttk.Entry(row, textvariable=self.save_path).pack(side='left', fill='x', expand=True, padx=8)
-        ttk.Button(row, text='Choose…', command=self.choose_save).pack(side='left')
-        ttk.Button(row, text='Detect', command=self.detect_save).pack(side='left', padx=(8, 0))
-        ttk.Checkbutton(parent, text='Automatically follow the most recent save (every slot)', variable=self.auto_save, command=self.auto_save_toggled).pack(anchor='w', pady=(0, 8))
-        row = ttk.Frame(parent)
-        row.pack(fill='x', pady=(0, 8))
-        ttk.Label(row, textvariable=self.turbo_status, style='Muted.TLabel').pack(side='left')
-        row = ttk.Frame(parent)
-        row.pack(fill='x', pady=(0, 12))
-        ttk.Label(row, textvariable=self.connection_status, style='Muted.TLabel', wraplength=760).pack(side='left', fill='x', expand=True)
-        ttk.Button(row, text='Refresh', command=self.refresh_tracker).pack(side='right')
-        self.build_archipelago_client(parent)
-        filters = ttk.Frame(parent)
-        filters.pack(fill='x', pady=(0, 12))
-        ttk.Label(filters, text='Search').pack(side='left')
-        ttk.Entry(filters, textvariable=self.tracker_search, width=24).pack(side='left', padx=(8, 18))
-        ttk.Checkbutton(filters, text='Show blocked', variable=self.show_blocked, command=self.render_tracker).pack(side='left')
-        ttk.Checkbutton(filters, text='Show completed', variable=self.show_completed, command=self.render_tracker).pack(side='left', padx=(14, 0))
-        self.tracker_rows = ttk.Frame(parent)
+        bar = ttk.Frame(parent, style='Page.TFrame')
+        bar.pack(fill='x', pady=(0, 10))
+        self.sync_dot = ttk.Label(bar, style='Page.TLabel', image=self.images['dot_off'])
+        self.sync_dot.pack(side='left', padx=(4, 8))
+        ttk.Label(bar, textvariable=self.connection_status, style='Page.TLabel', wraplength=470, justify='left').pack(side='left')
+        ttk.Button(bar, text='Change', style='Page.Link.TButton', command=lambda: self.show_page('setup')).pack(side='left', padx=(10, 0))
+        ttk.Button(bar, text='Pop-out window', style='Page.Link.TButton', command=self.toggle_overlay).pack(side='right')
+        ttk.Button(bar, text='In-game overlay', style='Page.Link.TButton', command=self.toggle_hud).pack(side='right', padx=14)
+        box = self.card(parent, fill='both', expand=True)
+        top = self.buttons(box, pady=(0, 12))
+        self.counters = {}
+        for key, label in [('available', 'Available'), ('blocked', 'Not yet'), ('done', 'Done'), ('all', 'All')]:
+            frame = ttk.Frame(top, padding=(14, 7, 14, 8), cursor='hand2')
+            frame.pack(side='left', padx=(0, 8))
+            count = ttk.Label(frame, text='–', width=5)
+            count.pack(anchor='w')
+            name = ttk.Label(frame, text=label)
+            name.pack(anchor='w')
+            for widget in (frame, count, name):
+                widget.bind('<Button-1>', lambda event, k=key: self.set_tracker_filter(k))
+            self.counters[key] = (frame, count, name)
+        ttk.Entry(top, textvariable=self.tracker_search, width=22).pack(side='right')
+        ttk.Label(top, text='Search', style='Small.TLabel').pack(side='right', padx=(0, 8))
+        self.tracker_rows = ttk.Frame(box)
         self.tracker_rows.pack(fill='both', expand=True)
-        footer = ttk.Frame(parent)
+        footer = ttk.Frame(box)
         footer.pack(side='bottom', fill='x', before=self.tracker_rows)
         row = ttk.Frame(footer)
-        row.pack(fill='x', pady=(8, 0))
-        ttk.Button(row, text='Expand all', command=lambda: self.set_all_zones(True)).pack(side='left')
-        ttk.Button(row, text='Collapse all', command=lambda: self.set_all_zones(False)).pack(side='left', padx=8)
-        ttk.Label(footer, textvariable=self.tracker_summary, wraplength=820).pack(anchor='w', pady=(10, 3))
-        self.hotkey_label = ttk.Label(footer, style='Muted.TLabel')
-        self.hotkey_label.pack(anchor='w')
+        row.pack(fill='x', pady=(10, 0))
+        ttk.Label(row, textvariable=self.tracker_summary, wraplength=600, style='Small.TLabel').pack(side='left')
+        ttk.Button(row, text='Collapse all', style='Link.TButton', command=lambda: self.set_all_zones(False)).pack(side='right')
+        ttk.Button(row, text='Expand all', style='Link.TButton', command=lambda: self.set_all_zones(True)).pack(side='right', padx=12)
+        self.hotkey_label = ttk.Label(footer, style='Small.TLabel')
+        self.hotkey_label.pack(anchor='w', pady=(2, 0))
+        ttk.Label(footer, textvariable=self.hud_status, style='Small.TLabel').pack(anchor='w')
+        self.set_tracker_filter('all')
+
+    def set_tracker_filter(self, key):
+        """The four counters above the list are also its filter."""
+        self.tracker_filter = key
+        for name, (frame, count, label) in self.counters.items():
+            prefix = 'TabOn' if name == key else 'Tab'
+            frame.configure(style=prefix + '.TFrame')
+            count.configure(style=prefix + 'Count.TLabel')
+            label.configure(style=prefix + '.TLabel')
         self.render_tracker()
 
-    def build_archipelago_client(self, parent):
-        box = ttk.Frame(parent)
-        box.pack(fill='x', pady=(0, 12))
-        row = ttk.Frame(box)
-        row.pack(fill='x')
-        ttk.Label(row, text='Archipelago', style='Heading.TLabel').pack(side='left', padx=(0, 12))
-        ttk.Label(row, text='Server').pack(side='left')
-        ttk.Entry(row, textvariable=self.ap_address, width=26).pack(side='left', padx=(6, 10))
-        ttk.Label(row, text='Slot').pack(side='left')
-        ttk.Entry(row, textvariable=self.ap_slot, width=16).pack(side='left', padx=(6, 10))
-        ttk.Label(row, text='Password').pack(side='left')
-        ttk.Entry(row, textvariable=self.ap_password, width=12, show='•').pack(side='left', padx=(6, 10))
-        self.ap_button = ttk.Button(row, text='Connect', command=self.toggle_archipelago)
-        self.ap_button.pack(side='left')
-        ttk.Label(box, textvariable=self.ap_status, style='Muted.TLabel', wraplength=940).pack(anchor='w', pady=(4, 2))
-        self.ap_log = tk.Text(box, height=5, wrap='word', state='disabled', relief='flat')
+    def build_multiworld(self):
+        parent = self.multiworld_body
+        self.ap_steps = []
+        def step(title, text):
+            box = ttk.Frame(parent, style='Card.TFrame', padding=theme.CARD_PADDING)
+            box.pack(fill='x', pady=(0, 12))
+            mark = theme.badge(box, self.images)
+            mark.pack(side='left', anchor='n', padx=(0, 16))
+            body = ttk.Frame(box)
+            body.pack(side='left', fill='x', expand=True)
+            ttk.Label(body, text=title, style='Heading.TLabel').pack(anchor='w')
+            ttk.Label(body, text=text, style='Muted.TLabel', wraplength=640, justify='left').pack(anchor='w', pady=(2, 10))
+            self.ap_steps.append((box, mark))
+            return body
+        body = step('Send your settings to the host', 'Export your YAML and send it to whoever hosts the multiworld.')
+        row = self.buttons(body)
+        self.ap_export_button = ttk.Button(row, text='Export my YAML…', command=self.export_multiworld_yaml)
+        self.ap_export_button.pack(side='left')
+        ttk.Button(row, text='Host needs the apworld?', style='Link.TButton', command=self.build_apworld).pack(side='left', padx=16)
+        body = step('Add the patch the host sent back', 'The .aprmk file from the zip Archipelago produced. The seed is generated and installed right away.')
+        self.ap_patch_button = ttk.Button(body, text='Choose the patch…', command=self.generate_from_patch)
+        self.ap_patch_button.pack(anchor='w')
+        body = step('Connect to the server', 'Checks you find in game are sent to the server.')
+        row = self.buttons(body)
+        for label, variable, width, extra in [('SERVER', self.ap_address, 26, {}), ('SLOT', self.ap_slot, 16, {}),
+                                              ('PASSWORD', self.ap_password, 12, {'show': '•'})]:
+            field = ttk.Frame(row)
+            field.pack(side='left', fill='x', expand=label == 'SERVER', padx=(0, 10))
+            ttk.Label(field, text=label, style='Field.TLabel').pack(anchor='w')
+            ttk.Entry(field, textvariable=variable, width=width, **extra).pack(fill='x', pady=(5, 0))
+        self.ap_button = ttk.Button(row, text='Connect', style='Accent.TButton', command=self.toggle_archipelago)
+        self.ap_button.pack(side='left', anchor='s')
+        ttk.Label(body, textvariable=self.ap_status, style='Small.TLabel', wraplength=640).pack(anchor='w', pady=(10, 8))
+        self.ap_log = tk.Text(body, height=8, wrap='word', state='disabled', padx=12, pady=10)
         self.ap_log.pack(fill='x')
-        row = ttk.Frame(box)
-        row.pack(fill='x', pady=(4, 0))
+        row = self.buttons(body, pady=(8, 0))
         chat = ttk.Entry(row, textvariable=self.ap_chat)
         chat.pack(side='left', fill='x', expand=True)
         chat.bind('<Return>', lambda event: self.send_archipelago_chat())
@@ -441,6 +657,14 @@ class Application:
     def update_archipelago_controls(self):
         self.ap_button.state(['!disabled'] if self.ap_manifest or self.ap_client else ['disabled'])
         self.ap_button.configure(text='Disconnect' if self.ap_client else 'Connect')
+        # The three steps: done ones are checked, the next one is highlighted.
+        done = [bool(self.app_state.get('ap_yaml_exported') or self.ap_manifest), bool(self.ap_manifest), bool(self.ap_client)]
+        current = next((index for index, value in enumerate(done) if not value), None)
+        for index, (box, mark) in enumerate(self.ap_steps):
+            mark.set('done' if done[index] else 'on' if index == current else 'off', str(index + 1))
+            box.configure(style='CardSelected.TFrame' if index == current else 'Card.TFrame')
+        self.ap_export_button.configure(style='Accent.TButton' if current == 0 else 'TButton')
+        self.ap_patch_button.configure(style='Accent.TButton' if current == 1 else 'TButton')
 
     def set_archipelago_seed(self, manifest):
         """A seed was opened: the client follows it only when it comes from an Archipelago patch."""
@@ -635,9 +859,10 @@ class Application:
         label, help_text = OPTION_COPY.get(option.name, (option.label, option.help))
         def describe():
             self.full_reason.set(label + ' — ' + (help_text or 'Choose the value that suits your game.'))
+            self.update_presets()
         if option.kind == 'bool':
             variable = tk.BooleanVar(value=option.default)
-            widget = ttk.Checkbutton(parent, text=label, variable=variable, command=describe) if parent else None
+            widget = self.switch_row(parent, index, label, variable, command=describe) if parent else None
         elif option.kind == 'int':
             variable = tk.IntVar(value=option.default)
             widget = ttk.Spinbox(parent, from_=min(option.supported_ints), to=max(option.supported_ints), textvariable=variable, width=8, command=describe) if parent else None
@@ -651,7 +876,7 @@ class Application:
             display = tk.StringVar(value=labels[[v for v, label, reason in option.values].index(option.default)])
             variable.display, variable.labels = display, labels
             allowed = [choice_label(value, text) for value, text, reason in option.values if reason is None]
-            widget = ttk.Combobox(parent, state='readonly', values=allowed, textvariable=display, width=35) if parent else None
+            widget = ttk.Combobox(parent, state='readonly', values=allowed, textvariable=display, width=30) if parent else None
             if widget:
                 def selected(event=None):
                     variable.set(option.values[labels.index(display.get())][0])
@@ -659,11 +884,11 @@ class Application:
                 widget.bind('<<ComboboxSelected>>', selected)
         self.full_vars[option.name] = variable
         if widget:
-            if option.kind == 'bool':
-                widget.grid(row=index, column=0, columnspan=2, sticky='w', pady=3)
-            else:
-                ttk.Label(parent, text=label, wraplength=480).grid(row=index, column=0, sticky='w', padx=(0, 18), pady=6)
-                widget.grid(row=index, column=1, sticky='e', pady=6)
+            if option.kind != 'bool':
+                ttk.Label(parent, text=label, wraplength=480).grid(row=index, column=0, sticky='w', padx=(0, 18), pady=7)
+                widget.grid(row=index, column=1, sticky='e', pady=7)
+                if index:
+                    theme.rule(parent).grid(row=index, column=0, columnspan=2, sticky='new')
             widget.bind('<FocusIn>', lambda event: describe(), add='+')
 
     def full_value(self, option):
@@ -683,6 +908,7 @@ class Application:
         if enable is not None:
             self.full_enabled.set(enable)
             self.full_toggled()
+        self.update_presets()
 
     def full_toggled(self):
         if self.full_enabled.get():
@@ -736,6 +962,8 @@ class Application:
             if name:
                 Path(name).write_text(text, encoding='utf-8')
                 self.status.set('Multiworld YAML exported.')
+                self.write_app_state(ap_yaml_exported=True)
+                self.update_archipelago_controls()
         except Exception as error:
             self.error(error)
 
@@ -832,6 +1060,7 @@ class Application:
             self.status.set('An operation is already running.')
             return
         self.busy = True
+        self.progress.pack(side='right', padx=(12, 0))
         self.progress.start()
         self.generate_button.state(['disabled'])
         def worker():
@@ -860,7 +1089,7 @@ class Application:
     def generated_and_installed(self, result):
         directory, installed = result
         self.use_artifact(directory)
-        self.tabs.select(self.tracker_tab)
+        self.show_page('tracker')
         self.status.set('Seed generated and installed: ' + str(installed))
         messagebox.showinfo('Seed ready', 'Seed installed in:\n' + str(installed)
                             + '\n\nStart a new game to enable automatic tracking and first collections.')
@@ -883,6 +1112,8 @@ class Application:
         self.apply_settings(Settings.from_dict(manifest['settings']))
         if manifest.get('tracking', {}).get('new_save_required'):
             self.result.set(self.result.get() + '\nA new game is needed for automatic tracking.')
+        self.seed_name = (manifest['settings']['seed'] or manifest['seed_id'][:12])[:28]
+        self.seed_chip.set('Seed  ' + self.seed_name)
         self.write_app_state(last_artifact=str(Path(directory).resolve()))
         if self.auto_save.get():
             self.follow_newest_save()
@@ -904,7 +1135,7 @@ class Application:
             os.startfile(str(self.artifact))
 
     def show_spoilers(self):
-        self.tabs.select(self.spoiler_tab)
+        self.show_page('spoiler')
         if self.artifact and not self.spoiler:
             self.reveal_spoiler()
 
@@ -922,20 +1153,22 @@ class Application:
         self.spoiler_search = tk.StringVar()
         self.spoiler_minor = tk.BooleanVar(value=True)
         self.spoiler_info = tk.StringVar(value='Open a seed to read its spoiler.')
-        ttk.Label(parent, text='Seed spoiler', style='Heading.TLabel').pack(anchor='w')
-        ttk.Label(parent, textvariable=self.spoiler_info, style='Muted.TLabel', wraplength=940).pack(anchor='w', pady=(0, 10))
-        row = ttk.Frame(parent)
-        row.pack(fill='x', pady=(0, 10))
-        ttk.Button(row, text='Reveal the spoiler', style='Accent.TButton', command=self.reveal_spoiler).pack(side='left')
-        ttk.Button(row, text='Hide', command=self.reset_spoiler).pack(side='left', padx=8)
-        ttk.Button(row, text='Open spoiler.txt', command=self.open_spoiler_text).pack(side='right')
-        ttk.Button(row, text='Export as text…', command=self.export_spoiler).pack(side='right', padx=8)
-        filters = ttk.Frame(parent)
-        filters.pack(fill='x', pady=(0, 10))
-        ttk.Label(filters, text='Search').pack(side='left')
-        ttk.Entry(filters, textvariable=self.spoiler_search, width=30).pack(side='left', padx=(8, 18))
-        ttk.Checkbutton(filters, text='Show minor items (rupees, hearts, ammo, tokens)',
-                        variable=self.spoiler_minor, command=self.render_spoiler).pack(side='left')
+        box = self.card(parent)
+        row = self.buttons(box)
+        ttk.Button(row, text='Open spoiler.txt', style='Link.TButton', command=self.open_spoiler_text).pack(side='right')
+        ttk.Button(row, text='Export as text…', style='Link.TButton', command=self.export_spoiler).pack(side='right', padx=12)
+        ttk.Button(row, text='Hide', command=self.reset_spoiler).pack(side='right', padx=(8, 12))
+        ttk.Button(row, text='Reveal the spoiler', style='Accent.TButton', command=self.reveal_spoiler).pack(side='right')
+        info = ttk.Frame(row)
+        info.pack(side='left', fill='x', expand=True, padx=(0, 16))
+        ttk.Label(info, text='Seed spoiler', style='Heading.TLabel').pack(anchor='w')
+        ttk.Label(info, textvariable=self.spoiler_info, style='Small.TLabel', wraplength=300, justify='left').pack(anchor='w', pady=(2, 0))
+        parent = self.card(parent, fill='both', expand=True)
+        filters = self.buttons(parent, pady=(0, 8))
+        ttk.Entry(filters, textvariable=self.spoiler_search, width=30).pack(side='left')
+        ttk.Label(filters, text='Search', style='Small.TLabel').pack(side='left', padx=(8, 0))
+        ttk.Checkbutton(filters, text='Minor items (rupees, hearts, ammo, tokens)',
+                        variable=self.spoiler_minor, command=self.render_spoiler).pack(side='right')
         self.spoiler_search.trace_add('write', lambda *args: self.render_spoiler())
         self.spoiler_views = ttk.Notebook(parent)
         self.spoiler_views.pack(fill='both', expand=True)
@@ -947,12 +1180,12 @@ class Application:
             frame = ttk.Frame(self.spoiler_views)
             self.spoiler_views.add(frame, text=title)
             tree = ttk.Treeview(frame, columns=[c for c, _, _ in columns], show='tree headings', selectmode='browse')
-            tree.heading('#0', text=heading)
+            tree.heading('#0', text=heading, anchor='w')
             tree.column('#0', width=360, minwidth=200, stretch=True)
             for column, text, width in columns:
-                tree.heading(column, text=text)
+                tree.heading(column, text=text, anchor='w')
                 tree.column(column, width=width, minwidth=60, stretch=(column == 'item'))
-            tree.tag_configure('major', foreground=self.colors['accent'])
+            tree.tag_configure('major', foreground=self.colors['text'])
             tree.tag_configure('minor', foreground=self.colors['muted'])
             bar = ttk.Scrollbar(frame, orient='vertical', command=tree.yview)
             tree.configure(yscrollcommand=bar.set)
@@ -960,7 +1193,7 @@ class Application:
             tree.pack(side='left', fill='both', expand=True)
             self.spoiler_trees[key] = tree
         self.spoiler_summary = tk.StringVar()
-        ttk.Label(parent, textvariable=self.spoiler_summary, style='Muted.TLabel').pack(anchor='w', pady=(8, 0))
+        ttk.Label(parent, textvariable=self.spoiler_summary, style='Small.TLabel').pack(anchor='w', pady=(8, 0))
 
     def reset_spoiler(self):
         """Hide the spoiler again (new seed opened, or the player asked)."""
@@ -976,7 +1209,7 @@ class Application:
 
     def reveal_spoiler(self):
         if not self.artifact:
-            self.spoiler_info.set('First open a seed in the Game tab.')
+            self.spoiler_info.set('First open a seed from Home.')
             return
         if not messagebox.askyesno('Reveal the spoiler', 'Show every randomized reward of this seed?'):
             return
@@ -1075,7 +1308,7 @@ class Application:
             self.error(error)
 
     def render_tracker(self):
-        if not hasattr(self, 'tracker_rows'):
+        if not hasattr(self, 'tracker_rows') or not hasattr(self, 'home_list'):
             return
         containers = [self.tracker_rows]
         if self.overlay and self.overlay.winfo_exists():
@@ -1102,24 +1335,28 @@ class Application:
             for child in container.winfo_children():
                 child.destroy()
             if not self.tracker:
-                ttk.Label(container, text='No game open', style='Heading.TLabel').pack(anchor='w', pady=(22, 4))
-                ttk.Label(container, text='Generate a seed in Settings or open an existing seed folder in Game.', style='Muted.TLabel').pack(anchor='w')
+                empty = ttk.Frame(container)
+                empty.pack(expand=True, pady=40)
+                mark = tk.Canvas(empty, width=46, height=42, background=self.colors['surface'], highlightthickness=0)
+                theme.triforce(mark, 2, 2, 42, self.colors['line_strong'])
+                mark.pack()
+                ttk.Label(empty, text='No game open', style='Heading.TLabel').pack(pady=(12, 2))
+                ttk.Label(empty, text='Create a seed in New seed, or open one from Home.', style='Muted.TLabel').pack()
                 continue
             tree_frame = ttk.Frame(container)
             tree_frame.pack(fill='both', expand=True)
             tree = ttk.Treeview(tree_frame, columns=('state', 'reward', 'kind'), show='tree headings', selectmode='browse', height=9)
             self.tracker_trees[container] = tree
-            tree.heading('#0', text='Zone / location')
+            tree.heading('#0', text='Zone / location', anchor='w')
             tree.column('#0', width=350, minwidth=200, stretch=True)
-            for key, title, width in [('state', 'State', 125), ('reward', 'Reward obtained', 210), ('kind', 'Type', 120)]:
-                tree.heading(key, text=title)
+            for key, title, width in [('state', 'State', 125), ('reward', 'Reward', 210), ('kind', 'Type', 120)]:
+                tree.heading(key, text=title, anchor='w')
                 tree.column(key, width=width, minwidth=80, stretch=(key == 'reward'))
-            for tag, color in [('done', '#b0c6b8'), ('available', '#a2e2b8'), ('partial', '#d6dc9c'), ('blocked', '#c1b49a'), ('unknown', '#b6c5cf')]:
+            for tag, color in theme.STATE_COLORS.items():
                 tree.tag_configure(tag, foreground=color)
+            tree.tag_configure('zone', font=self.fonts.strong)
             scrollbar = ttk.Scrollbar(tree_frame, orient='vertical', command=tree.yview)
-            horizontal = ttk.Scrollbar(tree_frame, orient='horizontal', command=tree.xview)
-            tree.configure(yscrollcommand=scrollbar.set, xscrollcommand=horizontal.set)
-            horizontal.pack(side='bottom', fill='x')
+            tree.configure(yscrollcommand=scrollbar.set)
             scrollbar.pack(side='right', fill='y')
             tree.pack(side='left', fill='both', expand=True)
             zones, visible, region_numbers = {}, 0, {}
@@ -1128,6 +1365,9 @@ class Application:
                 completed, access = state.get('completed', False), state.get('access', 'unknown')
                 region = check.get('region') or 'Other'
                 region_numbers[region] = region_numbers.get(region, 0) + 1
+                bucket = 'done' if completed else 'available' if access == 'available' else 'blocked'
+                if self.tracker_filter != 'all' and bucket != self.tracker_filter:
+                    continue
                 if completed and not self.show_completed.get():
                     continue
                 if not completed and access == 'blocked' and not self.show_blocked.get():
@@ -1138,7 +1378,7 @@ class Application:
                 if query and query not in (region + ' ' + name + ' ' + kind + ' ' + reward).casefold():
                     continue
                 if region not in zones:
-                    zones[region] = tree.insert('', 'end', iid='zone::' + region, open=self.zone_open.get(region, bool(query)), text=f'{region}   {done[region]}/{totals[region]} done · {available[region]} available', values=('', '', ''))
+                    zones[region] = tree.insert('', 'end', iid='zone::' + region, open=self.zone_open.get(region, bool(query)), text=region, values=(f'{done[region]} / {totals[region]}', f'{available[region]} available' if available[region] else '', ''), tags=('zone',))
                 label = 'Done' if completed else {'available': 'Available', 'partial': 'Partial zone', 'blocked': 'Blocked', 'unknown': 'Unknown'}.get(access, 'Unknown')
                 if completed and state.get('source') == 'manual':
                     label += ' (manual)'
@@ -1168,8 +1408,7 @@ class Application:
                         self.error(error)
                     return 'break'
             tree.bind('<space>', toggle)
-            ttk.Button(container, text='Mark / unmark an undetected check', command=toggle).pack(
-                side='bottom', anchor='w', pady=(6, 0), before=tree_frame)
+            tree.bind('<Double-1>', toggle)
             if not visible:
                 ttk.Label(container, text='No location matches the filters.', style='Muted.TLabel').pack(anchor='w', pady=(5, 0))
         if self.tracker:
@@ -1177,7 +1416,17 @@ class Application:
             count_access = sum(not state.get('completed') and state.get('access') == 'available' for state in states.values())
             count_unknown = sum(not state.get('completed') and state.get('access', 'unknown') == 'unknown' for state in states.values())
             count_partial = sum(not state.get('completed') and state.get('access') == 'partial' for state in states.values())
-            self.tracker_summary.set(f'{count_done}/{len(self.current_checks)} done · {count_access} available · {count_partial} in a partial zone · {count_unknown} unknown' + f'   —   {self.tracker.slot} · seed {self.tracker.seed_id[:16]}')
+            total = len(self.current_checks)
+            self.tracker_counts = {'done': count_done, 'total': total, 'available': count_access}
+            for key, value in [('available', count_access), ('blocked', total - count_done - count_access), ('done', count_done), ('all', total)]:
+                self.counters[key][1].configure(text=str(value))
+            self.tracker_summary.set(f'Double-click a location to mark it by hand.   {count_partial} in a partial zone · {count_unknown} unknown')
+        else:
+            self.tracker_counts = None
+            for frame, count, label in self.counters.values():
+                count.configure(text='–')
+        self.render_home_list(states)
+        self.update_home()
         self.update_hud(states)
 
     def update_hud(self, states=None):
@@ -1236,12 +1485,12 @@ class Application:
             return
         self.overlay = tk.Toplevel(self.root)
         self.overlay.title('OoT — Game tracker')
-        self.overlay.configure(background=self.colors['bg'])
+        self.overlay.configure(background=self.colors['page'])
         self.overlay.attributes('-topmost', True)
         self.overlay.geometry('930x470')
         self.overlay.minsize(640, 330)
-        frame = ttk.Frame(self.overlay, padding=18)
-        frame.pack(fill='both', expand=True)
+        frame = ttk.Frame(self.overlay, style='Card.TFrame', padding=theme.CARD_PADDING)
+        frame.pack(fill='both', expand=True, padx=12, pady=12)
         ttk.Label(frame, text='Exploration in progress', style='Heading.TLabel').pack(anchor='w')
         ttk.Label(frame, textvariable=self.connection_status, style='Muted.TLabel', wraplength=850).pack(anchor='w', pady=(0, 8))
         filters = ttk.Frame(frame)
@@ -1331,6 +1580,7 @@ class Application:
                 else:
                     self.busy = False
                     self.progress.stop()
+                    self.progress.pack_forget()
                     self.generate_button.state(['!disabled'])
                     if kind == 'error':
                         self.error(payload)
