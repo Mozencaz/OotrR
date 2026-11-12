@@ -1,5 +1,10 @@
 # OoT Randomizer — Hookshot and emulator
 
+[![Latest release](https://img.shields.io/github/v/release/Mozencaz/OotrR?label=download)](https://github.com/Mozencaz/OotrR/releases/latest)
+
+**[Download the latest release](https://github.com/Mozencaz/OotrR/releases/latest)**
+(Windows `.zip` or Linux `.tar.gz`, portable, no installation).
+
 Desktop application that builds a randomized seed of the Ocarina of Time remake
 from your local NUP game file, and installs it as a RomFS mod for Hookshot or an
 emulator.
