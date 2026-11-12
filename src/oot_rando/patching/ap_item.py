@@ -1,18 +1,26 @@
-"""Archipelago item: items of other players shown as a medallion with the Archipelago logo.
+"""Archipelago item: items of other players shown as a golden medallion with the Archipelago logo.
 
 Model: a copy of the Fire Medallion (``Model/Item_Medal_Fire.Item_Medal_Fire.bfres``)
-under another project name, whose albedo, emission and normal textures are
-renamed (same length, so no offset moves). The new textures are the medallion's
-own BNTX files with their pixels rewritten in place:
+under another project name (``Item_Medal_Arch``):
 
-* albedo (ASTC 8x6): both faces of the disc become a cream face with the logo
-  and a golden rim; the rest of the sheet (edge, ribbon) is kept;
-* emission (ASTC 12x12): black (no fire glow);
-* normal (ASTC 5x5): flat on both faces (no engraving under the logo).
+* the glass dome, the fire emblem under it and the glaze of the back
+  (shapes ``Glass``, ``Glass_Back``, ``Glaze``) are hidden: their vertices are
+  collapsed to one point, so their triangles have no area;
+* the six textures of the base (``Mt_Item_Medal_Fire_*``) are renamed to
+  ``Mt_Item_Medal_Arch_*`` (same length: no offset moves) and replaced.
 
-Every block written is an ASTC *void-extent* block (one constant colour), so no
-ASTC encoder is needed: the logo is a flat-coloured drawing, sampled once per
-block with light supersampling for the edges.
+Textures (no game pixel is decoded or kept):
+
+* albedo: a BC1 texture of the same size and name length
+  (``Mt_Upper_Enemy_Poe_Alb``) used as container, entirely rewritten: gold
+  everywhere, and both faces of the disc carry the logo on cream with a gold
+  rim. BC1 (two colours and four shades per 4x4 block) is encoded here, so the
+  logo stays sharp;
+* metalness: metal everywhere except the logo area; roughness, occlusion,
+  emission and normal: one constant value.
+
+Held over Link's head, the item spins like the other key items (wallet):
+common item animation (``AS/Item_Common``, ``Item_Common_Animation``).
 
 Each foreign item gets its own pouch actor (``Item_AP_<hash>``) built like the
 monster souls, with get-item texts naming the item and the player it belongs to.
@@ -28,13 +36,22 @@ PROJECT = 'Item_Medal_Arch'           # same length as Item_Medal_Fire
 MODEL_INFO = {'FmdbName': 'Item_Medal_Fire', 'ModelProjectName': PROJECT}
 NEW_MODEL_FILE = f'Model/{PROJECT}.Item_Medal_Fire.bfres.zs'
 OLD_TEX, NEW_TEX = 'Mt_Item_Medal_Fire', 'Mt_Item_Medal_Arch'
-REPLACED = ('Alb', 'Emc', 'Nrm')
-# Faces of the disc on the albedo sheet (pixels of the 576x576 texture): centre, radius.
+HIDDEN_SHAPES = ('Glass_Back__Mt_Medal_Glass_Back', 'Glass__Mt_Medal_Glass', 'Glaze__Mt_Medal_Glaze')
+# Texture suffix -> source BNTX (same size and name length as the medallion's own).
+SOURCES = {'Alb': 'Tex/Mt_Upper_Enemy_Poe_Alb.bntx.zs'}
+REPLACED = ('Alb', 'AO', 'Emc', 'Mtl', 'Nrm', 'Rgh')
+# Spinning when held: the common item animation of the key items (wallet).
+SPIN_TEMPLATE = 'Item_Wallet_Medium'
+SPIN_AS = '?AS/Item_Common.root.asb'
+SPIN_ANIMATION = 'Item_Common_Animation'
+# Faces of the disc on the 576x576 albedo sheet: centre, radius (UV of the base shape).
+SHEET = 576
 FACES = ((153, 152), (377, 375))
 FACE_RADIUS = 134
 RIM = 0.86                            # inner radius of the golden rim, relative to the face
-CREAM, GOLD = (243, 234, 212), (205, 160, 74)
+CREAM, GOLD, GOLD_DARK = (246, 239, 222), (214, 168, 74), (150, 104, 38)
 FLAT_NORMAL = (128, 128, 128, 128)
+METAL, MATTE, ROUGHNESS, OCCLUSION = 255, 0, 96, 255
 # Archipelago logo in a 512x512 frame: six circles drawn in this order, each with
 # a background-coloured halo that cuts the circles drawn before it.
 LOGO_CIRCLES = (((255.5, 102), (201, 118, 130)), ((110, 183), (238, 227, 145)), ((400.5, 183), (117, 194, 117)),
@@ -43,6 +60,7 @@ LOGO_RADIUS, LOGO_HALO = 100, 125
 ASTC_BLOCKS = {0x2d: (4, 4), 0x2e: (5, 4), 0x2f: (5, 5), 0x30: (6, 5), 0x31: (6, 6), 0x32: (8, 5), 0x33: (8, 6),
                0x34: (8, 8), 0x35: (10, 5), 0x36: (10, 6), 0x37: (10, 8), 0x38: (10, 10), 0x39: (12, 10),
                0x3a: (12, 12)}
+BC1, BC4 = 0x1a, 0x1d
 
 
 # ------------------------------------------------------------------ items and actors
@@ -77,7 +95,7 @@ def ap_messages(item, player, language):
             'GetCaption': 'It will be sent to their world.'}
 
 
-# ------------------------------------------------------------------ logo
+# ------------------------------------------------------------------ drawing
 def logo_colour(x, y):
     """Colour of the logo at (x, y) of its 512x512 frame, or None (background)."""
     colour = None
@@ -95,46 +113,90 @@ def face_colour(dx, dy):
     distance = (dx * dx + dy * dy) ** 0.5
     if distance > FACE_RADIUS:
         return None
-    if distance > FACE_RADIUS * RIM:
+    inner = FACE_RADIUS * RIM
+    if distance > inner:
         return GOLD
-    inner = FACE_RADIUS * RIM * 0.92
-    scale = 512 / (2 * inner)
-    colour = logo_colour(256 + dx * scale, 256 + dy * scale)
-    return colour or CREAM
+    if distance > inner - 3:
+        return GOLD_DARK              # thin engraved line between rim and face
+    scale = 512 / (2 * inner * 0.94)
+    return logo_colour(256 + dx * scale, 256 + dy * scale) or CREAM
 
 
-def albedo_block(x0, y0, width, height, samples=3):
-    """Average colour of a block of the albedo sheet, or None when the block is not on a face."""
-    reach = FACE_RADIUS + (width * width + height * height) ** 0.5
+def sheet_colour(x, y):
+    """Albedo at (x, y) of the 576x576 sheet: a face, or plain gold elsewhere (edge of the disc)."""
     for cx, cy in FACES:
-        if (x0 + width / 2 - cx) ** 2 + (y0 + height / 2 - cy) ** 2 > reach * reach:
-            continue
-        colours = []
-        for i in range(samples):
-            for j in range(samples):
-                colour = face_colour(x0 + (i + 0.5) * width / samples - cx, y0 + (j + 0.5) * height / samples - cy)
-                if colour is not None:
-                    colours.append(colour)
-        if len(colours) * 2 >= samples * samples:   # mostly on the face: the face wins
-            return tuple(round(sum(c[k] for c in colours) / len(colours)) for k in range(3)) + (255,)
-    return None
+        colour = face_colour(x - cx, y - cy)
+        if colour is not None:
+            return colour
+    return GOLD
 
 
-# ------------------------------------------------------------------ ASTC and BNTX
+def on_logo(x, y):
+    """Whether (x, y) of the sheet is inside the cream face (not metal)."""
+    inner = FACE_RADIUS * RIM
+    return any((x - cx) ** 2 + (y - cy) ** 2 <= inner * inner for cx, cy in FACES)
+
+
+# ------------------------------------------------------------------ block encodings
 def void_extent(rgba):
     """ASTC LDR void-extent block: one constant colour (8-bit channels)."""
     return bytes.fromhex('fcfdffffffffffff') + struct.pack('<4H', *(c * 257 for c in rgba))
 
 
+def bc4_constant(value):
+    """BC4 block of one value."""
+    return bytes((value, value)) + bytes(6)
+
+
+def _rgb565(colour):
+    r, g, b = colour[:3]
+    return ((r * 31 + 127) // 255) << 11 | ((g * 63 + 127) // 255) << 5 | ((b * 31 + 127) // 255)
+
+
+def _expand565(value):
+    r, g, b = value >> 11, (value >> 5) & 63, value & 31
+    return ((r * 255 + 15) // 31, (g * 255 + 31) // 63, (b * 255 + 15) // 31)
+
+
+def bc1_block(texels):
+    """BC1 block (opaque, four-colour mode) of 16 RGB texels in row order."""
+    distinct = sorted(set(texels))
+    if len(distinct) == 1:
+        a = b = distinct[0]
+    else:
+        # The two texels furthest apart: exact for the two-colour edges of a flat drawing.
+        a, b = max(((p, q) for i, p in enumerate(distinct) for q in distinct[i + 1:]),
+                   key=lambda pair: sum((pair[0][k] - pair[1][k]) ** 2 for k in range(3)))
+    c0, c1 = _rgb565(a), _rgb565(b)
+    if c0 < c1:
+        c0, c1 = c1, c0
+    if c0 == c1:
+        return struct.pack('<HHI', c0, c1, 0)
+    e0, e1 = _expand565(c0), _expand565(c1)
+    palette = (e0, e1, tuple((2 * e0[k] + e1[k]) // 3 for k in range(3)),
+               tuple((e0[k] + 2 * e1[k]) // 3 for k in range(3)))
+    indices = 0
+    for index, texel in enumerate(texels):
+        best = min(range(4), key=lambda i: sum((palette[i][k] - texel[k]) ** 2 for k in range(3)))
+        indices |= best << (2 * index)
+    return struct.pack('<HHI', c0, c1, indices)
+
+
+# ------------------------------------------------------------------ BNTX
 def _block_address(x, y, gob_height, width_gobs, bpe=16):
-    """Byte address of element (x, y) in Tegra block-linear layout (see icon_extract.deblock_linear)."""
+    """Byte address of element (x, y) in Tegra block-linear layout (see icon_extract.deblock_linear).
+
+    Inside a 64-byte x 8-row GOB, address bits 4..8 are y0, y1, xb4, y2, xb5 where
+    xb is the byte column (decoding the game's own textures confirms this order).
+    """
+    xb = x * bpe
     gob_row = (y // (8 * gob_height)) * 512 * gob_height * width_gobs + ((y % (8 * gob_height)) // 8) * 512
-    y_in = (y & 1) * 16 + ((y >> 1) & 1) * 32 + ((y >> 2) & 1) * 128
-    return gob_row + (x // 4) * 512 * gob_height + y_in + (x & 1) * 64 + ((x >> 1) & 1) * 256
+    return (gob_row + (xb // 64) * 512 * gob_height + (xb & 15) + (y & 1) * 16 + ((y >> 1) & 1) * 32
+            + ((xb >> 4) & 1) * 64 + ((y >> 2) & 1) * 128 + ((xb >> 5) & 1) * 256)
 
 
 def bntx_info(data):
-    """Texture header of a single-texture BNTX: name, format, size, layout and mip levels."""
+    """Texture header of a single-texture BNTX: format, size, layout and mip levels."""
     if data[:4] != b'BNTX':
         raise ValueError('Not a BNTX texture.')
     at = data.find(b'BRTI')
@@ -154,38 +216,58 @@ def bntx_info(data):
             'start': levels[0], 'size': size, 'levels': levels}
 
 
-def paint_bntx(data, block_colour):
+def _footprint(fmt):
+    if fmt in ASTC_BLOCKS:
+        return ASTC_BLOCKS[fmt] + (16,)
+    if fmt in (BC1, BC4):
+        return 4, 4, 8
+    raise ValueError(f'Unsupported texture format {fmt:#x}.')
+
+
+def paint_bntx(data, block):
     """Rewrite every mip level in place.
 
-    ``block_colour(x0, y0, w, h)`` gets a block in level-0 pixels and returns RGBA,
-    or None to keep the block. Only GOB height 1 is handled (it never grows with
+    ``block(x0, y0, w, h, scale)`` gets a block in level-0 pixels (``scale``: size
+    of one texel of this level in level-0 pixels) and returns the encoded block
+    bytes, or None to keep it. Only GOB height 1 is handled (it never changes with
     the mip levels, so every level uses the same addressing).
     """
     info = bntx_info(data)
-    if info['format'] not in ASTC_BLOCKS:
-        raise ValueError(f'Unsupported texture format {info["format"]:#x}.')
+    bw, bh, bpe = _footprint(info['format'])
     if info['gob_height'] != 1:
         raise ValueError('Unsupported texture layout (GOB height above 1).')
-    bw, bh = ASTC_BLOCKS[info['format']]
     out = bytearray(data)
     painted = 0
     end = info['start'] + info['size']
     for level, start in enumerate(info['levels']):
         width, height = max(1, info['width'] >> level), max(1, info['height'] >> level)
         width_blocks, height_blocks = -(-width // bw), -(-height // bh)
-        width_gobs = -(-width_blocks * 16 // 64)
+        width_gobs = -(-width_blocks * bpe // 64)
         scale = 1 << level
         for y in range(height_blocks):
             for x in range(width_blocks):
-                colour = block_colour(x * bw * scale, y * bh * scale, bw * scale, bh * scale)
-                if colour is None:
+                encoded = block(x * bw * scale, y * bh * scale, bw * scale, bh * scale, scale)
+                if encoded is None:
                     continue
-                address = start + _block_address(x, y, 1, width_gobs)
-                if address + 16 > end:
+                if len(encoded) != bpe:
+                    raise ValueError('Encoded block of the wrong size.')
+                address = start + _block_address(x, y, 1, width_gobs, bpe)
+                if address + bpe > end:
                     raise ValueError('Texture block outside the image data.')
-                out[address:address + 16] = void_extent(colour)
+                out[address:address + bpe] = encoded
                 painted += 1
     return bytes(out), painted
+
+
+def fill_bntx(data, encoded):
+    """Every block of every mip level set to one encoded block (layout does not matter)."""
+    info = bntx_info(data)
+    _, _, bpe = _footprint(info['format'])
+    if len(encoded) != bpe or info['start'] % bpe or info['size'] % bpe:
+        raise ValueError('Constant block does not match the texture.')
+    out = bytearray(data)
+    out[info['start']:info['start'] + info['size']] = encoded * (info['size'] // bpe)
+    return bytes(out)
 
 
 def rename(data, old, new):
@@ -198,45 +280,131 @@ def rename(data, old, new):
     return data.replace(old, new)
 
 
+def albedo_block(x0, y0, width, height, scale):
+    """BC1 block of the albedo sheet (2x2 samples per texel at the full-size level)."""
+    step = width / 4
+    samples = 2 if scale == 1 else 1
+    texels = []
+    for j in range(4):
+        for i in range(4):
+            colours = [sheet_colour(x0 + (i + (a + 0.5) / samples) * step, y0 + (j + (b + 0.5) / samples) * step)
+                       for a in range(samples) for b in range(samples)]
+            texels.append(tuple(round(sum(c[k] for c in colours) / len(colours)) for k in range(3)))
+    return bc1_block(texels)
+
+
+def metal_block(x0, y0, width, height, scale):
+    return bc4_constant(MATTE if on_logo(x0 + width / 2, y0 + height / 2) else METAL)
+
+
+# ------------------------------------------------------------------ BFRES
+def hide_shapes(model, names=HIDDEN_SHAPES):
+    """Collapse every vertex of the named shapes to the origin (their triangles vanish).
+
+    Positions are read from the vertex buffer of each shape (``_p0``, four half
+    floats); the buffer section is the second one of the relocation table.
+    """
+    data = bytearray(model)
+    if data[:8] != b'FRES    ':
+        raise ValueError('Not a BFRES model.')
+    rlt = struct.unpack_from('<I', data, 0x18)[0]
+    if data[rlt:rlt + 4] != b'_RLT':
+        raise ValueError('BFRES relocation table not found.')
+    buffers = struct.unpack_from('<QI', data, rlt + 16 + 24)[1]
+
+    def string(offset):
+        length = struct.unpack_from('<H', data, offset)[0]
+        return bytes(data[offset + 2:offset + 2 + length]).decode('utf-8', 'replace')
+
+    hidden = set()
+    at = data.find(b'FSHP')
+    while 0 <= at < rlt:
+        name = string(struct.unpack_from('<Q', data, at + 8)[0])
+        if name in names:
+            fvtx = struct.unpack_from('<Q', data, at + 0x10)[0]
+            if data[fvtx:fvtx + 4] != b'FVTX' or data[fvtx + 0x4D] != 1:
+                raise ValueError('Unexpected vertex buffer for ' + name)
+            attributes = struct.unpack_from('<Q', data, fvtx + 8)[0]
+            position = None
+            for index in range(data[fvtx + 0x4C]):
+                entry = attributes + index * 16
+                if string(struct.unpack_from('<Q', data, entry)[0]) == '_p0':
+                    position = struct.unpack_from('<HH', data, entry + 8)
+                    offset = struct.unpack_from('<H', data, entry + 12)[0]
+            if position is None or position[0] != 0x1505:
+                raise ValueError('Unexpected position format for ' + name)
+            stride = struct.unpack_from('<I', data, struct.unpack_from('<Q', data, fvtx + 0x38)[0])[0]
+            first = buffers + struct.unpack_from('<I', data, fvtx + 0x48)[0]
+            count = struct.unpack_from('<I', data, fvtx + 0x50)[0]
+            for vertex in range(count):
+                base = first + vertex * stride + offset
+                data[base:base + 6] = bytes(6)            # x, y, z = 0 (w kept)
+            hidden.add(name)
+        at = data.find(b'FSHP', at + 4)
+    if hidden != set(names):
+        raise ValueError('Shapes not found in the model: ' + ', '.join(sorted(set(names) - hidden)))
+    return bytes(data)
+
+
 def build_model_files(read_raw):
     """New raw resources of the Archipelago medallion: ``{path: (raw, template_path)}``."""
     files = {}
     for suffix in REPLACED:
-        source = f'Tex/{OLD_TEX}_{suffix}.bntx.zs'
-        raw = rename(read_raw(source), f'{OLD_TEX}_{suffix}', f'{NEW_TEX}_{suffix}')
+        source = SOURCES.get(suffix, f'Tex/{OLD_TEX}_{suffix}.bntx.zs')
+        old_name = source[len('Tex/'):-len('.bntx.zs')]
+        raw = rename(read_raw(source), old_name, f'{NEW_TEX}_{suffix}')
+        info = bntx_info(raw)
         if suffix == 'Alb':
+            if (info['format'], info['width'], info['height']) != (BC1, SHEET, SHEET):
+                raise ValueError('Unexpected albedo container for the Archipelago medallion.')
             raw, painted = paint_bntx(raw, albedo_block)
-        elif suffix == 'Emc':
-            raw, painted = paint_bntx(raw, lambda *block: (0, 0, 0, 255))
+        elif suffix == 'Mtl':
+            if (info['format'], info['width']) != (BC4, SHEET):
+                raise ValueError('Unexpected metalness texture for the Archipelago medallion.')
+            raw, painted = paint_bntx(raw, metal_block)
         else:
-            scale = bntx_info(raw)['width'] / 576
-
-            def flat(x0, y0, w, h, scale=scale):
-                inside = any(((x0 + w / 2) / scale - cx) ** 2 + ((y0 + h / 2) / scale - cy) ** 2
-                             <= (FACE_RADIUS + 2) ** 2 for cx, cy in FACES)
-                return FLAT_NORMAL if inside else None
-            raw, painted = paint_bntx(raw, flat)
+            value = {'AO': bc4_constant(OCCLUSION), 'Rgh': bc4_constant(ROUGHNESS),
+                     'Emc': void_extent((0, 0, 0, 255)), 'Nrm': void_extent(FLAT_NORMAL)}[suffix]
+            raw, painted = fill_bntx(raw, value), 1
         if not painted:
             raise ValueError(f'Archipelago texture left unchanged: {suffix}')
         files[f'Tex/{NEW_TEX}_{suffix}.bntx.zs'] = (raw, source)
-    model = read_raw(MODEL_FILE)
+    model = hide_shapes(read_raw(MODEL_FILE))
     for suffix in REPLACED:
-        name = f'{OLD_TEX}_{suffix}'.encode()
-        if model.count(name) != 1:
-            raise ValueError(f'Unexpected medallion model: {name.decode()}')
-        model = rename(model, f'{OLD_TEX}_{suffix}', f'{NEW_TEX}_{suffix}')
+        name = f'{OLD_TEX}_{suffix}'
+        if model.count(name.encode()) != 1:
+            raise ValueError(f'Unexpected medallion model: {name}')
+        model = rename(model, name, f'{NEW_TEX}_{suffix}')
     files[NEW_MODEL_FILE] = (model, MODEL_FILE)
     return files
+
+
+def spin_parts(read_raw):
+    """Pack files, component references and ActorInfo values making the held item spin."""
+    from oot_rando.formats import byml_codec
+    from oot_rando.formats.inspect_resources import sarc
+    pack = sarc(read_raw(f'Pack/Actor/{SPIN_TEMPLATE}.pack.zs'))
+    as_info = 'Component/ASInfo/Item_GetDemo.engine__component__ASInfo.bgyml'
+    if as_info not in pack:
+        raise ValueError('Get-item animation settings not found.')
+    animation = 'Component/AnimationParam/Item_AP_Spin.engine__component__AnimationParam.bgyml'
+    files = {as_info: pack[as_info],
+             animation: byml_codec.dump({'endian': '<', 'version': 7, 'root': {
+                 'AnimationResources': [{'ModelProjectName': SPIN_ANIMATION}]}})}
+    components = {'ASRef': SPIN_AS, 'ASInfoRef': '?' + as_info, 'AnimationRef': '?' + animation}
+    return files, components, {'AnimationResources': [{'ModelProjectName': SPIN_ANIMATION}]}
 
 
 def build_ap_files(read_raw, items, message_archives=()):
     """``(modified, new)`` resources for these foreign items: {planner item: (item name, player)}."""
     from oot_rando.patching.soul_adapter import build_item_files, soul_event_ain, soul_event_member, \
         soul_event_name
+    spin_files, spin_components, spin_info = spin_parts(read_raw)
     specs = []
     for item, (name, player) in sorted(items.items()):
         actor = ap_actor(item)
         specs.append({'actor': actor, 'model': MODEL_ACTOR, 'model_info': MODEL_INFO,
+                      'files': spin_files, 'components': spin_components, 'actor_info': spin_info,
                       'event_name': soul_event_name(actor), 'event_member': soul_event_member(actor),
                       'event_ain': soul_event_ain(actor),
                       'texts': (lambda lang, name=name, player=player: ap_messages(name, player, lang))})

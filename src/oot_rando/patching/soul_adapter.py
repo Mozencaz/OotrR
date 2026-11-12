@@ -388,7 +388,9 @@ def build_item_files(read_raw, specs, message_archives=()):
     """New key-item pouch actors from the Forest Medallion template (souls, dungeon keys).
 
     ``specs``: dicts with ``actor``, ``model`` (native actor lending its model; an
-    optional ``model_info`` overrides its ``FmdbName``/``ModelProjectName``),
+    optional ``model_info`` overrides its ``FmdbName``/``ModelProjectName``; optional
+    ``files``, ``components`` and ``actor_info`` add pack files, component references
+    and ActorInfo values),
     ``event_name``/``event_member``/``event_ain`` (cloned get event) and ``texts``
     (function(language) -> get-item texts). Reading goes through ``read_raw`` so
     that successive calls compose.
@@ -440,6 +442,8 @@ def build_item_files(read_raw, specs, message_archives=()):
         files[event_param] = byml_codec.dump({'endian': '<', 'version': 7, 'root': {
             'EventUniqueAin': spec['event_ain'], 'UseEventUniqueAin': True}})
         components['EventPerformerRef'] = '?' + event_param
+        files.update(spec.get('files', {}))
+        components.update(spec.get('components', {}))
         files[f'Actor/{actor}.engine__actor__ActorParam.bgyml'] = byml_codec.dump(param)
         model = copy.deepcopy(models[spec['model']])
         model['root'].update(spec.get('model_info', {}))
@@ -464,6 +468,7 @@ def build_item_files(read_raw, specs, message_archives=()):
                     if key in model_row:
                         row[key] = copy.deepcopy(model_row[key])
                 row.update(spec.get('model_info', {}))
+                row.update(copy.deepcopy(spec.get('actor_info', {})))
                 row['InstanceHeapSize'] = max(row['InstanceHeapSize'], model_row['InstanceHeapSize'])
             rows.append(row)
         rows.sort(key=lambda row: row['__RowId'])
