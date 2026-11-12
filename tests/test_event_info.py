@@ -78,6 +78,39 @@ class NupTests(unittest.TestCase):
             else:
                 self.assertEqual(old, row)
 
+    def test_ocarina_guide_lists_dm_sy_ocarina_for_every_item_get(self):
+        # User test 12/11: the Fairy Ocarina found early was playable only after a reload.
+        from oot_rando.formats.byml_codec import load
+        from oot_rando.formats.inspect_resources import Byml
+        from oot_rando.patching import event_info, qol_patches
+        guide, _ = qol_patches.ocarina_guide_on_get(self.raw(qol_patches.ACTION_GUIDE_FLOW))
+        changed = {'ActionGuide': guide}
+        added = event_info.new_transitions(changed, self.flow)
+        self.assertEqual(added, {('ActionGuide', 'ActionGuide'): {'Dm_SY_Ocarina'}})
+        self.assertEqual(event_info.new_subflows(changed, self.flow), {})   # (same flowchart)
+        settings = Byml(self.raw(qol_patches.EVENT_SETTINGS)).root
+        info = self.raw(event_info.GAME_ANALYZED_EVENT_INFO)
+        patched, report = event_info.add_child_events(info, settings, added,
+                                                      lambda name: changed.get(name) or self.flow(name))
+        rows = {r['__RowId']: r for r in load(patched)['root']}
+        before = {r['__RowId']: r for r in load(info)['root']}
+        # As the Hyrule Field arrival lists it: the event and its own children.
+        arrival = before['Dm_SY_BancChangeArrive_HyruleField']['ChildEventList']
+        users = [i for i, r in before.items() if 'ActionGuide' in (r.get('SubFlowList') or [])]
+        self.assertGreater(len(users), 100)
+        for row_id in users:
+            children = rows[row_id]['ChildEventList']
+            self.assertLessEqual(set(arrival) - {row_id}, set(children), row_id)
+            self.assertEqual(children, sorted(children, key=str.lower))
+        self.assertNotIn('Dm_SY_BancChangeArrive_HyruleField', report)   # already listed
+        self.assertNotIn('Dm_SY_Ocarina', report)                        # (not its own child)
+        for row_id, row in rows.items():
+            old = before[row_id]
+            self.assertEqual({k: v for k, v in old.items() if k != 'ChildEventList'},
+                             {k: v for k, v in row.items() if k != 'ChildEventList'})
+            if row_id not in report:
+                self.assertEqual(old, row)
+
     def test_no_new_call_no_change(self):
         from oot_rando.patching import event_info
         info = self.raw(event_info.GAME_ANALYZED_EVENT_INFO)

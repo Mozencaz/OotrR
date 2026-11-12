@@ -16,6 +16,13 @@ it with its own sub-flows (ActionGuide, GetPouchContent, Dm_SY_Get, NaviEventCom
 ``add_subflow_dependencies`` adds, to every event row whose flowchart (or one of its
 listed sub-flows) was changed to call a new external flowchart, that flowchart and
 everything it calls in turn.
+
+``add_child_events`` does the same for ``ChildEventList`` (user test 12/11: the Fairy
+Ocarina found before Hyrule Field could be played only after reloading the save). The
+ocarina guide added at the end of every item get (``ActionGuide``) goes on, when the
+player asks for it, with ``EventTransition`` to ``Dm_SY_Ocarina``; only the Hyrule
+Field arrival lists that event, so from an item get the transition never started and
+``ActionGuide_IsRequestOcarina`` (not saved: cleared by a reload) stayed true.
 """
 import copy
 
@@ -64,12 +71,22 @@ def entry_calls(raw, entry):
 
     Sub-flows of the same flowchart are followed; an unknown entry calls nothing.
     """
-    from evfl.event import SubFlowEvent
+    return _entry_walk(raw, entry)[0]
+
+
+def entry_transitions(raw, entry):
+    """``EventName`` of every ``EventTransition`` reachable from ``entry`` (same flowchart)."""
+    return _entry_walk(raw, entry)[1]
+
+
+def _entry_walk(raw, entry):
+    """(external calls, transition events) reachable from ``entry``."""
+    from evfl.event import ActionEvent, SubFlowEvent
     chart = _chart(raw) if raw is not None else None
     if chart is None:
-        return set()
+        return set(), set()
     entries = {e.name: e for e in chart.entry_points}
-    calls, seen_entries, seen = set(), set(), set()
+    calls, transitions, seen_entries, seen = set(), set(), set(), set()
     stack = [entries[entry]] if entry in entries else []
     events = []
     while stack or events:
@@ -79,6 +96,10 @@ def entry_calls(raw, entry):
                 continue
             seen.add(event.name)
             data = event.data
+            if isinstance(data, ActionEvent) and data.actor_action.v.v == 'EventTransition':
+                name = data.params.data.get('EventName') if data.params is not None else None
+                if isinstance(name, str) and name:
+                    transitions.add(name)
             if type(data).__name__ == 'SubFlowSwitchEvent':
                 calls.add(SWITCH_CALL)   # (message flows: not followed, see SWITCH_CALL)
             if isinstance(data, SubFlowEvent):
@@ -92,7 +113,7 @@ def entry_calls(raw, entry):
         if point.name not in seen_entries:
             seen_entries.add(point.name)
             events.append(point.main_event.v)
-    return calls
+    return calls, transitions
 
 
 def entry_names(raw):
@@ -192,4 +213,93 @@ def add_subflow_dependencies(info_raw, event_settings_root, added, current):
     result = byml_codec.dump(document)
     if byml_codec.load(result)['root'] != expected:
         raise ValueError('Semantic check of the event sub-flows failed.')
+    return result, report
+
+
+def reachable_transitions(call, current, memo=None):
+    """Events started by ``EventTransition`` from ``call`` = (flowchart, entry) and from
+    every external sub-flow it calls, transitively. ``memo``: one per version of the flows."""
+    memo = {} if memo is None else memo
+    seen, stack, events = set(), [call], set()
+    while stack:
+        call = stack.pop()
+        if call in seen or call == SWITCH_CALL:
+            continue
+        seen.add(call)
+        if call not in memo:
+            memo[call] = _entry_walk(current(call[0]), call[1])
+        calls, transitions = memo[call]
+        events |= transitions
+        stack.extend(calls - seen)
+    return events
+
+
+def new_transitions(modified, original):
+    """{(flow, entry): events only the changed version starts by ``EventTransition``}.
+
+    ``modified``: {flow name: raw}; ``original(name)``: vanilla raw, or None. Through
+    external sub-flows too.
+    """
+    now = lambda name: modified[name] if name in modified else original(name)
+    memo_now, memo_before, added = {}, {}, {}
+    for name, raw in modified.items():
+        for entry in entry_names(raw):
+            events = (reachable_transitions((name, entry), now, memo_now)
+                      - reachable_transitions((name, entry), original, memo_before))
+            if events:
+                added[(name, entry)] = events
+    return added
+
+
+def add_child_events(info_raw, event_settings_root, added, current):
+    """Returns (patched GameAnalyzedEventInfo, {row id: [events added]}).
+
+    As ``add_subflow_dependencies``, for ``ChildEventList``: a row is completed when the
+    entry it plays starts a new event, or when it lists (``SubFlowList``) a changed
+    flowchart that does (any entry). Each new event comes with the events it lists in
+    turn (the vanilla Hyrule Field arrival lists Dm_SY_Ocarina's own children too).
+    """
+    from oot_rando.formats import byml_codec
+    if not added:
+        return info_raw, {}
+    document = byml_codec.load(info_raw)
+    rows = {row.get('__RowId'): row for row in document['root']}
+    unknown = sorted({event for events in added.values() for event in events} - rows.keys())
+    if unknown:
+        raise ValueError('New transition to an event without info row: ' + ', '.join(unknown))
+
+    def with_children(events):
+        seen, stack = set(), list(events)
+        while stack:
+            event = stack.pop()
+            if event not in seen:
+                seen.add(event)
+                stack.extend(rows[event].get('ChildEventList') or [])
+        return seen
+    by_entry = {key: with_children(events) for key, events in added.items()}
+    by_flow = {}
+    for (flow, _), events in by_entry.items():
+        by_flow.setdefault(flow, set()).update(events)
+    names = {}
+    entries_of = lambda flow: names.setdefault(flow, entry_names(current(flow)))
+    owners = event_entries(event_settings_root, entries_of)
+    expected = copy.deepcopy(document['root'])
+    report = {}
+    for index, row in enumerate(document['root']):
+        row_id = row.get('__RowId')
+        listed = list(row.get('ChildEventList') or [])
+        wanted = set(by_entry.get(owners.get(row_id), ()))
+        for flow in set(row.get('SubFlowList') or []) & by_flow.keys():
+            wanted |= by_flow[flow]
+        missing = sorted(wanted - set(listed) - {row_id})
+        if not missing:
+            continue
+        row['ChildEventList'] = sorted(set(listed) | set(missing), key=str.lower)   # (vanilla order)
+        expected[index]['ChildEventList'] = row['ChildEventList']
+        report[row_id] = missing
+    if not report:
+        return info_raw, {}
+    result = byml_codec.dump(document)
+    if byml_codec.load(result)['root'] != expected:
+        raise ValueError('Semantic check of the child events failed.')
     return result, report

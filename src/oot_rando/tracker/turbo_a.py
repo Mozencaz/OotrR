@@ -2,10 +2,11 @@
 
 Turbo A: hold A, A is pressed repeatedly (dialogues scroll fast). A short press stays
 one press (an ocarina note, opening a door…); the taps start once A has been held
-``HOLD_DELAY_S``. It works in every dialogue: no reading of the game's state (the
-event state read from memory missed many dialogues, user test 11/11). Once the left
-stick moves during a hold, that hold stays a plain held A (grabbing and pulling a
-block).
+``HOLD_DELAY_S``, and only while the game plays an event (``live_memory.LiveEventState``,
+seen within ``TURBO_EVENT_GRACE_S``: the state flickers); in free play (and memory
+unreadable) a held A stays held (diving: the turbo without the memory, 11/11, broke
+it, user test 12/11). Once the left stick moves during a hold, that hold stays a
+plain held A (grabbing and pulling a block).
 
 Hookshot (tools/host/nn_hid.c) reads the pads (XInput) and the keyboard
 (``GetAsyncKeyState``) itself and ORs them: while the pad's A is held, the game sees
@@ -18,15 +19,18 @@ it restarts). ``restore()`` (the app closing) writes the former A back, so a gam
 started without the app has its A; a game still running then has no A until it
 restarts (the app warns).
 
-Skip with X: X held ``SKIP_HOLD_S`` while the game plays an event (cutscene,
-dialogue…, ``live_memory.LiveEventState``) holds Plus, the game's skip button, until
-X is released or the event ends, and taps A meanwhile (dialogue cutscenes scroll,
-a skip confirmation is accepted). A 50 ms tap of Plus skipped nothing (user test
-12/11: cutscenes skipped only with the real Plus, dialogue cutscenes the former X
-turbo scrolled no longer moved). Only during an event (Plus in free play opens the
-pause menu): Plus is pressed once per hold, never again once the event has ended; a
-short X press stays a plain X (an item, an ocarina note). Memory unreadable: no skip.
-Each long X hold is logged (``turbo.log``) with what the memory said.
+Skip with X: a press of X while the game plays an event (cutscene, dialogue…,
+``live_memory.LiveEventState``) is followed, ``SKIP_PLUS_DELAY_S`` later, by a press
+of Plus (held ``SKIP_PLUS_HOLD_S``): the X itself reaches the game and brings up the
+skip prompt, Plus confirms it, as the player did by hand (user request 12/11: X then
+Plus worked, X alone should do it). The former version wanted X *held* 0.4 s and no
+long hold was ever logged in the next test: the player taps X. Only during an event
+(Plus in free play opens the pause menu); memory unreadable: no skip. Ocarina: Y
+pressed during an event (a note; no item in a cutscene) cancels a waiting Plus and no
+skip is sent until the event has ended or no note (A, X, Y) has been pressed for
+``SKIP_LATCH_IDLE_S``. Pressing X again or A does not latch (the 12/11 version latched
+on X X or X A: the player's repeated X then never skipped, "ocarina notes" in the log). Each X press during play is logged (``turbo.log``)
+with what the memory said and whether Plus was sent.
 
 ``parse_binds``, ``remap_ini``, ``TurboClock``, ``ATurbo`` and ``SkipWithX`` are pure
 (testable anywhere); ``TurboA`` is Windows-only.
@@ -58,7 +62,8 @@ PAD_TO_XINPUT = {
     14: 0x0008,  # RIGHT
 }
 # Hookshot's defaults (nn_hid.c pad_default / key_default) when the ini has no line.
-DEFAULTS = {'pad_a': 1, 'key_a': (ord('E'), 0), 'pad_x': 3, 'key_x': (0x20, 0), 'key_plus': (0x09, 0x0D),
+DEFAULTS = {'pad_a': 1, 'key_a': (ord('E'), 0), 'pad_x': 3, 'key_x': (0x20, 0), 'pad_y': 2, 'key_y': (0, 0),
+            'key_plus': (0x09, 0x0D),
             'key_move_up': (ord('W'), 0), 'key_move_down': (ord('S'), 0),
             'key_move_left': (ord('A'), 0), 'key_move_right': (ord('D'), 0)}
 MOVE_KEYS = ('key_move_up', 'key_move_down', 'key_move_left', 'key_move_right')
@@ -67,10 +72,18 @@ VIRTUAL_A = 0x87   # VK_F24: the key Hookshot reads as A while the turbo runs
 PRESS_S, RELEASE_S = 0.05, 0.05
 # A held this long before the first tap: a short press is one press.
 HOLD_DELAY_S = 0.3
-# X held this long during an event: Plus (skip).
-SKIP_HOLD_S = 0.4
-# Plus released once the event has not been seen this long (the memory state flickers).
-SKIP_END_GRACE_S = 0.3
+# X pressed during an event: Plus this long after the press (the skip prompt is up),
+# held this long (several frames at 60 fps).
+SKIP_PLUS_DELAY_S = 0.25
+SKIP_PLUS_HOLD_S = 0.12
+# The event is looked for this long after the press (the memory state flickers).
+SKIP_DECIDE_S = 0.25
+# An event is over once not seen this long (ends the ocarina latch).
+SKIP_END_GRACE_S = 0.5
+# The turbo runs while an event was seen this recently (the memory state flickers).
+TURBO_EVENT_GRACE_S = 0.5
+# The ocarina latch ends once no note has been pressed this long (the event state can stay up).
+SKIP_LATCH_IDLE_S = 4.0
 # Left stick: moved past this (of 32767) = Link walks, pulls…
 STICK_DEAD = 12000
 LOG_MAX_BYTES = 256 * 1024
@@ -162,24 +175,30 @@ class TurboClock:
 class ATurbo:
     """One decision per poll (pure): the A the game sees, from the player's A and stick."""
 
-    def __init__(self, delay=HOLD_DELAY_S):
+    def __init__(self, delay=HOLD_DELAY_S, grace=TURBO_EVENT_GRACE_S):
         self.clock = TurboClock(delay=delay)
+        self.grace, self.last_event = grace, None
         self.moved = False   # the stick moved during this hold
         self.hold = None     # {'start', 'taps', 'moved'} while A is held
         self.finished = []
         self.down = False
 
-    def step(self, a, stick, now):
+    def step(self, a, stick, now, event=True):
+        """``event``: True / False / None (unreadable): the game plays an event."""
+        if event is True:
+            self.last_event = now
+        in_event = self.last_event is not None and now - self.last_event < self.grace
         if a:
             if self.hold is None:
-                self.hold, self.moved = {'start': now, 'taps': 0, 'moved': False}, False
+                self.hold, self.moved = {'start': now, 'taps': 0, 'moved': False, 'event': False}, False
             self.moved = self.moved or stick
             self.hold['moved'] = self.moved
+            self.hold['event'] = self.hold['event'] or in_event
         elif self.hold is not None:
             self.hold['end'] = now
             self.finished.append(self.hold)
             self.hold = None
-        want = self.clock.a_down(a, now, turbo=not self.moved)
+        want = self.clock.a_down(a, now, turbo=not self.moved and in_event)
         if want and not self.down and self.hold is not None and now - self.hold['start'] > 0:
             self.hold['taps'] += 1
         self.down = want
@@ -187,69 +206,73 @@ class ATurbo:
 
 
 class SkipWithX:
-    """X held ``hold`` seconds during an event: Plus held and A tapped until X or the event ends (pure).
+    """A press of X during an event: Plus pressed ``delay`` later, held ``hold`` (pure).
 
-    ``step`` -> (plus_down, a_down). Plus goes down once per hold (the first time
-    the event is seen after ``hold``) and stays down while X and the event last; once
-    up it stays up for the rest of the hold (no second press in free play).
+    ``step(x, note, event, now, y=False)`` -> plus_down. ``x``: X held; ``note``:
+    another note button held (A, Y); ``y``: Y held; ``event``: True / False / None
+    (unreadable), read only when ``needs_event`` says so. One Plus per X press (X
+    again while a Plus waits: the same Plus); Y pressed during an event cancels it and
+    latches (no skip) until the event has ended or no note came for ``idle``.
     """
 
-    def __init__(self, hold=SKIP_HOLD_S, press=PRESS_S, release=RELEASE_S, grace=SKIP_END_GRACE_S):
-        self.hold, self.grace, self.seen = hold, grace, None
-        self.taps = TurboClock(press=press, release=release, delay=0)
-        self.since, self.state = None, 'idle'   # idle -> active -> done (per hold)
-        self.record, self.finished = None, []
+    def __init__(self, delay=SKIP_PLUS_DELAY_S, hold=SKIP_PLUS_HOLD_S, decide=SKIP_DECIDE_S,
+                 grace=SKIP_END_GRACE_S, idle=SKIP_LATCH_IDLE_S):
+        self.delay, self.hold, self.decide, self.grace, self.idle = delay, hold, decide, grace, idle
+        self.prev_x = self.prev_note = self.prev_y = False
+        self.last_note = None
+        self.pending = None      # the X press waiting for its Plus: record
+        self.plus_until = None
+        self.latched, self.last_event = False, None
+        self.finished = []
 
     def needs_event(self, x, now):
-        return x and self.since is not None and now - self.since >= self.hold and self.state != 'done'
+        return x and not self.prev_x or self.pending is not None or self.latched
 
-    def step(self, x, event, now):
-        """``event``: True / False / None (unreadable)."""
-        if not x:
-            if self.record is not None:
-                self.record['end'] = now
-                self.finished.append(self.record)
-            self.since, self.state, self.record = None, 'idle', None
-            self.taps.a_down(False, now)
-            return False, False
-        if self.since is None:
-            self.since = now
-        if now - self.since < self.hold:
-            return False, False
-        if self.record is None:
-            self.record = {'start': self.since, 'events': set(), 'plus': None, 'plus_end': None, 'taps': 0,
-                           'a': False}
-        self.record['events'].add(event)
+    def _finish(self, why):
+        self.pending['result'] = why
+        self.finished.append(self.pending)
+        self.pending = None
+
+    def step(self, x, note, event, now, y=False):
+        x_down, note_down, y_down = x and not self.prev_x, note and not self.prev_note, y and not self.prev_y
+        self.prev_x, self.prev_note, self.prev_y = x, note, y
         if event is True:
-            self.seen = now
-        if self.state == 'idle' and event:
-            self.state, self.record['plus'] = 'active', now
-        elif self.state == 'active' and now - self.seen >= self.grace:
-            self.state, self.record['plus_end'] = 'done', self.seen
-        if self.state != 'active':
-            self.taps.a_down(False, now)
-            return False, False
-        if event is not True:   # (in the grace: Plus stays down, no A in free play)
-            self.taps.a_down(False, now)
-            self.record['a'] = False
-            return True, False
-        a = self.taps.a_down(True, now)
-        if a and not self.record['a']:
-            self.record['taps'] += 1
-        self.record['a'] = a
-        return True, a
+            self.last_event = now
+        if self.latched and (self.last_event is None or now - self.last_event >= self.grace
+                             or now - self.last_note >= self.idle):
+            self.latched = False   # (the melody's event is over)
+        if x_down or note_down or y_down:
+            self.last_note = now
+        if y_down and event is True:
+            if self.pending is not None:
+                self._finish('cancelled (Y: ocarina)')
+            self.latched = True
+        if x_down and self.pending is not None:
+            x_down = False   # (X again: the Plus already waiting)
+        if x_down:
+            self.pending = {'start': now, 'events': set(), 'result': None}
+            if self.latched:
+                self._finish('no skip (ocarina notes in this event)')
+        if self.pending is not None:
+            self.pending['events'].add(event)
+            seen = True in self.pending['events']
+            if not seen and now - self.pending['start'] >= self.decide:
+                self._finish('no skip (no event seen)')
+            elif seen and now - self.pending['start'] >= self.delay:
+                self._finish('Plus sent')
+                self.plus_until = now + self.hold
+        if self.plus_until is not None:
+            if now < self.plus_until:
+                return True
+            self.plus_until = None
+        return False
 
 
 def describe_skip(record):
-    """One log line for a finished long X hold."""
+    """One log line for an X press during play."""
     events = record['events']
     seen = '/'.join(name for value, name in ((True, 'yes'), (False, 'no'), (None, 'unreadable')) if value in events)
-    line = f"X held {record['end'] - record['start']:.2f} s: event {seen or '?'}"
-    if record['plus'] is None:
-        return line + ', no skip (no event seen)'
-    stop = record['plus_end'] if record['plus_end'] is not None else record['end']
-    why = 'event ended' if record['plus_end'] is not None else 'X released'
-    return line + f", Plus held {stop - record['plus']:.2f} s ({why}), A taps {record['taps']}"
+    return f"X pressed: event {seen or '?'}, {record['result']}"
 
 
 class EventGate:
@@ -277,6 +300,8 @@ def describe_hold(hold):
     line = f"A held {hold['end'] - hold['start']:.2f} s: {hold['taps']} taps"
     if hold['moved']:
         line += ' (stick moved: plain hold)'
+    elif not hold.get('event', True):
+        line += ' (no event: plain hold)'
     return line
 
 
@@ -464,7 +489,7 @@ class TurboA:
             self.playing = LiveEventState().playing
         self.gate = EventGate(self.playing)
         self.running = True
-        self.status = ('Turbo A on: hold A in a dialogue; hold X to skip a cutscene'
+        self.status = ('Turbo A on: hold A in a dialogue (events only); press X to skip a cutscene'
                        + (' (restart the game for turbo A)' if running_before else ''))
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
@@ -493,12 +518,11 @@ class TurboA:
                 stick = front and (any(abs(p.sThumbLX) > STICK_DEAD or abs(p.sThumbLY) > STICK_DEAD for p in pads)
                                    or self._key_held(move_keys))
                 x = front and (self._pad_held(pads, self.binds['pad_x']) or self._key_held(self.binds['key_x']))
-                want_a = turbo.step(a, stick, now)
-                # (memory read only when X has been held long enough)
-                event = self.gate.open(now) if skip.needs_event(x, now) else False
-                want_plus, skip_a = skip.step(x, event, now)
-                want_plus = bool(self.plus) and want_plus
-                want_a = want_a or skip_a
+                y = front and (self._pad_held(pads, self.binds['pad_y']) or self._key_held(self.binds['key_y']))
+                # (memory read only while A is held or around an X press)
+                event = self.gate.open(now) if a or skip.needs_event(x, now) else False
+                want_a = turbo.step(a, stick, now, event)
+                want_plus = bool(self.plus) and skip.step(x, a or y, event, now, y=y)
                 if want_a != a_down:
                     self._send(VIRTUAL_A, want_a)
                     a_down = want_a
@@ -507,7 +531,9 @@ class TurboA:
                     self._send(self.plus, want_plus)
                     plus_down = want_plus
                 while skip.finished:
-                    self._log(describe_skip(skip.finished.pop(0)))
+                    record = skip.finished.pop(0)
+                    if record['events'] != {False}:   # (X in free play: an item, not logged)
+                        self._log(describe_skip(record))
                 while turbo.finished:
                     hold = turbo.finished.pop(0)
                     if hold['end'] - hold['start'] >= HOLD_DELAY_S:

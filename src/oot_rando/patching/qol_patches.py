@@ -509,18 +509,18 @@ SKIP_REPLAY_ACTIONS = ('EventTriggerSetGameDataBool', 'EventTriggerSetGameDataIn
                        'EventTriggerSoundEnableSpMode', 'EventTriggerSoundDisableSpMode')
 SKIP_WORLD_CHANGE_ACTORS = ('EventRequestActor',)
 SKIP_WORLD_CHANGE_ACTIONS = ('EventTriggerSetEventBool',)
-# Fade-outs (user test 11/11, Gohma's blue warp: Dm_Deku_0010 ends with a white
-# ``UISystemActor.EventEventFadeOut``, then the caller changes scene; with a window
-# around it the screen stayed white forever, skipped or not). No vanilla skip window
-# holds a fade-out: an entry that fades out (itself or through a sub-flow) gets no
-# window, like a world change.
+# Fade-outs: no vanilla skip window holds a fade-out, so a fade-out ends a window
+# (barrier): the fade and what follows (scene change, transition) always play. They
+# once made the whole entry unskippable (white screen after Gohma's blue warp, 11/11),
+# but that white screen came from RSDB SubFlowList (event_info), and the rule took the
+# skip away from cutscenes ending in a fade, such as the Kokiri Forest presentation
+# Dm_Kokiri_0045 (user test 12/11).
 SKIP_FADE_OUT_ACTIONS = ('EventEventFadeOut',)
 
 
 def is_world_change(actor, action):
-    """An action never skipped (see above): a world actor changes on screen, or a fade-out."""
-    return (actor in SKIP_WORLD_CHANGE_ACTORS or action in SKIP_WORLD_CHANGE_ACTIONS
-            or action in SKIP_FADE_OUT_ACTIONS)
+    """An action never skipped (see above): a world actor changes on screen."""
+    return actor in SKIP_WORLD_CHANGE_ACTORS or action in SKIP_WORLD_CHANGE_ACTIONS
 SKIP_BARRIER_ACTIONS = ('EventTransition', 'EventTriggerRequestAutoSave')
 SKIP_REPLAY_PLAYER_WARPS = ('EventPlayerWarpToTargetPosAndRot', 'EventPlayerWarpToStarterLinkAnchor')
 SKIP_BARRIER_WORDS = ('Pouch', 'Challenge', 'AddOrSub', 'Death', 'Equip', 'Create',
@@ -541,7 +541,7 @@ SKIP_INPUT_QUERIES = ('TalkChoice', 'Input', 'Skiped', 'Ocarina', 'Melody')
 
 def skip_action_class(actor, action, params):
     """'replay', 'cosmetic' or 'barrier' for one action event."""
-    if is_world_change(actor, action):
+    if is_world_change(actor, action) or action in SKIP_FADE_OUT_ACTIONS:
         return 'barrier'
     if actor == 'Player_Event' and action in SKIP_REPLAY_PLAYER_WARPS:
         return 'replay'
@@ -1031,6 +1031,14 @@ def quick_chest(raw):
     leave = add.data.nxt.v if add.data.nxt is not None else None
     if not isinstance(getattr(leave, 'data', None), SubFlowEvent) or leave.data.entry_point_name != 'Success_Leave':
         raise ValueError('Unexpected big chest end.')
+    # The chest-opening music (the fanfare's intro, timed on the cutscene) is cut
+    # (user request 12/11): the item fanfare starts at once, as for small chests
+    # (Dm_SY_TreasureboxSmall/ItemDisplay: IsEnableIntro False).
+    if (fanfare.data.actor_action.v.v != 'EventTriggerSoundStartFanfare' or fanfare.data.params is None
+            or fanfare.data.params.data.get('IsEnableIntro') is not True):
+        raise ValueError('Unexpected big chest fanfare.')
+    fanfare.data.params.data['IsEnableIntro'] = False
+    expected[fanfare.name]['IsEnableIntro'] = False
     actors = {a.identifier.name: a for a in chart.actors if a.identifier.sub_name == ''}
 
     def new_action(name, actor_name, action, params):
@@ -1088,6 +1096,7 @@ def quick_chest(raw):
             or not isinstance(events[pose[0].name].data.params.data['Actor'], Argument)):
         raise ValueError('Quick chest wrongly chained.')
     return result, {'entry': 'Success_', 'replaced': 'Success_PlayerPerform', 'skipped_wait': wait.name,
+                    'fanfare_without_intro': fanfare.name,
                     'lid_not_awaited': sorted(e.name for e in lids),
                     'show_item': [e.name for e in pose], 'hide_item': hide.name}
 

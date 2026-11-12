@@ -184,6 +184,10 @@ class NupTests(unittest.TestCase):
         chart = _flow(raw).flowchart
         entry = next(e for e in chart.entry_points if e.name == 'Success_')
         fanfare = entry.main_event.v.data.cases[0].v
+        # No chest-opening music (the fanfare's intro): the item fanfare starts at once.
+        self.assertEqual(fanfare.data.actor_action.v.v, 'EventTriggerSoundStartFanfare')
+        self.assertIs(fanfare.data.params.data['IsEnableIntro'], False)
+        self.assertEqual(report['fanfare_without_intro'], fanfare.name)
         opened = fanfare.data.nxt.v
         self.assertEqual(opened.data.entry_point_name, 'Open')
         # Link holds the item up (vanilla get pose) while the get window is open.
@@ -234,13 +238,21 @@ class NupTests(unittest.TestCase):
 
     def test_reported_cutscenes_get_windows_and_replay_their_writes(self):
         from oot_rando.patching.event_patch import _flow
-        # Fade-outs (Gohma's blue warp, 11/11: Dm_Deku_0010 fades to white then the scene
-        # changes; with a window the screen stayed white): such an entry gets no window.
-        # The Kokiri Forest presentation fades out before its Dm_Kokiri_0050 transition.
-        for name in ('Dm_Deku_0010', 'Dm_Kokiri_0045'):
-            with self.assertRaises(ValueError):
-                self.q.add_skip_windows_with_replay(self._flow(self.q.flow_path(name)))
+        # A fade-out ends a window (no vanilla window holds one): the Kokiri Forest
+        # presentation is skippable up to its fade before the Dm_Kokiri_0050 transition
+        # (user test 12/11: it no longer was), the fade and the transition always play.
         self.assertEqual(self.q.skip_action_class('UISystemActor', 'EventEventFadeOut', {}), 'barrier')
+        self.assertFalse(self.q.is_world_change('UISystemActor', 'EventEventFadeOut'))
+        raw, report = self.q.add_skip_windows_with_replay(self._flow(self.q.flow_path('Dm_Kokiri_0045')))
+        self.assertIn({'entry': 'EntryPoint0', 'from': 'Event79', 'to': 'Event2', 'replayed': ['Event67']}, report)
+        events = {e.name: e for e in _flow(raw).flowchart.events}
+        self.assertEqual(events['Event38'].data.actor_action.v.v, 'EventEventFadeOut')
+        end = events['Event3'].data.nxt.v   # the fork's join: the window ends, then the fade
+        self.assertEqual(end.data.actor_action.v.v, 'EventTriggerSkipEnd')
+        self.assertIs(end.data.nxt.v.data.cases[1].v, events['Event38'])
+        # Gohma's blue warp: its window stops before the white fade.
+        _, report = self.q.add_skip_windows_with_replay(self._flow(self.q.flow_path('Dm_Deku_0010')))
+        self.assertEqual([(w['from'], w['to']) for w in report], [('Event10', 'Event10')])
         # Dialogues are never covered (Saria at the ladder crashed when skipped; the Deku
         # Tree's talk before entering it is the same kind of flow): turbo A instead.
         for name in ('Dm_Kokiri_0060', 'Dm_Kokiri_0075'):

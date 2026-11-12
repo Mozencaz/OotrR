@@ -103,10 +103,10 @@ class ClockTests(unittest.TestCase):
 
 
 class ATurboTests(unittest.TestCase):
-    def run_hold(self, turbo, start, end, stick_from=None, step=0.01):
+    def run_hold(self, turbo, start, end, stick_from=None, step=0.01, event_of=lambda t: True):
         ups, now, down = 0, start, False
         while now < end:
-            want = turbo.step(True, stick_from is not None and now >= stick_from, now)
+            want = turbo.step(True, stick_from is not None and now >= stick_from, now, event_of(now))
             if down and not want:
                 ups += 1
             down, now = want, now + step
@@ -128,71 +128,122 @@ class ATurboTests(unittest.TestCase):
         self.assertIn('stick moved', describe_hold(turbo.finished[0]))
         self.assertGreater(self.run_hold(turbo, 2.0, 3.3), 5)                 # next hold: turbo again
 
+    def test_free_play_hold_stays_held(self):
+        turbo = ATurbo(delay=0.3)
+        self.assertEqual(self.run_hold(turbo, 0.0, 2.0, event_of=lambda t: False), 0)   # diving
+        self.assertIn('no event', describe_hold(turbo.finished[0]))
+        self.assertEqual(self.run_hold(turbo, 3.0, 5.0, event_of=lambda t: None), 0)    # unreadable
 
-def run_skip(skip, x_of, event_of, until, dt=0.01):
-    """(Plus down edges, A down edges, seconds Plus was down) over a run."""
-    now, plus_edges, a_edges, plus_time, prev = 0.0, 0, 0, 0.0, (False, False)
+    def test_flickering_event_keeps_the_turbo(self):
+        turbo = ATurbo(delay=0.3, grace=0.5)
+        self.assertGreater(self.run_hold(turbo, 0.0, 2.0, event_of=lambda t: t % 0.4 < 0.1), 10)
+
+    def test_turbo_stops_once_the_event_is_over(self):
+        turbo = ATurbo(delay=0.3, grace=0.5)
+        self.run_hold(turbo, 0.0, 1.0)
+        self.assertEqual(self.run_hold(turbo, 1.6, 3.0, event_of=lambda t: False), 0)   # (past the grace)
+
+
+def run_press(skip, x_of, event_of, until, note_of=lambda t: False, dt=0.01):
+    """(Plus presses, Plus time held) over [0, until)."""
+    now, prev, edges, held = 0.0, False, 0, 0.0
     while now < until:
-        plus, a = skip.step(x_of(now), event_of(now), now)
-        plus_edges += plus and not prev[0]
-        a_edges += a and not prev[1]
-        plus_time += dt if plus else 0
-        prev, now = (plus, a), now + dt
-    return plus_edges, a_edges, plus_time
+        plus = skip.step(x_of(now), note_of(now), event_of(now), now)
+        edges += plus and not prev
+        held += dt if plus else 0
+        prev, now = plus, now + dt
+    return edges, held
 
 
 class SkipTests(unittest.TestCase):
-    def test_x_held_in_an_event_holds_plus_and_taps_a(self):
-        skip = SkipWithX(hold=0.4, press=0.05, release=0.05)
-        plus, taps, held = run_skip(skip, lambda t: True, lambda t: True, 2.0)
-        self.assertEqual(plus, 1)                  # one press, kept down (not a 50 ms tap)
-        self.assertAlmostEqual(held, 1.6, delta=0.05)
-        self.assertGreater(taps, 10)               # dialogue cutscenes scroll, confirmations accepted
+    def test_x_tap_in_an_event_sends_one_plus_after_the_prompt(self):
+        skip = SkipWithX(delay=0.25, hold=0.12)
+        plus, held = run_press(skip, lambda t: t < 0.08, lambda t: True, 1.0)
+        self.assertEqual(plus, 1)                        # a tap is enough (no hold)
+        self.assertAlmostEqual(held, 0.12, delta=0.02)   # several frames
+        self.assertIn('Plus sent', describe_skip(skip.finished[-1]))
 
-    def test_plus_released_when_the_event_ends_and_never_pressed_again(self):
-        skip = SkipWithX(hold=0.4, grace=0.3)
-        event = lambda t: t < 1.0 or 1.5 < t < 1.6   # skipped at 1 s; flicker in free play later
-        plus, _, held = run_skip(skip, lambda t: True, event, 3.0)
+    def test_plus_comes_after_the_delay(self):
+        skip = SkipWithX(delay=0.25, hold=0.12)
+        out = [skip.step(t < 5, False, True, t / 100) for t in range(60)]
+        self.assertFalse(any(out[:25]))
+        self.assertTrue(out[25])
+
+    def test_x_held_is_still_one_plus(self):
+        skip = SkipWithX()
+        plus, _ = run_press(skip, lambda t: True, lambda t: True, 3.0)
         self.assertEqual(plus, 1)
-        self.assertAlmostEqual(held, 0.9, delta=0.05)   # 0.4 -> 1.0 + 0.3 grace
-        skip.step(False, False, 3.0)
-        self.assertIn('event ended', describe_skip(skip.finished[-1]))
 
-    def test_a_flicker_keeps_plus_down(self):
-        skip = SkipWithX(hold=0.4, grace=0.3)
-        plus, _, held = run_skip(skip, lambda t: True, lambda t: not 0.8 < t < 0.9, 1.5)
+    def test_each_press_sends_its_plus(self):
+        skip = SkipWithX(delay=0.25, hold=0.12)
+        plus, _ = run_press(skip, lambda t: t % 1.0 < 0.05, lambda t: True, 3.0)
+        self.assertEqual(plus, 3)
+
+    def test_free_play_or_unreadable_never_presses_plus(self):
+        skip = SkipWithX()
+        self.assertEqual(run_press(skip, lambda t: t < 0.05, lambda t: False, 1.0)[0], 0)   # an item
+        self.assertIn('no event seen', describe_skip(skip.finished[-1]))
+        skip = SkipWithX()
+        self.assertEqual(run_press(skip, lambda t: t < 0.05, lambda t: None, 1.0)[0], 0)
+        self.assertIn('unreadable', describe_skip(skip.finished[-1]))
+
+    def test_a_flicker_after_the_press_still_skips(self):
+        skip = SkipWithX(delay=0.25, decide=0.25)
+        plus, _ = run_press(skip, lambda t: t < 0.05, lambda t: t > 0.1, 1.0)
         self.assertEqual(plus, 1)
-        self.assertAlmostEqual(held, 1.1, delta=0.05)
 
-    def test_no_a_in_the_grace(self):
-        skip = SkipWithX(hold=0.4, grace=0.3)
-        for t in range(40, 100):
-            skip.step(True, True, t / 100)
-        self.assertFalse(any(skip.step(True, False, 1 + t / 100)[1] for t in range(25)))
+    def test_ocarina_notes_cancel_and_latch_until_the_event_ends(self):
+        skip = SkipWithX(delay=0.25, grace=0.5)
+        def notes_of(t):
+            note = t < 2.0 and t % 0.4 < 0.05
+            return note and t % 0.8 >= 0.4, note and t % 0.8 < 0.4      # Y, X, Y, X…: a melody
+        now, plus, prev = 0.0, 0, False
+        while now < 3.5:
+            x, y = notes_of(now)
+            out = skip.step(x, y, now < 2.5, now, y=y)
+            plus += out and not prev
+            prev, now = out, now + 0.01
+        self.assertEqual(plus, 0)
+        self.assertTrue(any('ocarina' in describe_skip(r) for r in skip.finished))
+        # The melody's event over: a later cutscene skips again.
+        self.assertFalse(skip.latched)
+        plus, _ = run_press(skip, lambda t: t < 0.05, lambda t: True, 1.0)
+        self.assertEqual(plus, 1)
 
-    def test_short_x_or_free_play_never_presses_plus(self):
-        skip = SkipWithX(hold=0.4)
-        self.assertFalse(any(any(skip.step(True, True, t / 100)) for t in range(30)))   # a note, an item
-        skip.step(False, True, 0.31)
-        self.assertFalse(any(any(skip.step(True, False, 1 + t / 100)) for t in range(100)))   # no event (bow aim)
-        skip.step(False, True, 2.5)
-        self.assertFalse(any(any(skip.step(True, None, 3 + t / 100)) for t in range(100)))    # unreadable
-        skip.step(False, False, 4.5)
-        self.assertIn('no skip', describe_skip(skip.finished[-1]))
+    def test_y_cancels(self):
+        skip = SkipWithX(delay=0.25)
+        now, plus = 0.0, 0
+        while now < 1.0:
+            y = 0.1 < now < 0.15
+            plus += skip.step(now < 0.05, y, True, now, y=y)
+            now += 0.01
+        self.assertEqual(plus, 0)
 
-    def test_event_read_only_when_needed(self):
-        skip = SkipWithX(hold=0.4)
-        self.assertFalse(skip.needs_event(True, 0.0))
-        skip.step(True, False, 0.0)
-        self.assertFalse(skip.needs_event(True, 0.2))
-        self.assertTrue(skip.needs_event(True, 0.5))
+    def test_x_again_or_a_still_skips(self):
+        # 12/11 log: X tapped twice, or A between, latched "ocarina notes" and never skipped.
+        skip = SkipWithX(delay=0.25, hold=0.12)
+        plus, _ = run_press(skip, lambda t: t < 0.05 or 0.1 < t < 0.15, lambda t: True, 1.0)
+        self.assertEqual(plus, 1)
+        plus, _ = run_press(skip, lambda t: t < 0.05, lambda t: True, 1.0, note_of=lambda t: 0.1 < t < 0.15)
+        self.assertEqual(plus, 1)
+        self.assertFalse(skip.latched)
 
-    def test_log_line(self):
-        skip = SkipWithX(hold=0.4)
-        run_skip(skip, lambda t: t < 1.2, lambda t: True, 1.5)
-        line = describe_skip(skip.finished[-1])
-        self.assertTrue(line.startswith('X held 1.2'), line)
-        self.assertIn('X released', line)
+    def test_latch_ends_without_notes_even_if_the_event_stays(self):
+        skip = SkipWithX(delay=0.25, idle=4.0)
+        skip.step(False, True, True, 0.0, y=True)
+        self.assertTrue(skip.latched)
+        plus, _ = run_press(skip, lambda t: 5.0 <= t < 5.05, lambda t: True, 6.0)
+        self.assertEqual(plus, 1)
+
+    def test_event_read_only_around_a_press(self):
+        skip = SkipWithX()
+        self.assertFalse(skip.needs_event(False, 0.0))
+        self.assertTrue(skip.needs_event(True, 0.0))      # the press itself
+        skip.step(True, False, True, 0.0)
+        self.assertTrue(skip.needs_event(True, 0.1))      # waiting for its Plus
+        for t in range(1, 60):
+            skip.step(True, False, True, t / 100)
+        self.assertFalse(skip.needs_event(True, 0.7))     # held, Plus sent: nothing more to read
 
 
 class EventGateTests(unittest.TestCase):

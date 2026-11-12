@@ -342,8 +342,9 @@ def generate(nup_path, output, settings, progress=None):
             extra_raw.update(flows)
         # Events load only the external sub-flows listed for them: a changed flow that
         # calls a new flowchart (the Deku Tree gift's Dm_SY_GetInEvent) gets it listed.
-        from oot_rando.patching.event_info import (GAME_ANALYZED_EVENT_INFO, add_subflow_dependencies,
-                                                    flow_name, flow_path, new_subflows)
+        from oot_rando.patching.event_info import (GAME_ANALYZED_EVENT_INFO, add_child_events,
+                                                    add_subflow_dependencies, flow_name, flow_path,
+                                                    new_subflows, new_transitions)
         changed_flows = {flow_name(p): raw for p, raw in extra_raw.items() if flow_name(p)}
         vanilla_cache = {}
 
@@ -353,10 +354,18 @@ def generate(nup_path, output, settings, progress=None):
                 vanilla_cache[name] = decompress(nup.read(members[path]), d) if path in members else None
             return vanilla_cache[name]
         added_calls = new_subflows(changed_flows, vanilla_flow)
+        current_named = lambda name: changed_flows.get(name) or vanilla_flow(name)
         if added_calls:
             extra_raw[GAME_ANALYZED_EVENT_INFO], skips['subflow_dependencies'] = add_subflow_dependencies(
                 decompress(read(GAME_ANALYZED_EVENT_INFO), d), Byml(decompress(read(EVENT_SETTINGS), d)).root,
-                added_calls, lambda name: changed_flows.get(name) or vanilla_flow(name))
+                added_calls, current_named)
+        # Same for the events a changed flow now starts by EventTransition (the ocarina
+        # guide's Dm_SY_Ocarina after every item get).
+        added_events = new_transitions(changed_flows, vanilla_flow)
+        if added_events:
+            info_source = extra_raw.get(GAME_ANALYZED_EVENT_INFO) or decompress(read(GAME_ANALYZED_EVENT_INFO), d)
+            extra_raw[GAME_ANALYZED_EVENT_INFO], skips['child_events'] = add_child_events(
+                info_source, Byml(decompress(read(EVENT_SETTINGS), d)).root, added_events, current_named)
         growths = {}
         for path, raw in sorted(raw_maps.items()):
             source = read(path)
