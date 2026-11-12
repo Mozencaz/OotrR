@@ -5,6 +5,7 @@ SHA-256 counter based (rejection sampling), independent of Python's ``random``.
 """
 from collections import Counter, defaultdict
 import hashlib
+from types import SimpleNamespace
 
 from oot_rando.logic.rules import Logic, vanilla_placements
 from oot_rando.logic import rando_options
@@ -95,11 +96,12 @@ class FillError(ValueError):
     pass
 
 
-def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=None, forced=None, extra=None):
-    """Return the complete placement plan. Raises if no beatable seed is found.
+def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress=None, forced=None,
+            extra=None):
+    """Everything before the fill: matched sources, shuffled locations, item pool and rules.
 
-    With ``forced`` (group id → item), no fill is done: the given placements are
-    swept from scratch and the sphere of every chest is returned (``replay``).
+    Shared by :func:`plan` (built-in fill) and the Archipelago world (AP fill).
+    ``forced`` only selects the shop slots of a replay.
     """
     report = progress or (lambda message: None)
     options = rando_options.validate(options, supported_only=True)
@@ -326,7 +328,6 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
     if len(progression) > len(logic_locations):
         raise FillError(f'{len(progression)} progression items for {len(logic_locations)} chests in logic: '
                         'enable zone matching or reduce the options.')
-    rng = DetRandom(hashlib.sha256((seed_key + '\0full-fill-v1').encode()).digest())
     family_tiers = tier_layout(matches, shuffled, pool)
     folder_dungeon = {gid: _dungeon_name(e['folder']) for gid, e in shuffled.items()}
 
@@ -364,6 +365,26 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
         state = logic.new_state(Counter(counts or {}) + starting)
         return _sweep_with_requirements(logic, placements, state)
 
+    return SimpleNamespace(
+        data=data, options=options, settings=settings, logic=logic, matches=matches, shuffled=shuffled,
+        pool=pool, relevant=relevant, progression=progression, logic_locations=logic_locations,
+        restricted_dungeon=restricted_dungeon, allowed=allowed, sweep=sweep, base=base, souls=souls,
+        unmatched_ap=unmatched_ap, family_tiers=family_tiers, starting=starting, report=report,
+        is_key=is_key, is_mapcompass=is_mapcompass)
+
+
+def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=None, forced=None, extra=None):
+    """Return the complete placement plan. Raises if no beatable seed is found.
+
+    With ``forced`` (group id → item), no fill is done: the given placements are
+    swept from scratch and the sphere of every chest is returned (``replay``).
+    """
+    c = prepare(data, options, groups, enemies, seed_key, open_forest, progress, forced, extra)
+    options, logic, matches, shuffled, pool = c.options, c.logic, c.matches, c.shuffled, c.pool
+    relevant, progression, logic_locations = c.relevant, c.progression, c.logic_locations
+    restricted_dungeon, allowed, sweep, base, souls = c.restricted_dungeon, c.allowed, c.sweep, c.base, c.souls
+    unmatched_ap, family_tiers, report = c.unmatched_ap, c.family_tiers, c.report
+    rng = DetRandom(hashlib.sha256((seed_key + '\0full-fill-v1').encode()).digest())
     if forced is not None:
         state, collected, spheres = sweep(forced)
         sphere_of = {loc[len('Remake|'):]: index for index, sphere in enumerate(spheres)
@@ -461,6 +482,84 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
                        unmatched_ap, attempt + 1, base)
     raise FillError('No beatable seed in ' + str(MAX_ATTEMPTS) + ' attempts (' + last_error
                     + '). Change the seed or the options.')
+
+
+# Starting items that cannot be handed over silently at the end of the opening:
+# dungeon items (generic actors, or a key count only applied at the next item get).
+STARTING_UNSUPPORTED = ('Map (', 'Compass (', 'Small Key (', 'Boss Key (', 'Small Key Ring (', 'Remake: ')
+
+
+def starting_unsupported(item):
+    return item.startswith(STARTING_UNSUPPORTED)
+
+
+def starting_actors(starting, family_tiers):
+    """Pouch actors of Archipelago starting items (AP names).
+
+    Copies of a progressive family take the lowest tiers of the family layout;
+    the placed copies take the next ones (see :func:`plan_assigned`).
+    """
+    bad = sorted({item for item in starting if starting_unsupported(item)})
+    if bad:
+        raise FillError('Starting items that cannot be given at the start of the game: ' + ', '.join(bad))
+    actors, taken = [], Counter()
+    for item in starting:
+        if item in PROGRESSIVE:
+            layout = (family_tiers or {}).get(item) or []
+            if taken[item] >= len(layout):
+                raise FillError(f'Too many {item} (starting items included).')
+            actors.append(PROGRESSIVE[item][layout[taken[item]]])
+            taken[item] += 1
+        else:
+            actors.append(item_actor(item, None))
+    return actors
+
+
+def plan_assigned(data, options, groups, enemies, seed_key, assigned, open_forest=True, progress=None,
+                  extra=None, labels=None, order=None, starting=()):
+    """Plan with placements chosen elsewhere (Archipelago): gid → item, every shuffled gid.
+
+    Items of other players are given as a stand-in by the caller. Progressive
+    tiers follow ``order`` (gid → sphere of the multiworld playthrough) when
+    given, else the local sweep (every copy of a family is local). Victory is
+    not required here: items may come from other worlds. ``starting``:
+    Archipelago starting items (AP names), collected from the start; progressive
+    copies among them take the lowest tiers.
+    """
+    c = prepare(data, options, groups, enemies, seed_key, open_forest, progress, extra=extra)
+    if set(assigned) != set(c.shuffled):
+        extra_ids = sorted(set(assigned) - set(c.shuffled))[:3]
+        missing = sorted(set(c.shuffled) - set(assigned))[:3]
+        raise FillError('The Archipelago placements do not match this game and options '
+                        f'(unknown: {extra_ids}, missing: {missing}).')
+    for gid, item in assigned.items():
+        if not c.allowed(item, gid):
+            raise FillError(f'{item} cannot be placed at {gid}.')
+    placed = dict(assigned)
+    starting = list(starting)
+    start_actors = starting_actors(starting, c.family_tiers)
+    start_counts = Counter(starting)
+    state, collected, spheres = c.sweep(placed, start_counts)
+    sphere_of = {loc: index for index, sphere in enumerate(spheres) for loc in sphere}
+    tiers = {}
+    for family in PROGRESSIVE:
+        rank = ((lambda g: order.get(g) if order.get(g) is not None else 10 ** 6) if order is not None
+                else (lambda g: sphere_of.get(vname(g), 10 ** 6)))
+        sources = sorted((g for g, item in placed.items() if item == family), key=lambda g: (rank(g), g))
+        if not sources and not start_counts[family]:
+            continue
+        layout = c.family_tiers.get(family)
+        if layout is None or len(layout) != len(sources) + start_counts[family]:
+            raise FillError(f'Unexpected number of {family}: every copy must stay in this world.')
+        tiers.update(zip(sources, layout[start_counts[family]:]))
+    c.report(f'Archipelago placements applied ({len(spheres)} local spheres).')
+    result = _result(data, c.logic, c.options, c.matches, c.shuffled, placed, tiers, sphere_of, spheres, c.souls,
+                     c.unmatched_ap, 0, c.base)
+    for row in result['spoiler']:
+        if labels and row['id'] in labels:
+            row['item'] = labels[row['id']]
+    result['starting'] = [{'item': item, 'actor': actor} for item, actor in zip(starting, start_actors)]
+    return result
 
 
 def _dungeon_name(folder):

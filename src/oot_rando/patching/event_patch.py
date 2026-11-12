@@ -127,6 +127,15 @@ def add_collection_markers(raw, markers):
 POUCH_ACTOR_PARAMS = GAMEDATA_ACTOR_PARAMS
 
 
+def starting_item_events(actors):
+    """Event name of each silently given actor (copies numbered from the second one)."""
+    seen, names = {}, []
+    for item in actors:
+        seen[item] = seen.get(item, 0) + 1
+        names.append('RandoStartItem_' + item + ('' if seen[item] == 1 else f'_{seen[item]}'))
+    return names
+
+
 def add_pouch_items(raw, after, actors):
     """Silently add pouch contents after event ``after`` (native cutscene action).
 
@@ -160,8 +169,7 @@ def add_pouch_items(raw, after, actors):
         actor.actions.append(action)
     previous = anchor
     names = []
-    for item in actors:
-        name = 'RandoStartItem_' + item
+    for item, name in zip(actors, starting_item_events(actors)):
         if name in events:
             raise ValueError('Duplicate starting item: ' + item)
         event = Event()

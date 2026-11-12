@@ -79,12 +79,18 @@ class TrackerSession:
         self._inventory = (Counter(), set())
         self._fingerprint = None
         self._logic, self._logic_error = None, ''
-        self._observed = False
+        self._observed, self._goal = False, False
         self._source_path = ''
         self._good_summary = None
         self._summary = {'status': 'Choose a save to enable automatic tracking.',
                          'updated_at': '', 'automatic': 0, 'available': 0, 'blocked': 0,
                          'unknown': len(self.checks)}
+
+    @property
+    def goal_reached(self):
+        """Archipelago goal flag seen true (save or running game) for this save."""
+        with self._lock:
+            return self._goal
 
     @property
     def completed(self):
@@ -245,6 +251,8 @@ class TrackerSession:
                 return dict(self._summary)
             automatic = {gid for gid, row in self.metadata['checks'].items()
                          if row.get('collection') and self._collected(row['collection'], snapshot, self.metadata) is True}
+            goal_key = self.metadata.get('goal_marker')
+            goal = bool(goal_key) and snapshot['bool'].get(int(goal_key)) is True
             access = self._availability(snapshot, self.metadata)
             inventory = self.observed_inventory(snapshot, self.metadata)
             stamp = datetime.fromtimestamp(snapshot['mtime_ns'] / 1e9).strftime('%H:%M:%S')
@@ -260,6 +268,7 @@ class TrackerSession:
                 status += ' • accessibility not available for this seed'
             with self._lock:
                 self._automatic, self._access = automatic, access
+                self._goal = self._goal or goal
                 self._inventory = inventory
                 self._fingerprint, self._observed, self._source_path = token, True, path
                 self._summary = {'status': status, 'updated_at': stamp, 'automatic': len(automatic),
@@ -296,6 +305,7 @@ class TrackerSession:
             if reset or (self._source_path and str(self.save_path).strip() != self._source_path):
                 self._automatic, self._access = set(), {}
                 self._inventory = (Counter(), set())
+                self._goal = False
                 self._fingerprint, self._observed, self._source_path = None, False, ''
                 self._good_summary = None
                 self._summary.update(updated_at='', automatic=0, available=0, blocked=0, unknown=len(self.checks))

@@ -1,4 +1,4 @@
-"""Read-only, real-time GameData bools from a running Hookshot game (Windows).
+"""Real-time GameData bools from a running game: Hookshot, or a yuzu-family emulator (Windows).
 
 Layout, as Hookshot v2.1.0's own cheat menu reads it (tools/host/hos_main.c, oot_gamedata_set_bool):
 - guest memory is one window at the fixed host address A64_HOST_BASE = 0x100000000000
@@ -9,8 +9,18 @@ Layout, as Hookshot v2.1.0's own cheat menu reads it (tools/host/hos_main.c, oot
   start hash % size, key 0 = empty slot;
 - GameDataMgr+24: Bool entries, 24 bytes each, value byte at +22; their count u32 at +16.
 
+Emulators (Eden, Lichii, yuzu and forks) run the same game code, so the structures are the
+same; only two addresses differ, and change at every boot:
+- guest memory is a window of the emulator process ("fastmem"): host = base + guest;
+- the main module is loaded at a random page near 0x80000000 (Hookshot keeps it at
+  0x80020000); the GameData slot sits at GAMEDATA_SLOT - HOOKSHOT_MAIN from its start.
+``emulator_layout`` finds the modules by their MOD0 header in the process, then tries the
+possible guest addresses of each, keeping the one where the slot leads to a GameData table
+holding a known key.
+
 Only the Bool type is documented there. Bool64bitKey (most chest collection flags) keeps
-coming from progress.sav. Nothing is ever written to the game.
+coming from progress.sav. The only write is ``LiveGameData.set_bool`` (the Archipelago
+client's reception signal, ``patching.ap_mailbox``): one value byte, as the cheat menu does.
 """
 import ctypes
 import hashlib
@@ -23,6 +33,11 @@ GAMEDATA_SLOT = 0x84C9E180
 SEQUENCE_IS_CHILDHOOD = 0xCEA220D3   # murmur3('Sequence_IsChildhood'), always present
 MAX_TABLE, MAX_BOOLS = 1 << 20, 1 << 20
 GAME_EXE = 'hookshot.exe'
+EMULATOR_EXES = {'lichii.exe', 'eden.exe', 'yuzu.exe', 'suyu.exe', 'citron.exe', 'sudachi.exe'}
+HOOKSHOT_MAIN = 0x80020000                 # where Hookshot keeps the main module
+MEM_COMMIT = 0x1000
+MAX_MODULE = 0x10000000                              # MOD0 may sit past the first region (main: +0x3c4705c)
+GUEST_CODE = range(0x80000000, 0x84000000, 0x1000)   # where emulators load the main module
 
 
 class LiveUnavailable(Exception):
@@ -39,8 +54,73 @@ def parse_bools(table, entries, count):
     return result
 
 
+def valid_slot(read, slot):
+    """True when guest ``slot`` leads to a GameData manager whose table knows a vanilla key.
+
+    ``read(guest, size)`` returns bytes or None. Pure: tested without a game.
+    """
+    def pointer(address):
+        raw = read(address, 8)
+        value = struct.unpack('<Q', raw)[0] if raw else 0
+        return value if 0x10000 <= value < 1 << 48 and not value & 7 else 0
+
+    holder = pointer(slot)
+    manager = pointer(holder) if holder else 0
+    header = read(manager, 48) if manager else None
+    if not header:
+        return False
+    count, size = struct.unpack_from('<I', header, 16)[0], struct.unpack_from('<I', header, 44)[0]
+    entries, table = struct.unpack_from('<QQ', header, 24)
+    if not (table and entries and 0 < size <= MAX_TABLE and 0 < count <= MAX_BOOLS):
+        return False
+    raw = read(table, size * 8)
+    index = bool_slot(raw, size, SEQUENCE_IS_CHILDHOOD) if raw else None
+    return index is not None and index < count
+
+
+def module_starts(regions, read):
+    """Host addresses of the loaded NSO modules (committed regions starting with a MOD0 pointer)."""
+    result = []
+    for address, size, state in regions:
+        if state != MEM_COMMIT or size < 0x1000:
+            continue
+        head = read(address, 8)
+        offset = struct.unpack_from('<I', head, 4)[0] if head else 0
+        if 8 <= offset < MAX_MODULE and not offset & 3 and read(address + offset, 4) == b'MOD0':
+            result.append(address)
+    return result
+
+
+def emulator_layout(regions, read):
+    """(host base of guest memory, guest GameData slot) in an emulator process, or None.
+
+    ``regions``: (address, size, state) of the process, in address order; ``read(host, size)``
+    returns bytes or None. Pure: tested without a game.
+    """
+    offset = GAMEDATA_SLOT - HOOKSHOT_MAIN
+    for module in module_starts(regions, read):
+        raw = read(module + offset, 8)
+        if not raw or not struct.unpack('<Q', raw)[0]:
+            continue   # not main, or the game has not loaded its data yet
+        for guest in GUEST_CODE:
+            base = module - guest
+            if valid_slot(lambda address, length: read(base + address, length), guest + offset):
+                return base, guest + offset
+    return None
+
+
+class MemoryRegion(ctypes.Structure):
+    _fields_ = [('BaseAddress', ctypes.c_ulonglong), ('AllocationBase', ctypes.c_ulonglong),
+                ('AllocationProtect', ctypes.c_ulong), ('PartitionId', ctypes.c_ushort),
+                ('RegionSize', ctypes.c_ulonglong), ('State', ctypes.c_ulong),
+                ('Protect', ctypes.c_ulong), ('Type', ctypes.c_ulong)]
+
+
 class ProcessMemory:
-    """ReadProcessMemory on the first hookshot.exe process that maps the guest window."""
+    """ReadProcessMemory on the running game: Hookshot, else an emulator that has the game loaded.
+
+    ``base``: host address of guest address 0; ``slot``: guest address of the GameData slot.
+    """
     def __init__(self):
         from ctypes import wintypes
         self.wt = wintypes
@@ -48,7 +128,11 @@ class ProcessMemory:
         self.k32.OpenProcess.restype = wintypes.HANDLE
         self.k32.ReadProcessMemory.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p,
                                                ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+        self.k32.VirtualQueryEx.argtypes = [wintypes.HANDLE, ctypes.c_ulonglong, ctypes.POINTER(MemoryRegion),
+                                            ctypes.c_size_t]
+        self.k32.VirtualQueryEx.restype = ctypes.c_size_t
         self.handle, self.pid, self.next_scan = None, None, 0.0
+        self.base, self.slot = HOST_BASE, GAMEDATA_SLOT
 
     def _pids(self):
         from ctypes import wintypes
@@ -76,14 +160,36 @@ class ProcessMemory:
             raise LiveUnavailable('game not running')
         self.next_scan = now + 5   # scanning every process each second would be wasteful
         for pid in self._pids():
-            handle = self.k32.OpenProcess(0x0010 | 0x1000, False, pid)   # VM_READ | QUERY_LIMITED_INFORMATION
+            handle = self.k32.OpenProcess(0x0010 | 0x0400, False, pid)   # VM_READ | QUERY_INFORMATION
             if not handle:
                 continue
-            if self._exe(handle) == GAME_EXE and self._probe(handle):
+            name = self._exe(handle)
+            layout = None
+            if name == GAME_EXE and self._probe(handle):
+                layout = HOST_BASE, GAMEDATA_SLOT
+            elif name in EMULATOR_EXES:
+                layout = emulator_layout(self._regions(handle), lambda host, size: self._read(handle, host, size))
+            if layout:
                 self.handle, self.pid = handle, pid
+                self.base, self.slot = layout
                 return
             self.k32.CloseHandle(handle)
         raise LiveUnavailable('game not running')
+
+    def _regions(self, handle):
+        """(address, size, state) of every region of the process, in address order."""
+        result, address, region = [], 0, MemoryRegion()
+        while self.k32.VirtualQueryEx(handle, address, ctypes.byref(region), ctypes.sizeof(region)):
+            result.append((region.BaseAddress, region.RegionSize, region.State))
+            address = region.BaseAddress + region.RegionSize
+        return result
+
+    def _read(self, handle, host, size):
+        buffer, done = ctypes.create_string_buffer(size), ctypes.c_size_t()
+        if not self.k32.ReadProcessMemory(handle, ctypes.c_void_p(host), buffer, size, ctypes.byref(done)) \
+                or done.value != size:
+            return None
+        return buffer.raw
 
     def _probe(self, handle):
         """The launcher is also hookshot.exe: keep the process whose guest window is mapped."""
@@ -92,11 +198,25 @@ class ProcessMemory:
                                                ctypes.byref(done)))
 
     def read(self, guest, size):
-        buffer, done = ctypes.create_string_buffer(size), ctypes.c_size_t()
-        if not self.k32.ReadProcessMemory(self.handle, ctypes.c_void_p(HOST_BASE + guest), buffer, size,
-                                          ctypes.byref(done)) or done.value != size:
+        data = self._read(self.handle, self.base + guest, size)
+        if data is None:
             raise LiveUnavailable(f'cannot read at {guest:#x}')
-        return buffer.raw
+        return data
+
+    def write(self, guest, data):
+        """WriteProcessMemory through a handle opened for this write only."""
+        handle = self.k32.OpenProcess(0x0008 | 0x0020 | 0x0010, False, self.pid)   # VM_OPERATION|VM_WRITE|VM_READ
+        if not handle:
+            raise LiveUnavailable('cannot open the game for writing')
+        try:
+            self.k32.WriteProcessMemory.argtypes = [self.wt.HANDLE, ctypes.c_void_p, ctypes.c_char_p,
+                                                    ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+            done = ctypes.c_size_t()
+            if not self.k32.WriteProcessMemory(handle, ctypes.c_void_p(self.base + guest), data, len(data),
+                                               ctypes.byref(done)) or done.value != len(data):
+                raise LiveUnavailable(f'cannot write at {guest:#x}')
+        finally:
+            self.k32.CloseHandle(handle)
 
     def close(self):
         if self.handle:
@@ -118,14 +238,14 @@ class LiveGameData:
     def snapshot(self):
         try:
             self.memory.attach()
-            holder = self.u64(GAMEDATA_SLOT)
+            holder = self.u64(getattr(self.memory, 'slot', GAMEDATA_SLOT))
             manager = self.u64(holder) if holder else 0
             if not manager:
                 raise LiveUnavailable('game data not loaded yet')
             table, size = self.u64(manager + 32), self.u32(manager + 44)
             entries, count = self.u64(manager + 24), self.u32(manager + 16)
             if not (table and entries and 0 < size <= MAX_TABLE and 0 < count <= MAX_BOOLS):
-                raise LiveUnavailable('unexpected GameData structure (Hookshot version?)')
+                raise LiveUnavailable('unexpected GameData structure (game version?)')
             raw_table = self.memory.read(table, size * 8)
             raw_entries = self.memory.read(entries, count * 24)
         except LiveUnavailable:
@@ -134,11 +254,37 @@ class LiveGameData:
         except OSError as error:
             self.memory.close()
             raise LiveUnavailable(str(error))
+        self._layout = (table, size, entries, count)
         bools = parse_bools(raw_table, raw_entries, count)
         if SEQUENCE_IS_CHILDHOOD not in bools:
             raise LiveUnavailable('GameData table not recognised')
         digest = hashlib.sha256(raw_entries).hexdigest()
         return {'bool': bools, 'sha256': digest}
+
+
+def bool_slot(table, size, key):
+    """Index of Bool ``key`` in the raw (hash, index) table, or None (pure)."""
+    for probe in range(size):
+        slot = (key + probe) % size
+        found, index = struct.unpack_from('<II', table, slot * 8)
+        if not found:
+            return None
+        if found == key:
+            return index
+    return None
+
+
+def set_bool_in(data, key, value):
+    """``data``: a LiveGameData. Writes Bool ``key`` (hash); False when the game does not know it."""
+    data.snapshot()   # attach and check the structure
+    table, size, entries, count = data._layout
+    index = bool_slot(data.memory.read(table, size * 8), size, key)
+    if index is None or index >= count:
+        return False
+    position = entries + index * 24 + 22
+    current = data.memory.read(position, 1)[0]
+    data.memory.write(position, bytes([(current & ~1) | int(bool(value))]))
+    return True
 
 
 # EventMgr, as Hookshot's teleport cheat reads it (hos_main.c, OOT_EVENTMGR_SLOT): a guest
@@ -166,7 +312,7 @@ class LiveEventState:
     def playing(self):
         try:
             self.memory.attach()
-            holder = self.u64(EVENTMGR_SLOT)
+            holder = self.u64(getattr(self.memory, 'slot', GAMEDATA_SLOT) - GAMEDATA_SLOT + EVENTMGR_SLOT)
             manager = self.u64(holder) if holder else 0
             word = self.u64(manager + EVENT_PLAYING_OFFSET) if manager else 0
         except LiveUnavailable:
@@ -183,7 +329,7 @@ def main():
     try:
         data = LiveGameData().snapshot()
     except LiveUnavailable as error:
-        print('Lecture impossible :', error)
+        print('Cannot read the game:', error)
     else:
         print(f"{len(data['bool'])} booleans read; Sequence_IsChildhood = {data['bool'][SEQUENCE_IS_CHILDHOOD]}")
     try:

@@ -15,7 +15,6 @@ AP OoT location(s) it most plausibly corresponds to:
 import re
 from collections import Counter, defaultdict
 
-from oot_rando.formats.inspect_resources import Byml, decompress
 
 # Remake region folder → AP hint areas (first element of LocationList categories).
 FOLDER_AREAS = {
@@ -203,6 +202,9 @@ def actor_item(actor, folder):
 
 def item_actor(item, folder, tier=None):
     """Remake actor for an AP item placed in ``folder`` (dungeon items stay generic)."""
+    from oot_rando.patching.ap_item import ap_actor, is_ap_item
+    if is_ap_item(item):
+        return ap_actor(item)
     if item.startswith('Small Key Ring ('):
         from oot_rando.patching.key_adapter import item_folder, ring_actor
         return ring_actor(item_folder(item))
@@ -270,6 +272,7 @@ def enemy_counter_locks(path, root):
 
 def scan_maps(nup, dictionaries, members, progress=None):
     """Return decoded maps, chest groups and enemy instances (read-only)."""
+    from oot_rando.formats.inspect_resources import Byml, decompress  # zstd: not needed by the logic
     report = progress or (lambda message: None)
     maps, groups, enemies = {}, defaultdict(list), []
     walls = defaultdict(list)  # folder -> (age, position) of destructible walls

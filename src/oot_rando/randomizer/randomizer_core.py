@@ -27,7 +27,7 @@ from oot_rando.patching.qol_patches import (STATIC, STATIC_SOURCE_SHA256, DYNAMI
                          SWORD_CHEST_FLOW, skip_kokiri_sword_cutscene)
 from oot_rando.game.randomizer_categories import CATEGORIES
 from oot_rando.game.world_maps import SAFE_CATEGORIES, build_world, effective_members
-from oot_rando.game.resource_allocations import grow_resources, add_resources
+from oot_rando.game.resource_allocations import allocation, grow_resources, add_resources
 from oot_rando.formats.byml_writer import patch_strings
 from oot_rando.logic import rando_options
 
@@ -35,6 +35,23 @@ GENERATOR_VERSION = '0.7.0'
 ADAPTER_VERSION = 'ap-glitchless-v3'
 ADULT_MAP = MAP.replace('_Child_', '_Adult_')
 STARTING_ITEMS = ('Item_BulletBag_Small', 'Item_Quiver_Small')
+
+
+def ap_records(settings):
+    """Reception records of an Archipelago seed (items of this game found in other worlds)."""
+    if settings.archipelago is None or not settings.archipelago.get('remote'):
+        return []
+    from oot_rando.patching.ap_mailbox import records
+    return records(settings.archipelago['remote'])
+
+
+def starting_pouch_items(full):
+    """Actors given silently at the end of the opening: bag, quiver, Archipelago starting items."""
+    return list(STARTING_ITEMS) + [s['actor'] for s in ((full or {}).get('archipelago') or {}).get('starting', [])]
+# Archipelago goal flag: after Defeat_Ganon's native "Complete" step (Ganon's death),
+# before the transition to Dm_Ending_0000.
+GOAL_FLOW, GOAL_EVENT = 'Event/EventFlow/Defeat_Ganon.bfevfl.zs', 'Event37'
+GOAL_MARKER_PREFIX = 'RandoGoal.'
 CHECKS = [{'id': str(ident), 'region': 'Kokiri Forest',
            'name': f'Four-chest house — slot {i + 1}'}
           for i, ident in enumerate(sorted(CHESTS))]
@@ -63,6 +80,8 @@ class Settings:
     skip_chest_cutscenes: bool = False
     categories: dict[str, bool] = field(default_factory=lambda: dict.fromkeys(CATEGORIES, False))
     full: dict | None = None
+    # Archipelago patch (``.aprmk`` content): the placements come from a multiworld.
+    archipelago: dict | None = None
 
     def validate(self):
         if not isinstance(self.seed, str) or not self.seed.strip() or len(self.seed) > 256:
@@ -90,6 +109,13 @@ class Settings:
             if overlap:
                 raise ValueError('These categories are already shuffled as checks by the full randomizer: '
                                  + ', '.join(overlap) + '. Untick the matching cosmetic category.')
+        if self.archipelago is not None:
+            from oot_rando.archipelago.bridge import check_patch
+            check_patch(self.archipelago)
+            if self.full is None or self.full != rando_options.validate(self.archipelago['options']):
+                raise ValueError('The full randomizer options must be those of the Archipelago patch.')
+            if self.open_forest != self.archipelago['open_forest']:
+                raise ValueError('"Open the way" must match the Archipelago patch.')
         if self.randomize_chests:
             for ident, original in CHESTS.items():
                 if str(ident) not in self.excluded_checks and not [v for v in self.pool if not self.avoid_vanilla or v != original]:
@@ -119,7 +145,7 @@ class Settings:
                         else {name: self.categories.get(name, False) for name in sorted(CATEGORIES)}
                         if f.name == 'categories' else dict(sorted(self.full.items()))
                         if f.name == 'full' else getattr(self, f.name))
-                for f in fields(self) if not (f.name == 'full' and self.full is None)
+                for f in fields(self) if not (f.name in ('full', 'archipelago') and getattr(self, f.name) is None)
                 and not (f.name in OPTIONAL_SKIPS and not getattr(self, f.name))}
 
     @classmethod
@@ -298,18 +324,27 @@ def generate(nup_path, output, settings, progress=None):
         gamedata_source = extra_raw.get(GAMEDATA)
         if gamedata_source is None:
             gamedata_source = decompress(read(GAMEDATA), d)
-        extra_raw[GAMEDATA] = add_saved_flags(gamedata_source, {marker_name: False})
+        goal_name = GOAL_MARKER_PREFIX + settings_identity(settings) if settings.archipelago is not None else None
+        extra_raw[GAMEDATA] = add_saved_flags(gamedata_source, {marker_name: False,
+                                                                **({goal_name: False} if goal_name else {})})
         # Bind a save only when the actual new-game opening completes. A True
         # default would incorrectly bind an old save when its missing flags initialize.
         from oot_rando.patching.event_patch import add_collection_markers
         opening = 'Event/EventFlow/OpeningEvent.bfevfl.zs'
         extra_raw[opening], seed_markers = add_collection_markers(
             decompress(read(opening), d), {'Event3': marker_name})
+        goal_markers = []
+        if goal_name:
+            # Archipelago goal: set once Ganon's defeat completes the native challenge,
+            # just before the ending cutscene (read live by the client: no save follows).
+            extra_raw[GOAL_FLOW], goal_markers = add_collection_markers(
+                extra_raw.get(GOAL_FLOW) or decompress(read(GOAL_FLOW), d), {GOAL_EVENT: goal_name})
         if settings.full is not None:
             # Seed bag and quiver (level 1) from the start: the slingshot and the
             # bow can come from any source (a shop slot never grants the bag).
             from oot_rando.patching.event_patch import add_pouch_items
-            extra_raw[opening] = add_pouch_items(extra_raw[opening], 'RandoCollected_Event3', STARTING_ITEMS)
+            extra_raw[opening] = add_pouch_items(extra_raw[opening], 'RandoCollected_Event3',
+                                                 starting_pouch_items(full))
         skips = {}
         if settings.full is not None:
             skips['ocarina_guide'] = ocarina_guide
@@ -366,6 +401,58 @@ def generate(nup_path, output, settings, progress=None):
             info_source = extra_raw.get(GAME_ANALYZED_EVENT_INFO) or decompress(read(GAME_ANALYZED_EVENT_INFO), d)
             extra_raw[GAME_ANALYZED_EVENT_INFO], skips['child_events'] = add_child_events(
                 info_source, Byml(decompress(read(EVENT_SETTINGS), d)).root, added_events, current_named)
+        if settings.skip_locked_cutscenes or settings.skip_auto_dialogues:
+            # In place on the vanilla table (same size); chest rows are added after.
+            report('Dialogues and area presentations skippable with + …')
+            extra_raw[EVENT_SETTINGS], skips['dialogues'] = patch_dialogues(
+                decompress(read(EVENT_SETTINGS), d), settings.skip_auto_dialogues, settings.skip_locked_cutscenes)
+        plain_raw = {}
+        mailbox_items = ap_records(settings)
+        if mailbox_items:
+            # Items of other worlds: the client sets a Bool in the game's memory, the
+            # global sequence starts an item-get event (patching.ap_mailbox). After the
+            # sub-flow completion above: its own row lists what it calls.
+            report('Archipelago item reception…')
+            from oot_rando.patching import ap_mailbox
+            from oot_rando.patching.event_info import flow_path as mailbox_flow_path
+            current_raw = lambda path: extra_raw[path] if path in extra_raw else decompress(read(path), d)
+            extra_raw[ap_mailbox.FLOW_PATH] = ap_mailbox.add_entries(current_raw(ap_mailbox.FLOW_PATH), mailbox_items)
+            mailbox_flows = lambda name: (extra_raw[ap_mailbox.FLOW_PATH] if name == ap_mailbox.FLOW
+                                          else current_raw(mailbox_flow_path(name))
+                                          if mailbox_flow_path(name) in members else None)
+            extra_raw[EVENT_SETTINGS] = ap_mailbox.add_event_rows(current_raw(EVENT_SETTINGS), mailbox_items)
+            extra_raw[GAME_ANALYZED_EVENT_INFO], mailbox_row = ap_mailbox.add_analyzed_rows(
+                current_raw(GAME_ANALYZED_EVENT_INFO), mailbox_items, mailbox_flows)
+            plain_raw[ap_mailbox.MAIN_UPDATE] = ap_mailbox.patch_main_update(read(ap_mailbox.MAIN_UPDATE),
+                                                                             mailbox_items)
+            extra_raw[GAMEDATA] = add_saved_flags(extra_raw[GAMEDATA], {
+                flag: False for record in mailbox_items for flag in (record['recv'], record['got'])})
+            skips['ap_mailbox'] = {'items': mailbox_items, 'row': mailbox_row}
+        if full is not None:
+            # Chests save no flag of their own: each shuffled chest runs its own copy of
+            # its opening event, which sets a saved Bool first (tracking, Archipelago).
+            # Last of the event patches: the copied rows inherit every completed list.
+            report('Opening flags of the chests…')
+            from oot_rando.patching import chest_flags
+            from oot_rando.formats.byml_writer import patch_strings
+            current_raw = lambda path: extra_raw[path] if path in extra_raw else decompress(read(path), d)
+            map_root = lambda path: Byml(raw_maps[path] if path in raw_maps else decompress(read(path), d)).root
+            settings_raw = current_raw(chest_flags.EVENT_SETTINGS)
+            settings_rows = {row['__RowId']: row for row in Byml(settings_raw).root}
+            records, skipped = chest_flags.plan_records(full['placements'], map_root, settings_identity(settings),
+                                                        settings_rows)
+            for resource, edits in sorted(chest_flags.map_edits(records).items()):
+                raw_maps[resource] = patch_strings(raw_maps[resource] if resource in raw_maps
+                                                   else decompress(read(resource), d), edits)
+            for path, flow_records in sorted(chest_flags.by_flow(records).items()):
+                extra_raw[path] = chest_flags.add_entries(current_raw(path), flow_records)
+            extra_raw[chest_flags.EVENT_SETTINGS] = chest_flags.add_rows(settings_raw, records)
+            extra_raw[chest_flags.ANALYZED], analyzed = chest_flags.add_analyzed_rows(
+                current_raw(chest_flags.ANALYZED), records)
+            extra_raw[GAMEDATA] = add_saved_flags(extra_raw[GAMEDATA], {r['flag']: False for r in records})
+            for record in records:
+                full['matches'][record['id']]['tracking_flag'] = record['flag']
+            skips['chest_flags'] = {'records': records, 'skipped': skipped, 'analyzed_rows': analyzed}
         growths = {}
         for path, raw in sorted(raw_maps.items()):
             source = read(path)
@@ -378,10 +465,16 @@ def generate(nup_path, output, settings, progress=None):
             source = read(path)
             growths[path] = max(len(raw) - len(decompress(source, d)), 0)
             compress(path, raw, source)
+        for path, raw in sorted(plain_raw.items()):
+            # Uncompressed resources (sequence AI): written as they are.
+            growths[path] = max(len(raw) - len(read(path)), 0)
+            files[path] = raw
         new_sizes = {}
+        rest_raw = decompress(read(RESTBL), d) if new_files else None
         for path, (raw, template) in sorted(new_files.items()):
             compress(path, raw, read(template))
-            new_sizes[path] = (len(raw) + 0x1000 + 4095) & ~4095
+            # A copy of a resource (model, texture) needs at least the original's allocation.
+            new_sizes[path] = max((len(raw) + 0x1000 + 4095) & ~4095, allocation(rest_raw, template) or 0)
         if any(growths.values()) or new_sizes:
             rest_source = read(RESTBL)
             rest, allocations = grow_resources(decompress(rest_source, d), growths)
@@ -393,12 +486,6 @@ def generate(nup_path, output, settings, progress=None):
             report('Skippable cutscenes…')
             cutscenes, skips['cutscenes'] = cutscene_files(read)
             files.update(cutscenes)
-        if settings.skip_locked_cutscenes or settings.skip_auto_dialogues:
-            report('Dialogues and area presentations skippable with + …')
-            source = read(EVENT_SETTINGS)
-            raw, skips['dialogues'] = patch_dialogues(decompress(source, d), settings.skip_auto_dialogues,
-                                                      settings.skip_locked_cutscenes)
-            compress(EVENT_SETTINGS, raw, source)
 
         manifest = {'schema_version': 1, 'generator_version': GENERATOR_VERSION,
                     'adapter_version': ADAPTER_VERSION, 'seed_id': settings_identity(settings),
@@ -422,6 +509,9 @@ def generate(nup_path, output, settings, progress=None):
                 'derived_actors': full['derived_actors'],
                 'sources': dict(sorted(__import__('collections').Counter(
                     p['source'] for p in full['placements']).items()))}
+            if full.get('archipelago'):
+                # Read by the Archipelago client: location IDs and items found in other worlds.
+                manifest['archipelago'] = full['archipelago']
         checks = {'schema_version': 1, 'seed_id': manifest['seed_id'],
                   # With the complete randomizer its catalogue lists every check (the
                   # four historical Kokiri chests included): no duplicates.
@@ -445,6 +535,9 @@ def generate(nup_path, output, settings, progress=None):
         tracking = build_tracking(manifest['seed_id'], checks['checks'], full, tracking_read)
         tracking['seed_marker'] = str(murmur3(marker_name))
         tracking['event_markers'][opening] = seed_markers
+        if goal_name:
+            tracking['goal_marker'] = str(murmur3(goal_name))
+            tracking['event_markers'][GOAL_FLOW] = goal_markers
         if full is None:
             from oot_rando.game.remake_world import actor_item
             for c in chests:
@@ -495,9 +588,25 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
     report('Reading the remake logic…')
     data = World()
     maps, groups, enemies, extra = scan_world(nup, dictionaries_, members, report)
-    report('Glitchless placement and independent check…')
-    plan = full_randomizer.plan(data, settings.full, groups, enemies, settings_identity(settings),
-                                settings.open_forest, report, extra=extra)
+    if settings.archipelago is not None:
+        from oot_rando.archipelago import bridge
+        patch = settings.archipelago
+        if patch['game_build'] != BUILD or patch['world'] != data.fingerprint()                 or patch['scan'] != bridge.scan_fingerprint(groups, enemies, extra):
+            raise ValueError('This Archipelago patch was generated with an apworld built from another game '
+                             'or another version of the application: rebuild the apworld and generate again.')
+        report('Applying the Archipelago placements…')
+        plan = full_randomizer.plan_assigned(data, settings.full, groups, enemies, patch['seed_key'],
+                                             bridge.assigned_items(patch), settings.open_forest, report,
+                                             extra=extra, labels=bridge.foreign_labels(patch),
+                                             order=bridge.patch_spheres(patch),
+                                             starting=patch.get('precollected', ()))
+        plan['archipelago'] = {'starting': plan['starting'], 'seed_name': patch.get('seed_name'), 'slot_name': patch.get('slot_name'),
+                               'player': patch.get('player'), 'location_ids': patch.get('location_ids', {}),
+                               'remote': patch['remote'], 'spheres': bridge.patch_spheres(patch)}
+    else:
+        report('Glitchless placement and independent check…')
+        plan = full_randomizer.plan(data, settings.full, groups, enemies, settings_identity(settings),
+                                    settings.open_forest, report, extra=extra)
     from oot_rando.patching.repeatable_adapter import (prepare_repeatables, patch_repeatable_sources,
                                      build_repeatable_packs, register_repeatable_flags)
     repeatables = prepare_repeatables(plan, maps)
@@ -530,7 +639,8 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
     actors = {p['after'] for p in plan['placements']} - {p['before'] for p in plan['placements']}
     from oot_rando.patching.key_adapter import is_key_actor as _is_key_actor
     for actor in sorted(actors):
-        if actor.startswith('Item_Soul_') or is_derived(actor) or actor in repeatable_actors or _is_key_actor(actor):
+        if (actor.startswith(('Item_Soul_', 'Item_AP_')) or is_derived(actor) or actor in repeatable_actors
+                or _is_key_actor(actor)):
             continue
         if 'Pack/Actor/' + actor + '.pack.zs' not in members:
             raise ValueError('Reward actor missing from the game: ' + actor)
@@ -569,6 +679,21 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
         key_modified, key_new = build_key_files(key_read, plan['key_items'], messages)
         modified.update(key_modified)
         new.update(key_new)
+    if settings.archipelago is not None:
+        from oot_rando.archipelago.bridge import foreign_items
+        from oot_rando.patching.ap_item import build_ap_files
+        placed = {p['item'] for p in plan['placements']}
+        ap_items = {item: label for item, label in foreign_items(settings.archipelago).items() if item in placed}
+        if ap_items:
+            report(f'Building {len(ap_items)} Archipelago items (medallion with the logo, names)…')
+            messages = sorted(m for m in members if m.startswith('Mals/') and '.Product.110.' in m)
+
+            def ap_read(path):
+                return modified[path] if path in modified else decompress(read(path), dictionaries_)
+
+            ap_modified, ap_new = build_ap_files(ap_read, ap_items, messages)
+            modified.update(ap_modified)
+            new.update(ap_new)
     for resource, edits in sorted(event_changes.items()):
         report('Event: ' + resource.split('/')[-1])
         modified[resource] = patch_event_params(decompress(read(resource), dictionaries_), edits)

@@ -74,6 +74,23 @@ class AutoTrackerTests(unittest.TestCase):
             with patch('oot_rando.tracker.auto_tracker.load_snapshot', return_value=self.snapshot()):
                 self.assertEqual(session.refresh(), good)
 
+    def test_archipelago_goal_flag(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = self.make_session(Path(directory))
+            session.metadata['goal_marker'] = '200'
+            with patch('oot_rando.tracker.auto_tracker.load_snapshot', return_value=self.snapshot()):
+                session.refresh()
+            self.assertFalse(session.goal_reached)
+            won = self.snapshot(fingerprint='won')
+            won['bool'][200] = True
+            with patch('oot_rando.tracker.auto_tracker.load_snapshot', return_value=won):
+                session.refresh()
+            self.assertTrue(session.goal_reached)
+            # Back at the title (flag unsaved): the goal stays reached for this save.
+            with patch('oot_rando.tracker.auto_tracker.load_snapshot', return_value=self.snapshot(fingerprint='x')):
+                session.refresh()
+            self.assertTrue(session.goal_reached)
+
     def test_unknown_sparse_key_is_not_treated_as_uncollected(self):
         self.assertIsNone(TrackerSession._collected({'type': 'bool64', 'hash': '123'},
                           self.snapshot(), {'known_bool64': ['10']}))

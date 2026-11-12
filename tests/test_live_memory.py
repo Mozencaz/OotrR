@@ -7,10 +7,11 @@ from pathlib import Path
 from oot_rando.tracker.auto_tracker import TrackerSession
 from oot_rando.tracker.game_overlay import ICONS, icon_name, overlay_model
 from oot_rando.tracker import icon_extract
-from oot_rando.tracker.live_memory import LiveGameData, LiveUnavailable, parse_bools, GAMEDATA_SLOT, SEQUENCE_IS_CHILDHOOD
+from oot_rando.tracker.live_memory import (LiveGameData, LiveUnavailable, parse_bools, GAMEDATA_SLOT,
+                                           SEQUENCE_IS_CHILDHOOD, HOOKSHOT_MAIN, MEM_COMMIT, emulator_layout)
 
 
-def gamedata_image(bools, size=16):
+def gamedata_image(bools, size=16, gamedata_slot=GAMEDATA_SLOT, at=0):
     """Guest memory as Hookshot lays out GameDataMgr: {guest address: bytes}."""
     table = bytearray(size * 8)
     entries = bytearray(len(bools) * 24)
@@ -20,13 +21,13 @@ def gamedata_image(bools, size=16):
             slot = (slot + 1) % size
         struct.pack_into('<II', table, slot * 8, key, index)
         entries[index * 24 + 22] = int(value)
-    holder, manager, table_at, entries_at = 0x1000, 0x2000, 0x3000, 0x5000
+    holder, manager, table_at, entries_at = (at + offset for offset in (0x1000, 0x2000, 0x3000, 0x5000))
     header = bytearray(48)
     struct.pack_into('<I', header, 16, len(bools))
     struct.pack_into('<Q', header, 24, entries_at)
     struct.pack_into('<Q', header, 32, table_at)
     struct.pack_into('<I', header, 44, size)
-    return {GAMEDATA_SLOT: struct.pack('<Q', holder), holder: struct.pack('<Q', manager),
+    return {gamedata_slot: struct.pack('<Q', holder), holder: struct.pack('<Q', manager),
             manager: bytes(header), table_at: bytes(table), entries_at: bytes(entries)}
 
 
@@ -66,6 +67,36 @@ class LiveGameDataTests(unittest.TestCase):
     def test_parse_skips_out_of_range_indices(self):
         table = struct.pack('<IIII', 7, 0, 9, 5)
         self.assertEqual(parse_bools(table, bytes(24), 1), {7: False})
+
+
+class EmulatorLayoutTests(unittest.TestCase):
+    """An emulator maps guest memory at a random host base and loads main at a random page."""
+    BASE, MAIN = 0x5A3400000000, 0x80347000
+
+    def host_memory(self, loaded=True):
+        slot = self.MAIN + GAMEDATA_SLOT - HOOKSHOT_MAIN
+        guest = gamedata_image({SEQUENCE_IS_CHILDHOOD: True, 17: False}, gamedata_slot=slot, at=0x90000000)
+        if not loaded:
+            guest[slot] = struct.pack('<Q', 0)
+        regions = {self.BASE + address: data for address, data in guest.items()}
+        regions[self.BASE + self.MAIN] = struct.pack('<II', 1, 0x40) + bytes(56) + b'MOD0'
+        reader = FakeMemory(regions)
+
+        def read(address, size):
+            try:
+                return reader.read(address, size)
+            except LiveUnavailable:
+                return None
+        listing = [(self.BASE + self.MAIN, 0x1000, MEM_COMMIT), (self.BASE + 0x90000000, 0x10000, MEM_COMMIT)]
+        return listing, read, slot
+
+    def test_finds_base_and_slot(self):
+        listing, read, slot = self.host_memory()
+        self.assertEqual(emulator_layout(listing, read), (self.BASE, slot))
+
+    def test_game_data_not_loaded(self):
+        listing, read, _ = self.host_memory(loaded=False)
+        self.assertIsNone(emulator_layout(listing, read))
 
 
 class FakeLive:
