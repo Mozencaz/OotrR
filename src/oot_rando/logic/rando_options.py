@@ -18,14 +18,14 @@ class Option:
     values: tuple            # ((value, label, reason_or_None), …) or None for bool
     default: object
     help: str = ''
-    kind: str = 'choice'     # choice | bool | int | items (AP item name -> count)
+    kind: str = 'choice'     # choice | bool | int | items (AP item name -> count) | list (subset of values)
     minimum: int = 0
     maximum: int = 0
     supported_ints: tuple = ()
     experimental: tuple = ()  # supported values requiring an in-game pilot
 
     def supported(self, value):
-        if self.kind == 'items':
+        if self.kind in ('items', 'list'):
             return True
         if self.kind == 'bool':
             return dict(self.values)[value] is OK
@@ -34,7 +34,7 @@ class Option:
         return any(v == value and reason is OK for v, _, reason in self.values)
 
     def reason(self, value):
-        if self.kind == 'items':
+        if self.kind in ('items', 'list'):
             return None
         if self.kind == 'bool':
             return dict(self.values).get(value)
@@ -48,6 +48,8 @@ class Option:
     def allowed(self):
         if self.kind == 'items':
             return ()
+        if self.kind == 'list':
+            return tuple(v for v, _, _ in self.values)
         if self.kind == 'bool':
             return (False, True)
         if self.kind == 'int':
@@ -73,6 +75,8 @@ STARTABLE_ITEMS = (
     'Fire Medallion', 'Water Medallion', 'Spirit Medallion', 'Shadow Medallion', 'Light Medallion',
 )
 MAX_START_COUNT = 100
+KEY_RING_DUNGEONS = ('Forest Temple', 'Fire Temple', 'Water Temple', 'Shadow Temple', 'Spirit Temple',
+                     'Bottom of the Well', 'Gerudo Training Ground', 'Ganons Castle')
 
 OPTIONS = [
     # ------------------------------------------------------------------ Logic
@@ -209,10 +213,11 @@ OPTIONS = [
     # --------------------------------------------------------------- Dungeons
     Option('shuffle_mapcompass', 'Dungeons', 'Maps and compasses',
            (('vanilla', 'Vanilla', OK), ('dungeon', 'In their dungeon', OK), ('remove', 'Removed', OK),
-            ('startwith', 'Start with', OK), ('any_dungeon', 'Any dungeon', GENERIC_KEYS),
-            ('overworld', 'Overworld', GENERIC_KEYS), ('keysanity', 'Anywhere', GENERIC_KEYS)), 'dungeon',
-           '"Start with": every map and compass is held from the start; their chests hold other items.',
-           experimental=('startwith',)),
+            ('startwith', 'Start with', OK), ('any_dungeon', 'Any dungeon', OK),
+            ('overworld', 'Overworld', OK), ('keysanity', 'Anywhere', OK)), 'dungeon',
+           '"Start with": every map and compass is held from the start; their chests hold other items. '
+           'Outside their dungeon, each map and compass becomes a dungeon-specific item ("Map: …").',
+           experimental=('startwith', 'any_dungeon', 'overworld', 'keysanity')),
     Option('shuffle_smallkeys', 'Dungeons', 'Small keys',
            (('vanilla', 'Vanilla', OK),
             ('dungeon', 'In their dungeon (key rings)', OK),
@@ -233,11 +238,15 @@ OPTIONS = [
            'that opens the boss door of that dungeon wherever it is found. Ganon\'s key: option of the Goal tab.',
            experimental=('dungeon', 'remove', 'any_dungeon', 'keysanity')),
     Option('key_rings', 'Dungeons', 'Key rings',
-           (('off', 'None', OK), ('all', 'All dungeons', OK), ('choose', 'Chosen', NO_ADAPTER),
-            ('random', 'Random', NO_ADAPTER)), 'off',
+           (('off', 'None', OK), ('all', 'All dungeons', OK), ('choose', 'Chosen dungeons', OK),
+            ('random', 'Random dungeons', OK)), 'off',
            'One key ring per dungeon (Forest, Fire, Water, Shadow, Spirit, Well, Gerudo Training Ground, Ganon\'s Castle): '
            'all its small keys at once, wherever it is found. Required as soon as small '
-           'keys leave their place.', experimental=('all',)),
+           'keys leave their place. With chosen or random dungeons, the other dungeons keep their '
+           'small keys in place (remake keys are generic).', experimental=('all', 'choose', 'random')),
+    Option('key_rings_list', 'Dungeons', 'Key ring dungeons',
+           tuple((d, d, OK) for d in KEY_RING_DUNGEONS), (),
+           'Dungeons with a key ring when "Key rings" is "Chosen dungeons".', kind='list'),
     Option('dungeon_shortcuts', 'Dungeons', 'Dungeon shortcuts', (('off', 'None', OK), ('all', 'All', NO_ADAPTER)), 'off'),
     # ------------------------------------------------------------------ Souls
     Option('shuffle_enemy_spawns', 'Souls', 'Enemy souls',
@@ -301,7 +310,12 @@ def validate(values, supported_only=False):
     result.update(values)
     for name, value in result.items():
         option = BY_NAME[name]
-        if option.kind == 'items':
+        if option.kind == 'list':
+            if (not isinstance(value, (list, tuple)) or len(set(value)) != len(value)
+                    or not set(value) <= set(option.allowed())):
+                raise ValueError(f'{name}: unknown or duplicate value.')
+            result[name] = tuple(v for v in option.allowed() if v in value)
+        elif option.kind == 'items':
             if (not isinstance(value, dict) or any(item not in STARTABLE_ITEMS for item in value)
                     or any(type(n) is not int or not 1 <= n <= MAX_START_COUNT for n in value.values())):
                 raise ValueError(f'{name}: unknown item or invalid count.')
@@ -318,11 +332,12 @@ def validate(values, supported_only=False):
             raise ValueError(f'{option.label} = {value!r}: {option.reason(value)}')
     if supported_only:
         moved = result['shuffle_smallkeys'] not in ('vanilla', 'remove')
-        if moved and result['key_rings'] != 'all':
-            raise ValueError('Small keys out of their place: set "Key rings" to "All '
-                             'dungeons" (remake keys are generic).')
-        if result['key_rings'] == 'all' and not moved:
+        if moved and result['key_rings'] == 'off':
+            raise ValueError('Small keys out of their place: set "Key rings" (remake keys are generic).')
+        if result['key_rings'] != 'off' and not moved:
             raise ValueError('Key rings: choose where the small keys go (not "Vanilla").')
+        if result['key_rings'] == 'choose' and not result['key_rings_list']:
+            raise ValueError('Key rings: choose at least one dungeon.')
     return result
 
 
@@ -375,6 +390,12 @@ def from_ap_yaml(text):
             key = 'start_inventory_from_pool'
         if key not in BY_NAME:
             ignored.append(f'{key}: option not carried over in this version')
+            continue
+        if BY_NAME[key].kind == 'list':
+            raw = list(raw) if isinstance(raw, (list, tuple, set, dict)) else []
+            kept = [v for v in raw if v in BY_NAME[key].allowed()]
+            ignored.extend(f'{key}: unknown dungeon {v!r}' for v in raw if v not in kept)
+            values[key] = tuple(v for v in BY_NAME[key].allowed() if v in kept)
             continue
         if BY_NAME[key].kind == 'items':
             kept = {}
@@ -432,6 +453,9 @@ def to_ap_yaml(values, name='Player'):
         elif option.kind == 'items':
             import json
             value = json.dumps(value, ensure_ascii=False)
+        elif option.kind == 'list':
+            import json
+            value = json.dumps(list(value), ensure_ascii=False)
         elif isinstance(value, bool):
             value = 'true' if value else 'false'
         lines.append(f'  {option.name}: {value}')

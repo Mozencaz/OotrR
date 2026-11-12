@@ -184,14 +184,14 @@ def verify(nup_path, seed_dir):
             if path == ACTION_GUIDE_FLOW and skips.get('key_items'):
                 # Key rings / dungeon boss keys, rebuilt from the spoiler alone.
                 from oot_rando.patching.key_adapter import add_key_hook, key_records
+                from oot_rando.patching.key_adapter import is_key_actor
                 from oot_rando.patching.ap_mailbox import key_items as mailbox_key_items
                 # Plus the keys received from other worlds (same actors, same hook).
                 received = set(mailbox_key_items((skips.get('ap_mailbox') or {}).get('items', [])))
                 placed = {p['ap_item'] for p in full
                           if p['ap_item'].startswith('Small Key Ring (')
-                          or (p['ap_item'].startswith('Boss Key (')
-                              and p.get('reward_actor', p['actor']).removeprefix('Obj_Rando_')
-                              .removeprefix('Shop_Rando_').startswith('Item_BossKey_'))}
+                          or is_key_actor(p.get('reward_actor', p['actor']).removeprefix('Obj_Rando_')
+                                          .removeprefix('Shop_Rando_'))}
                 records = key_records(received | placed)
                 if records != skips['key_items']['records']:
                     raise ValueError('Dungeon keys differ from the spoiler.')
@@ -376,9 +376,11 @@ def verify(nup_path, seed_dir):
     from oot_rando.logic.world import World
     from oot_rando.randomizer import full_randomizer
     data = World()
+    # Seed key of the generation: options drawn from it (random key rings) must match.
+    seed_key = (manifest['settings'].get('archipelago') or {}).get('seed_key') or manifest['seed_id']
     plan = full_randomizer.replay(data, manifest['settings']['full'], groups, enemies,
                                   {p['id']: p['ap_item'] for p in full}, manifest['settings']['open_forest'],
-                                  extra=extra)
+                                  extra=extra, seed_key=seed_key)
     multiworld = manifest.get('archipelago')
     warnings = []
     if multiworld is not None:

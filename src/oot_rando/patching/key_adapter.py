@@ -28,6 +28,13 @@ from oot_rando.game.remake_world import FOLDER_DUNGEON
 
 RING_PREFIX = 'Item_KeyRing_'
 BOSS_PREFIX = 'Item_BossKey_'
+MAP_PREFIX = 'Item_Map_'
+COMPASS_PREFIX = 'Item_Compass_'
+# Dungeon-specific items of this module: actor prefix -> (AP item kind, model, GameData field).
+SPECIFIC = {RING_PREFIX: ('Small Key Ring', 'Item_Dungeon_SmallKey', 'SmallKeyNum'),
+            BOSS_PREFIX: ('Boss Key', 'Item_Dungeon_BossKey', 'IsGetBossKey'),
+            MAP_PREFIX: ('Map', 'Item_Dungeon_Map', 'IsGetMap'),
+            COMPASS_PREFIX: ('Compass', 'Item_Dungeon_Compass', 'IsGetCompass')}
 APPLIED_PREFIX = 'RandoKeyRing.'
 SMALL_KEY_MODEL = 'Item_Dungeon_SmallKey'
 BOSS_KEY_MODEL = 'Item_Dungeon_BossKey'
@@ -79,7 +86,9 @@ def item_folder(item):
 # Item_KeyRing_InsideGanonCastle (30) crashes the game (null read, Link holding
 # nothing), while every generated actor of 25 characters or fewer is handed over
 # (see soul_adapter.MAX_ACTOR_NAME).
-SHORT_FOLDER = {'BottomOfTheWell': 'Well', 'GerudoTrainingGround': 'GTG', 'InsideGanonCastle': 'Ganon'}
+SHORT_FOLDER = {'BottomOfTheWell': 'Well', 'GerudoTrainingGround': 'GTG', 'InsideGanonCastle': 'Ganon',
+                # Maps / compasses only (no ring or boss key in these dungeons).
+                'InsideTheDekuTree': 'DekuTree', 'DodongoCavern': 'Dodongo', 'InsideJabuJabuBelly': 'Jabu'}
 FOLDER_OF_SHORT = {short: folder for folder, short in SHORT_FOLDER.items()}
 
 
@@ -93,21 +102,40 @@ def boss_actor(folder):
 
 def actor_folder(actor):
     """Dungeon folder of a key actor (``Item_KeyRing_GTG`` → ``GerudoTrainingGround``), or None."""
-    for prefix in (RING_PREFIX, BOSS_PREFIX):
+    return _split(actor)[1]
+
+
+def map_actor(folder):
+    return MAP_PREFIX + SHORT_FOLDER.get(folder, folder)
+
+
+def compass_actor(folder):
+    return COMPASS_PREFIX + SHORT_FOLDER.get(folder, folder)
+
+
+def specific_actor(item):
+    """Dungeon-specific actor of a ring, boss key, map or compass AP item."""
+    for prefix, (kind, _, _) in SPECIFIC.items():
+        if item.startswith(kind + ' ('):
+            folder = item_folder(item)
+            return prefix + SHORT_FOLDER.get(folder, folder)
+    raise ValueError('Not a dungeon item: ' + item)
+
+
+def _split(actor):
+    for prefix in SPECIFIC:
         if actor.startswith(prefix):
             name = actor[len(prefix):]
             folder = FOLDER_OF_SHORT.get(name, name)
-            return folder if folder in FOLDER_DUNGEON else None
-    return None
+            if folder in FOLDER_DUNGEON:
+                return prefix, folder
+    return None, None
 
 
 def key_actor_item(actor):
     """AP item of a dungeon-specific key actor, or None."""
-    folder = actor_folder(actor)
-    if folder is None:
-        return None
-    kind = 'Small Key Ring' if actor.startswith(RING_PREFIX) else 'Boss Key'
-    return f'{kind} ({FOLDER_DUNGEON[folder]})'
+    prefix, folder = _split(actor)
+    return f'{SPECIFIC[prefix][0]} ({FOLDER_DUNGEON[folder]})' if prefix else None
 
 
 def is_key_actor(actor):
@@ -115,8 +143,10 @@ def is_key_actor(actor):
 
 
 def key_texts(actor, language):
-    folder = actor_folder(actor)
-    ring = actor.startswith(RING_PREFIX)
+    prefix, folder = _split(actor)
+    ring = prefix == RING_PREFIX
+    if prefix in (MAP_PREFIX, COMPASS_PREFIX):
+        return dungeon_item_texts(prefix == MAP_PREFIX, folder, language)
     if language.endswith('fr'):
         name = FRENCH_DUNGEONS[folder]
         if ring:
@@ -134,6 +164,24 @@ def key_texts(actor, language):
                 'GetMessage': f'You got the {name} key ring!', 'GetCaption': 'Its locked doors can now open.'}
     return {'Name': f'Boss Key: {name}', 'Caption': f'The boss key of the {name}.',
             'GetMessage': f'You got the {name} boss key!', 'GetCaption': 'It opens the boss door of this dungeon.'}
+
+
+def dungeon_item_texts(is_map, folder, language):
+    if language.endswith('fr'):
+        name = FRENCH_DUNGEON_NAMES[folder]
+        if is_map:
+            return {'Name': f'Carte : {name}', 'Caption': f'La carte du donjon « {name} ».',
+                    'GetMessage': f'Vous avez obtenu la carte du donjon : {name} !',
+                    'GetCaption': 'Le plan du donjon apparaît dans le menu.'}
+        return {'Name': f'Boussole : {name}', 'Caption': f'La boussole du donjon « {name} ».',
+                'GetMessage': f'Vous avez obtenu la boussole du donjon : {name} !',
+                'GetCaption': 'Les coffres du donjon apparaissent sur la carte.'}
+    name = ENGLISH_DUNGEON_NAMES[folder]
+    if is_map:
+        return {'Name': f'Map: {name}', 'Caption': f'The dungeon map of the {name}.',
+                'GetMessage': f'You got the {name} map!', 'GetCaption': 'The dungeon layout is now shown in the menu.'}
+    return {'Name': f'Compass: {name}', 'Caption': f'The compass of the {name}.',
+            'GetMessage': f'You got the {name} compass!', 'GetCaption': 'The dungeon chests now show on the map.'}
 
 
 def start_dungeon_values(options):
@@ -180,11 +228,17 @@ def check_start_values(gamedata_raw, values):
             raise ValueError('Start value not found in the saved game data: ' + name)
 
 
+FRENCH_DUNGEON_NAMES = dict(FRENCH_DUNGEONS, InsideTheDekuTree='Arbre Mojo', DodongoCavern='Caverne Dodongo',
+                            InsideJabuJabuBelly='Ventre de Jabu-Jabu', IceCavern='Caverne Polaire')
+ENGLISH_DUNGEON_NAMES = dict(ENGLISH_DUNGEONS, InsideTheDekuTree='Deku Tree', DodongoCavern="Dodongo's Cavern",
+                             InsideJabuJabuBelly="Jabu-Jabu's Belly", IceCavern='Ice Cavern')
+
+
 def key_specs(actors):
     specs = []
     for actor in sorted(actors):
         name = 'RandoKey_' + actor[len('Item_'):] + '.event.root'
-        specs.append({'actor': actor, 'model': SMALL_KEY_MODEL if actor.startswith(RING_PREFIX) else BOSS_KEY_MODEL,
+        specs.append({'actor': actor, 'model': SPECIFIC[_split(actor)[0]][1],
                       'event_name': name, 'event_member': 'AI/' + name + '.ainb',
                       'event_ain': 'Work/AI/Root/Event/' + name + '.ain',
                       'texts': (lambda language, actor=actor: key_texts(actor, language))})
@@ -201,8 +255,10 @@ def key_records(items):
                             'count': RING_DUNGEONS[folder], 'applied': APPLIED_PREFIX + folder,
                             'gamedata': f'DungeonInfo.{folder}.SmallKeyNum'})
         else:
-            records.append({'kind': 'boss', 'actor': boss_actor(folder), 'folder': folder,
-                            'gamedata': f'DungeonInfo.{folder}.IsGetBossKey'})
+            actor = specific_actor(item)
+            kind = {BOSS_PREFIX: 'boss', MAP_PREFIX: 'map', COMPASS_PREFIX: 'compass'}[_split(actor)[0]]
+            records.append({'kind': kind, 'actor': actor, 'folder': folder,
+                            'gamedata': f'DungeonInfo.{folder}.{SPECIFIC[_split(actor)[0]][2]}'})
     return records
 
 
@@ -225,7 +281,7 @@ def check_dungeon_data(gamedata_raw, records):
     from oot_rando.formats.inspect_resources import Byml
     from oot_rando.patching.soul_adapter import murmur3
     data = Byml(gamedata_raw).root['Data']
-    types = {'ring': 'Int', 'boss': 'Bool'}
+    types = {'ring': 'Int', 'boss': 'Bool', 'map': 'Bool', 'compass': 'Bool'}
     for record in records:
         entries = {e['Hash']: e for e in data[types[record['kind']]]}
         entry = entries.get(murmur3(record['gamedata']))

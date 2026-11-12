@@ -82,6 +82,29 @@ OPTION_COPY = {
 }
 
 
+class ListVar:
+    """Text field holding a subset of an option's values (``"Forest Temple, Fire Temple"``)."""
+
+    def __init__(self, option):
+        self.option = option
+        self.text = tk.StringVar(value='')
+
+    def get(self):
+        chosen = []
+        for part in (p.strip() for p in self.text.get().split(',')):
+            if not part:
+                continue
+            match = next((v for v in self.option.allowed() if v.casefold() == part.casefold()), None)
+            if match is None:
+                raise ValueError(f'{self.option.label}: unknown value {part!r} '
+                                 f'(choose among {", ".join(self.option.allowed())}).')
+            chosen.append(match)
+        return tuple(v for v in self.option.allowed() if v in chosen)
+
+    def set(self, value):
+        self.text.set(', '.join(value or ()))
+
+
 class ItemsVar:
     """Text field holding a starting inventory (``"Hover Boots, Bow x2"``) as a dict."""
 
@@ -513,7 +536,7 @@ class Application:
         ttk.Label(details, textvariable=self.full_reason, style='Page.TLabel', wraplength=780, justify='left').pack(anchor='w', padx=4, pady=(0, 10))
         grouped = {}
         for option in rando_options.OPTIONS:
-            if option.kind == 'items':
+            if option.kind in ('items', 'list'):
                 supported = [None, None]  # free text: always shown
             elif option.kind == 'bool':
                 supported = [v for v in (False, True) if option.supported(v)]
@@ -925,8 +948,8 @@ class Application:
         def describe():
             self.full_reason.set(label + ' — ' + (help_text or 'Choose the value that suits your game.'))
             self.update_presets()
-        if option.kind == 'items':
-            variable = ItemsVar()
+        if option.kind in ('items', 'list'):
+            variable = ItemsVar() if option.kind == 'items' else ListVar(option)
             widget = ttk.Entry(parent, textvariable=variable.text, width=40) if parent else None
             if widget:
                 widget.bind('<FocusOut>', lambda event: describe(), add='+')
