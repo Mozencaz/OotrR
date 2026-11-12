@@ -21,7 +21,8 @@ if _VENDOR not in sys.path:
     sys.path.insert(0, _VENDOR)
 
 from BaseClasses import Item, ItemClassification, Location, LocationProgressType, Region  # noqa: E402
-from Options import Choice, DefaultOnToggle, OptionError, PerGameCommonOptions, Toggle  # noqa: E402
+from Options import (Choice, DefaultOnToggle, OptionError, PerGameCommonOptions, StartInventoryPool,  # noqa: E402
+                     Toggle)
 from worlds.AutoWorld import World  # noqa: E402
 
 from oot_rando.archipelago import bridge  # noqa: E402
@@ -45,7 +46,8 @@ def _option_class(spec):
 OPTION_CLASSES = {spec['name']: _option_class(spec) for spec in SPECS}
 for _cls in OPTION_CLASSES.values():
     globals()[_cls.__name__] = _cls
-RemakeOptions = make_dataclass('RemakeOptions', [(name, cls) for name, cls in OPTION_CLASSES.items()],
+RemakeOptions = make_dataclass('RemakeOptions', [(name, cls) for name, cls in OPTION_CLASSES.items()]
+                               + [('start_inventory_from_pool', StartInventoryPool)],
                                bases=(PerGameCommonOptions,))
 RemakeOptions.__module__ = __name__
 
@@ -81,6 +83,10 @@ class OoTRemakeWorld(World):
             self.remake = bridge.PlayerWorld(CATALOG, values, seed_key)
         except ValueError as error:
             raise OptionError(f'{GAME} ({self.player_name}): {error}') from error
+        error = self.remake.starting_error(dict(self.options.start_inventory.value),
+                                           dict(self.options.start_inventory_from_pool.value))
+        if error:
+            raise OptionError(f'{GAME} ({self.player_name}): {error}')
         # Dungeon-bound keys and progressive tiers are actors of this game: they stay here.
         self.options.local_items.value |= self.remake.local_only
 

@@ -7,7 +7,13 @@ Without a command, the graphical application starts. Commands:
 * ``memory``  — read-only diagnostic of the running game memory;
 * ``apworld GAME.nup [OUT.apworld]`` — build the Archipelago world from the game;
 * ``ap-install PATCH.aprmk GAME.nup MODS_FOLDER`` — build and install the mod of an
-  Archipelago patch.
+  Archipelago patch;
+* ``ap-client MOD_FOLDER SERVER [--password P] [--slot NAME]`` — Archipelago client without
+  the window: sends the checks and the goal of the running game;
+* ``ap-give SEED_FOLDER [N]`` — test of the Archipelago reception: lists the items other
+  worlds can send, or signals item N to the running game (Hookshot);
+* ``reload-test GAME.nup SEED_FOLDER a|b|off`` — in-game test: is a mod file rewritten
+  while the game runs read again (Kokiri Forest message board)?
 """
 import sys
 
@@ -50,8 +56,45 @@ def _run(argv=None):
         return apworld(argv)
     if command == 'ap-install':
         return ap_install(argv)
+    if command == 'ap-client':
+        from oot_rando.archipelago.client import main as client
+        return client(argv)
+    if command == 'ap-give':
+        return ap_give(argv)
+    if command == 'reload-test':
+        from oot_rando.archipelago.reload_test import main as reload_test
+        return reload_test(argv)
     print(__doc__)
     return 2
+
+
+def ap_give(argv):
+    """``ap-give SEED_FOLDER [N]``: test of the Archipelago reception (Hookshot, game running).
+
+    Without N, lists the items other worlds can send; with N, signals item N to the game.
+    """
+    import json
+    from pathlib import Path
+    from oot_rando.patching.soul_adapter import murmur3
+    from oot_rando.tracker.live_memory import LiveGameData, LiveUnavailable, set_bool_in
+    if not argv:
+        print('Usage: ap-give SEED_FOLDER [N]')
+        return 2
+    manifest = json.loads((Path(argv[0]) / 'manifest.json').read_text(encoding='utf-8'))
+    items = (manifest.get('skips') or {}).get('ap_mailbox', {}).get('items', [])
+    if len(argv) == 1:
+        for index, record in enumerate(items):
+            print(f'{index}: {record["item"]} (from {record["player"]}, {record["location"]})')
+        return 0
+    record = items[int(argv[1])]
+    try:
+        done = set_bool_in(LiveGameData(), murmur3(record['recv']), True)
+    except LiveUnavailable as error:
+        print('Game unreachable:', error)
+        return 1
+    print(f'{record["item"]} signalled: its item get should start.' if done
+          else 'Flag unknown to the running game: is this seed the one installed?')
+    return 0 if done else 1
 
 
 def apworld(argv):

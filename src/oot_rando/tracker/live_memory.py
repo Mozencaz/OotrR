@@ -10,7 +10,8 @@ Layout, as Hookshot v2.1.0's own cheat menu reads it (tools/host/hos_main.c, oot
 - GameDataMgr+24: Bool entries, 24 bytes each, value byte at +22; their count u32 at +16.
 
 Only the Bool type is documented there. Bool64bitKey (most chest collection flags) keeps
-coming from progress.sav. Nothing is ever written to the game.
+coming from progress.sav. The only write is ``LiveGameData.set_bool`` (the Archipelago
+client's reception signal, ``patching.ap_mailbox``): one value byte, as the cheat menu does.
 """
 import ctypes
 import hashlib
@@ -98,6 +99,21 @@ class ProcessMemory:
             raise LiveUnavailable(f'cannot read at {guest:#x}')
         return buffer.raw
 
+    def write(self, guest, data):
+        """WriteProcessMemory through a handle opened for this write only."""
+        handle = self.k32.OpenProcess(0x0008 | 0x0020 | 0x0010, False, self.pid)   # VM_OPERATION|VM_WRITE|VM_READ
+        if not handle:
+            raise LiveUnavailable('cannot open the game for writing')
+        try:
+            self.k32.WriteProcessMemory.argtypes = [self.wt.HANDLE, ctypes.c_void_p, ctypes.c_char_p,
+                                                    ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+            done = ctypes.c_size_t()
+            if not self.k32.WriteProcessMemory(handle, ctypes.c_void_p(HOST_BASE + guest), data, len(data),
+                                               ctypes.byref(done)) or done.value != len(data):
+                raise LiveUnavailable(f'cannot write at {guest:#x}')
+        finally:
+            self.k32.CloseHandle(handle)
+
     def close(self):
         if self.handle:
             self.k32.CloseHandle(self.handle)
@@ -134,11 +150,37 @@ class LiveGameData:
         except OSError as error:
             self.memory.close()
             raise LiveUnavailable(str(error))
+        self._layout = (table, size, entries, count)
         bools = parse_bools(raw_table, raw_entries, count)
         if SEQUENCE_IS_CHILDHOOD not in bools:
             raise LiveUnavailable('GameData table not recognised')
         digest = hashlib.sha256(raw_entries).hexdigest()
         return {'bool': bools, 'sha256': digest}
+
+
+def bool_slot(table, size, key):
+    """Index of Bool ``key`` in the raw (hash, index) table, or None (pure)."""
+    for probe in range(size):
+        slot = (key + probe) % size
+        found, index = struct.unpack_from('<II', table, slot * 8)
+        if not found:
+            return None
+        if found == key:
+            return index
+    return None
+
+
+def set_bool_in(data, key, value):
+    """``data``: a LiveGameData. Writes Bool ``key`` (hash); False when the game does not know it."""
+    data.snapshot()   # attach and check the structure
+    table, size, entries, count = data._layout
+    index = bool_slot(data.memory.read(table, size * 8), size, key)
+    if index is None or index >= count:
+        return False
+    position = entries + index * 24 + 22
+    current = data.memory.read(position, 1)[0]
+    data.memory.write(position, bytes([(current & ~1) | int(bool(value))]))
+    return True
 
 
 # EventMgr, as Hookshot's teleport cheat reads it (hos_main.c, OOT_EVENTMGR_SLOT): a guest

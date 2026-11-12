@@ -22,7 +22,8 @@ for _name in VENDORED + (TEMPLATE,):
     _parent = Path(_name).parent.as_posix()
     datas.append((str(PKG / _name), 'oot_rando' + ('' if _parent == '.' else '/' + _parent)))
 datas += collect_data_files('ainb')
-hiddenimports = collect_submodules('oot_rando') + collect_submodules('ainb') + collect_submodules('evfl')
+hiddenimports = (collect_submodules('oot_rando') + collect_submodules('ainb') + collect_submodules('evfl')
+                 + collect_submodules('websockets'))
 
 a = Analysis(
     [str(ROOT / 'packaging' / 'launcher.py')],

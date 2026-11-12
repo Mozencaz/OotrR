@@ -97,6 +97,26 @@ class Units(unittest.TestCase):
         with self.assertRaises(ValueError):
             Settings.from_dict(dict(settings.to_dict(), full=dict(settings.full, tokensanity='all')))
 
+    def test_starting_actors(self):
+        from oot_rando.randomizer.full_randomizer import FillError, starting_actors
+        from oot_rando.patching.event_patch import starting_item_events
+        tiers = {'Progressive Hookshot': [0, 1]}
+        self.assertEqual(starting_actors(['Progressive Hookshot', 'Hover Boots'], tiers),
+                         ['Item_Hookshot', 'Item_HoverBoot'])
+        self.assertEqual(starting_actors(['Progressive Hookshot'] * 2, tiers), ['Item_Hookshot', 'Item_Longshot'])
+        with self.assertRaises(FillError):
+            starting_actors(['Progressive Hookshot'] * 3, tiers)
+        with self.assertRaises(FillError):
+            starting_actors(['Small Key (Forest Temple)'], tiers)
+        self.assertEqual(starting_item_events(['Item_Bottle', 'Obj_Heart_Piece', 'Item_Bottle']),
+                         ['RandoStartItem_Item_Bottle', 'RandoStartItem_Obj_Heart_Piece', 'RandoStartItem_Item_Bottle_2'])
+
+    def test_starting_pouch_items(self):
+        from oot_rando.randomizer.randomizer_core import STARTING_ITEMS, starting_pouch_items
+        self.assertEqual(starting_pouch_items(None), list(STARTING_ITEMS))
+        full = {'archipelago': {'starting': [{'item': 'Hover Boots', 'actor': 'Item_HoverBoot'}]}}
+        self.assertEqual(starting_pouch_items(full), list(STARTING_ITEMS) + ['Item_HoverBoot'])
+
     def test_template_is_not_a_module(self):
         from oot_rando.archipelago import apworld_build
         from oot_rando.paths import resource
@@ -185,6 +205,56 @@ class WithGame(unittest.TestCase):
             full_randomizer.plan_assigned(World(), world.options, copy.deepcopy(self.groups),
                                           copy.deepcopy(self.enemies), key, dict(list(placed.items())[1:]),
                                           True, extra=copy.deepcopy(self.extra))
+
+    def test_starting_error(self):
+        world = self.player()
+        self.assertIsNone(world.starting_error({'Hover Boots': 1}, {'Progressive Hookshot': 1}))
+        self.assertIn('start_inventory_from_pool', world.starting_error({'Progressive Hookshot': 1}, {}))
+        self.assertIn('dungeon', world.starting_error({}, {'Boss Key (Forest Temple)': 1}))
+        self.assertIn('more starting copies', world.starting_error({}, {'Progressive Hookshot': 9}))
+
+    def test_assigned_plan_with_starting_items(self):
+        """A progressive copy moved to the starting items takes the lowest level."""
+        from oot_rando.logic.world import World
+        from oot_rando.randomizer import full_randomizer
+        key = 'archipelago|test|3'
+        world = bridge.PlayerWorld(self.catalog, {'open_forest': True}, key)
+        reference = full_randomizer.plan(World(), world.options, copy.deepcopy(self.groups),
+                                         copy.deepcopy(self.enemies), key, True, extra=copy.deepcopy(self.extra))
+        placed = {p['id']: p['item'] for p in reference['placements']}
+        hookshots = sorted(g for g, item in placed.items() if item == 'Progressive Hookshot')
+        self.assertEqual(len(hookshots), 2)
+        placed[hookshots[0]] = 'Rupees (5)'
+        result = full_randomizer.plan_assigned(World(), world.options, copy.deepcopy(self.groups),
+                                               copy.deepcopy(self.enemies), key, placed, True,
+                                               extra=copy.deepcopy(self.extra),
+                                               starting=['Progressive Hookshot', 'Hover Boots'])
+        self.assertEqual(result['starting'], [{'item': 'Progressive Hookshot', 'actor': 'Item_Hookshot'},
+                                              {'item': 'Hover Boots', 'actor': 'Item_HoverBoot'}])
+        after = {p['id']: p['after'] for p in result['placements']}
+        self.assertIn('Longshot', after[hookshots[1]])
+        with self.assertRaises(full_randomizer.FillError):   # one copy too many
+            full_randomizer.plan_assigned(World(), world.options, copy.deepcopy(self.groups),
+                                          copy.deepcopy(self.enemies), key, placed, True,
+                                          extra=copy.deepcopy(self.extra),
+                                          starting=['Progressive Hookshot'] * 2)
+
+    def test_reload_test_variants(self):
+        """Both board variants: one more event, same size once compressed."""
+        from oot_rando.archipelago import reload_test
+        from oot_rando.formats.inspect_nup import Nup
+        from oot_rando.formats.inspect_resources import decompress, dictionaries
+        from oot_rando.game.world_maps import effective_members
+        nup = Nup(NUP)
+        try:
+            dicts, members = dictionaries(nup), effective_members(nup)
+            source = nup.read(members[reload_test.FLOW])
+            vanilla = decompress(source, dicts)
+            sizes = {len(reload_test._compress(reload_test.variant_flow(vanilla, v), source, dicts, reload_test.LEVEL))
+                     for v in reload_test.VARIANTS}
+        finally:
+            nup.stream.close()
+        self.assertEqual(len(sizes), 1)
 
     def test_apworld_runs_without_the_application(self):
         """The vendored part imports and prepares a world with nothing but the standard library."""

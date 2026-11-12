@@ -116,6 +116,10 @@ class Application:
             self.save_path.set(self.app_state['save_path'])
         self.turbo = None
         self.turbo_status = tk.StringVar(value='')
+        self.ap_client, self.ap_manifest, self.ap_log_seen = None, None, 0
+        self.ap_address = tk.StringVar(value=self.app_state.get('ap_address') or 'archipelago.gg:38281')
+        self.ap_password, self.ap_slot, self.ap_chat = tk.StringVar(), tk.StringVar(), tk.StringVar()
+        self.ap_status = tk.StringVar(value='Open a seed generated from an Archipelago patch to connect.')
         self.slot = tk.StringVar(value='My game')
         self.status = tk.StringVar(value='Choose your game, then prepare your run.')
         self.result = tk.StringVar(value='No seed open. Generate a game or open an existing folder.')
@@ -330,8 +334,9 @@ class Application:
         ttk.Label(parent, text='Archipelago multiworld', style='Heading.TLabel').pack(anchor='w')
         ttk.Label(parent, text='Send your multiworld YAML to the host; the host puts the apworld in the '
                   'custom_worlds folder of Archipelago and generates. Then generate here from your .aprmk patch '
-                  '(in the zip produced by Archipelago). Items of other players show as green rupees; '
-                  'sending and receiving items in game needs the Archipelago client (not available yet).',
+                  '(in the zip produced by Archipelago). Items of other players show as an Archipelago medallion; '
+                  'connect to the server in the Tracker tab to send your checks. Receiving items in game '
+                  'is not available yet.',
                   style='Muted.TLabel', wraplength=940).pack(anchor='w')
         row = ttk.Frame(parent)
         row.pack(fill='x', pady=(4, 18))
@@ -388,6 +393,7 @@ class Application:
         row.pack(fill='x', pady=(0, 12))
         ttk.Label(row, textvariable=self.connection_status, style='Muted.TLabel', wraplength=760).pack(side='left', fill='x', expand=True)
         ttk.Button(row, text='Refresh', command=self.refresh_tracker).pack(side='right')
+        self.build_archipelago_client(parent)
         filters = ttk.Frame(parent)
         filters.pack(fill='x', pady=(0, 12))
         ttk.Label(filters, text='Search').pack(side='left')
@@ -406,6 +412,111 @@ class Application:
         self.hotkey_label = ttk.Label(footer, style='Muted.TLabel')
         self.hotkey_label.pack(anchor='w')
         self.render_tracker()
+
+    def build_archipelago_client(self, parent):
+        box = ttk.Frame(parent)
+        box.pack(fill='x', pady=(0, 12))
+        row = ttk.Frame(box)
+        row.pack(fill='x')
+        ttk.Label(row, text='Archipelago', style='Heading.TLabel').pack(side='left', padx=(0, 12))
+        ttk.Label(row, text='Server').pack(side='left')
+        ttk.Entry(row, textvariable=self.ap_address, width=26).pack(side='left', padx=(6, 10))
+        ttk.Label(row, text='Slot').pack(side='left')
+        ttk.Entry(row, textvariable=self.ap_slot, width=16).pack(side='left', padx=(6, 10))
+        ttk.Label(row, text='Password').pack(side='left')
+        ttk.Entry(row, textvariable=self.ap_password, width=12, show='•').pack(side='left', padx=(6, 10))
+        self.ap_button = ttk.Button(row, text='Connect', command=self.toggle_archipelago)
+        self.ap_button.pack(side='left')
+        ttk.Label(box, textvariable=self.ap_status, style='Muted.TLabel', wraplength=940).pack(anchor='w', pady=(4, 2))
+        self.ap_log = tk.Text(box, height=5, wrap='word', state='disabled', relief='flat')
+        self.ap_log.pack(fill='x')
+        row = ttk.Frame(box)
+        row.pack(fill='x', pady=(4, 0))
+        chat = ttk.Entry(row, textvariable=self.ap_chat)
+        chat.pack(side='left', fill='x', expand=True)
+        chat.bind('<Return>', lambda event: self.send_archipelago_chat())
+        ttk.Button(row, text='Send', command=self.send_archipelago_chat).pack(side='left', padx=(8, 0))
+        self.update_archipelago_controls()
+
+    def update_archipelago_controls(self):
+        self.ap_button.state(['!disabled'] if self.ap_manifest or self.ap_client else ['disabled'])
+        self.ap_button.configure(text='Disconnect' if self.ap_client else 'Connect')
+
+    def set_archipelago_seed(self, manifest):
+        """A seed was opened: the client follows it only when it comes from an Archipelago patch."""
+        from oot_rando.archipelago.client import ClientError, archipelago_info
+        self.stop_archipelago()
+        try:
+            slot, _, _ = archipelago_info(manifest)
+            self.ap_manifest = manifest
+            self.ap_slot.set(slot)
+            self.ap_status.set('Ready to connect: checks found in game are sent to the server.')
+        except ClientError as error:
+            self.ap_manifest = None
+            self.ap_status.set(str(error))
+        self.update_archipelago_controls()
+
+    def toggle_archipelago(self):
+        from oot_rando.archipelago.client import ArchipelagoClient, ClientError
+        if self.ap_client:
+            self.stop_archipelago()
+            self.ap_status.set('Disconnected.')
+            return
+        if not self.ap_manifest:
+            return
+        try:
+            client = ArchipelagoClient(self.ap_manifest, self.ap_address.get(), self.ap_password.get(),
+                                       self.ap_slot.get().strip(),
+                                       on_change=lambda: self.events.put(('ap-change', None)))
+        except ClientError as error:
+            self.ap_status.set(str(error))
+            return
+        self.write_app_state(ap_address=self.ap_address.get().strip())
+        self.ap_client, self.ap_log_seen = client, 0
+        self.ap_log.configure(state='normal')
+        self.ap_log.delete('1.0', 'end')
+        self.ap_log.configure(state='disabled')
+        if self.tracker:
+            client.update(self.tracker.completed, self.tracker.goal_reached)
+        client.start()
+        self.update_archipelago_controls()
+
+    def stop_archipelago(self):
+        client, self.ap_client = self.ap_client, None
+        if client:
+            threading.Thread(target=client.stop, daemon=True).start()
+        self.update_archipelago_controls()
+
+    def send_archipelago_chat(self):
+        if self.ap_client and self.ap_chat.get().strip():
+            self.ap_client.say(self.ap_chat.get())
+            self.ap_chat.set('')
+
+    def render_archipelago(self):
+        client = self.ap_client
+        if not client:
+            return
+        info = client.summary()
+        text = f'{info["status"]} • {info["checks"]}/{info["total"]} checks known to the server'
+        if info['received']:
+            text += f' • {info["received"]} items received'
+            if info['from_other_worlds']:
+                text += f' • in game: {info["delivery"]}'
+        if info['goal']:
+            text += ' • goal sent'
+        self.ap_status.set(text)
+        lines, count = list(client.log), client.log_count
+        new = lines[max(0, len(lines) - (count - self.ap_log_seen)):]
+        self.ap_log_seen = count
+        if new:
+            self.ap_log.configure(state='normal')
+            self.ap_log.insert('end', ''.join(line + '\n' for line in new))
+            self.ap_log.delete('1.0', 'end-301l')
+            self.ap_log.see('end')
+            self.ap_log.configure(state='disabled')
+        if client.fatal:
+            self.ap_client = None
+            self.update_archipelago_controls()
 
     # ------------------------------------------------------- app state
     @staticmethod
@@ -776,6 +887,7 @@ class Application:
         if self.auto_save.get():
             self.follow_newest_save()
         self.load_tracker()
+        self.set_archipelago_seed(manifest)
         self.reset_spoiler()
         self.status.set('Seed opened.')
 
@@ -1197,6 +1309,8 @@ class Application:
                         self.connection_status.set('Reading paused: ' + error + ' — retrying automatically.')
                         continue
                     self.tracker_details = details or {}
+                    if self.ap_client:
+                        self.ap_client.update(self.tracker.completed, self.tracker.goal_reached)
                     label = self.tracker_details.get('status', 'At the latest save')
                     when = self.tracker_details.get('updated_at', '')
                     self.connection_status.set(label + (' · ' + str(when) if when else ''))
@@ -1206,6 +1320,8 @@ class Application:
                         self.render_tracker()
                     else:
                         self.update_hud()   # inventory and save time change without check changes
+                elif kind == 'ap-change':
+                    self.render_archipelago()
                 elif kind == 'progress':
                     self.status.set(payload)
                     self.log.configure(state='normal')
@@ -1246,6 +1362,8 @@ class Application:
                     'the game is restarted. Close anyway?')):
                 return
             self.turbo.stop()
+        if self.ap_client:
+            self.ap_client.stop()
         self.closed = True
         self.root.destroy()
 

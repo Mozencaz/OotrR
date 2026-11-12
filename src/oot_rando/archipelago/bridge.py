@@ -208,6 +208,32 @@ class PlayerWorld:
         self.local_only = self.restricted | (set(PROGRESSIVE) & set(self.pool))
         self._cache = {}
 
+    def starting_error(self, extra, from_pool):
+        """Why these starting items (name → count) cannot be given, or None.
+
+        ``extra``: ``start_inventory`` (added to the pool); ``from_pool``:
+        ``start_inventory_from_pool``. Starting items are given at the end of the
+        opening; a progressive copy takes a level of the family, so it must come
+        from the pool (the number of levels is fixed).
+        """
+        from oot_rando.game.remake_world import PROGRESSIVE
+        from oot_rando.randomizer.full_randomizer import starting_unsupported
+        names = set(extra) | set(from_pool)
+        bad = sorted(n for n in names if starting_unsupported(n))
+        if bad:
+            return 'dungeon items cannot be starting items: ' + ', '.join(bad)
+        unknown = sorted(n for n in names if n not in self.catalog['items'])
+        if unknown:
+            return 'unknown starting items: ' + ', '.join(unknown)
+        progressive = sorted(n for n in extra if n in PROGRESSIVE and extra[n])
+        if progressive:
+            return ('progressive items must be in start_inventory_from_pool, not start_inventory: '
+                    + ', '.join(progressive))
+        too_many = sorted(n for n in from_pool if n in PROGRESSIVE and from_pool[n] > self.pool.count(n))
+        if too_many:
+            return 'more starting copies than in the item pool: ' + ', '.join(too_many)
+        return None
+
     def classification(self, item):
         if item in self.progression:
             return 'progression'

@@ -44,6 +44,9 @@ def read_artifact(directory):
         if not path.is_relative_to(directory / 'romfs'):
             raise ValueError('Resource outside the mod.')
         data = path.read_bytes()
+        # In-game reload test (archipelago.reload_test): the seed's own table is kept beside it.
+        from oot_rando.archipelago.reload_test import seed_original
+        data = seed_original(directory, name, data)
         if len(data) != info['size'] or hashlib.sha256(data).hexdigest() != info['sha256']:
             raise ValueError('Modified or incomplete resource: ' + name)
     checks = json.loads((directory / 'checks.json').read_text(encoding='utf-8'))

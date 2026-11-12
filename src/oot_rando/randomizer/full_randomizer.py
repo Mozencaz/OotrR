@@ -484,14 +484,47 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
                     + '). Change the seed or the options.')
 
 
+# Starting items that cannot be handed over silently at the end of the opening:
+# dungeon items (generic actors, or a key count only applied at the next item get).
+STARTING_UNSUPPORTED = ('Map (', 'Compass (', 'Small Key (', 'Boss Key (', 'Small Key Ring (', 'Remake: ')
+
+
+def starting_unsupported(item):
+    return item.startswith(STARTING_UNSUPPORTED)
+
+
+def starting_actors(starting, family_tiers):
+    """Pouch actors of Archipelago starting items (AP names).
+
+    Copies of a progressive family take the lowest tiers of the family layout;
+    the placed copies take the next ones (see :func:`plan_assigned`).
+    """
+    bad = sorted({item for item in starting if starting_unsupported(item)})
+    if bad:
+        raise FillError('Starting items that cannot be given at the start of the game: ' + ', '.join(bad))
+    actors, taken = [], Counter()
+    for item in starting:
+        if item in PROGRESSIVE:
+            layout = (family_tiers or {}).get(item) or []
+            if taken[item] >= len(layout):
+                raise FillError(f'Too many {item} (starting items included).')
+            actors.append(PROGRESSIVE[item][layout[taken[item]]])
+            taken[item] += 1
+        else:
+            actors.append(item_actor(item, None))
+    return actors
+
+
 def plan_assigned(data, options, groups, enemies, seed_key, assigned, open_forest=True, progress=None,
-                  extra=None, labels=None, order=None):
+                  extra=None, labels=None, order=None, starting=()):
     """Plan with placements chosen elsewhere (Archipelago): gid → item, every shuffled gid.
 
     Items of other players are given as a stand-in by the caller. Progressive
     tiers follow ``order`` (gid → sphere of the multiworld playthrough) when
     given, else the local sweep (every copy of a family is local). Victory is
-    not required here: items may come from other worlds.
+    not required here: items may come from other worlds. ``starting``:
+    Archipelago starting items (AP names), collected from the start; progressive
+    copies among them take the lowest tiers.
     """
     c = prepare(data, options, groups, enemies, seed_key, open_forest, progress, extra=extra)
     if set(assigned) != set(c.shuffled):
@@ -503,25 +536,29 @@ def plan_assigned(data, options, groups, enemies, seed_key, assigned, open_fores
         if not c.allowed(item, gid):
             raise FillError(f'{item} cannot be placed at {gid}.')
     placed = dict(assigned)
-    state, collected, spheres = c.sweep(placed)
+    starting = list(starting)
+    start_actors = starting_actors(starting, c.family_tiers)
+    start_counts = Counter(starting)
+    state, collected, spheres = c.sweep(placed, start_counts)
     sphere_of = {loc: index for index, sphere in enumerate(spheres) for loc in sphere}
     tiers = {}
     for family in PROGRESSIVE:
         rank = ((lambda g: order.get(g) if order.get(g) is not None else 10 ** 6) if order is not None
                 else (lambda g: sphere_of.get(vname(g), 10 ** 6)))
         sources = sorted((g for g, item in placed.items() if item == family), key=lambda g: (rank(g), g))
-        if not sources:
+        if not sources and not start_counts[family]:
             continue
         layout = c.family_tiers.get(family)
-        if layout is None or len(layout) != len(sources):
+        if layout is None or len(layout) != len(sources) + start_counts[family]:
             raise FillError(f'Unexpected number of {family}: every copy must stay in this world.')
-        tiers.update(zip(sources, layout))
+        tiers.update(zip(sources, layout[start_counts[family]:]))
     c.report(f'Archipelago placements applied ({len(spheres)} local spheres).')
     result = _result(data, c.logic, c.options, c.matches, c.shuffled, placed, tiers, sphere_of, spheres, c.souls,
                      c.unmatched_ap, 0, c.base)
     for row in result['spoiler']:
         if labels and row['id'] in labels:
             row['item'] = labels[row['id']]
+    result['starting'] = [{'item': item, 'actor': actor} for item, actor in zip(starting, start_actors)]
     return result
 
 

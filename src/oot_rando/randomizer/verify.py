@@ -29,7 +29,7 @@ from oot_rando.patching.randomize_kokiri import RESTBL, MAP
 from oot_rando.patching.qol_patches import STATIC, KOKIRI_SHOP_MAPS, KOKIRI_SHOP_FLAG, _shop_actor
 from oot_rando.formats import byml_codec
 from oot_rando.patching.soul_adapter import murmur3, RSDB_FILES, GAMEDATA, FLAG_PREFIX
-from oot_rando.game.remake_world import PROGRESSIVE
+from oot_rando.game.remake_world import PROGRESSIVE, item_actor
 from oot_rando.game.item_forms import is_derived, canonical_of
 from oot_rando.patching.key_adapter import is_key_actor
 
@@ -93,6 +93,51 @@ def verify(nup_path, seed_dir):
                 repeat_first[variant['resource']][variant['index']] = record
                 repeat_fallback[variant['resource']].append((record, variant))
     report = {'maps': 0, 'rewards': 0, 'presence': 0, 'events': 0}
+    # Per-chest opening flags: each shuffled chest's own event (chest_flags), rebuilt
+    # from the spoiler's chests and the original maps.
+    chest_records = manifest.get('skips', {}).get('chest_flags', {}).get('records', [])
+    if manifest.get('skips', {}).get('chest_flags') is not None:
+        from oot_rando.patching import chest_flags
+        settings_rows = {row['__RowId']: row for row in Byml(out(chest_flags.EVENT_SETTINGS)).root}
+        original_rows = {row['__RowId']: row for row in Byml(decompress(nup.read(members[chest_flags.EVENT_SETTINGS]), d)).root}
+        chest_spoiler = [{'id': p['id'], 'source': 'chest',
+                          'variants': [(v['resource'], v['index']) for v in groups.get(p['id'], []) if 'index' in v]}
+                         for p in full if p.get('source') == 'chest']
+        original_map = lambda path: Byml(decompress(nup.read(members[path]), d)).root
+        expected_records, _ = chest_flags.plan_records(chest_spoiler, original_map, manifest['seed_id'], original_rows)
+        if expected_records != chest_records:
+            raise ValueError('Chest opening flags differ from the spoiler.')
+        for record in chest_records:
+            if settings_rows.get(record['event'], {}).get('EntryPointName') != record['event']:
+                raise ValueError('Missing chest event row: ' + record['event'])
+            for variant in record['variants']:
+                map_edits[variant['resource']].setdefault(variant['index'], {})['GetEventName'] = record['event']
+        report['chest_flags'] = len(chest_records)
+    mailbox = manifest.get('skips', {}).get('ap_mailbox')
+    if mailbox is not None:
+        # Archipelago reception: the global sequence's watcher and its event row.
+        from oot_rando.patching import ap_mailbox
+        # Records rebuilt from the patch alone (the remote items of this world).
+        from oot_rando.formats import byml_codec
+        expected = ap_mailbox.records((manifest.get('archipelago') or {}).get('remote', []))
+        if expected != mailbox['items']:
+            raise ValueError('Archipelago reception differs from the patch.')
+        if (seed_dir / 'romfs' / ap_mailbox.MAIN_UPDATE).read_bytes() != ap_mailbox.patch_main_update(
+                nup.read(members[ap_mailbox.MAIN_UPDATE]), expected):
+            raise ValueError('Unexpected global sequence (Archipelago reception).')
+        rows = {r['__RowId']: r for r in Byml(out(ap_mailbox.EVENT_SETTINGS)).root}
+        flags = {entry['Hash'] for entry in byml_codec.load(out(GAMEDATA))['root']['Data']['Bool']}
+        for record in expected:
+            row = rows.get(record['event'])
+            if not row or row.get('EntryPointName') != record['event'] or not row.get(
+                    'FlowchartFileName', '').endswith('/' + ap_mailbox.FLOW + '.evfc'):
+                raise ValueError('Missing Archipelago reception event row: ' + record['event'])
+            if murmur3(record['recv']) not in flags or murmur3(record['got']) not in flags:
+                raise ValueError('Missing Archipelago reception flag: ' + record['key'])
+        report['ap_reception'] = len(expected)
+    chest_flows = {}
+    for record in chest_records:
+        chest_flows.setdefault(record['flow'], []).append(record)
     soul_actors = set()
     window_context = [None, None]
     for path in sorted(manifest['files']):
@@ -168,6 +213,13 @@ def verify(nup_path, seed_dir):
                 if actor is None or actor != gift['actor'] or (manifest.get('tracking') and flags != [gift['flag']]):
                     raise ValueError('Item given after the cutscene differs from the spoiler: ' + path)
                 original = give_gift_after(original, gift['after'], actor, gift['flag'])[0]
+            from oot_rando.patching import ap_mailbox
+            if path == ap_mailbox.FLOW_PATH and skips.get('ap_mailbox'):
+                # Archipelago reception: the item-get entry the global sequence starts.
+                original = ap_mailbox.add_entries(original, skips['ap_mailbox']['items'])
+            if path in chest_flows:
+                from oot_rando.patching.chest_flags import add_entries
+                original = add_entries(original, chest_flows[path])
             before = _event_snapshot(original)
             after = _event_snapshot(out(path))
             for (name, param), actor in event_edits.get(path, {}).items():
@@ -180,9 +232,11 @@ def verify(nup_path, seed_dir):
                     before[marker['marker']] = {'GameDataName': marker['flag'], 'Index': -1, 'Value': True}
             if path == 'Event/EventFlow/OpeningEvent.bfevfl.zs':
                 # Seed bag and quiver given silently at the end of the opening.
-                from oot_rando.randomizer.randomizer_core import STARTING_ITEMS
-                for item in STARTING_ITEMS:
-                    before['RandoStartItem_' + item] = {'Num': 1, 'IsEquipDIrect': False,
+                from oot_rando.randomizer.randomizer_core import starting_pouch_items
+                from oot_rando.patching.event_patch import starting_item_events
+                given = starting_pouch_items({'archipelago': manifest.get('archipelago')})
+                for item, name in zip(given, starting_item_events(given)):
+                    before[name] = {'Num': 1, 'IsEquipDIrect': False,
                                                         'IsSetMessageTargetActorName': False,
                                                         'Actor': item, 'IsGetEvent': False}
                     report['starting_items'] = report.get('starting_items', 0) + 1
@@ -324,6 +378,18 @@ def verify(nup_path, seed_dir):
                     raise ValueError(f'Level order not respected for {family}: {spheres}')
                 if any(x is None or y is None or x == y for x, y in pairs):
                     warnings.append(f'{family}: levels in the same multiworld sphere {spheres}')
+        # Starting copies of a progressive family are its lowest levels.
+        for start in multiworld.get('starting', []):
+            item, actor = start['item'], start['actor']
+            if item in PROGRESSIVE:
+                placed = [actors.index(a) for p in full if p['ap_item'] == item
+                          for actors in [PROGRESSIVE[item]]
+                          for a in actors if p.get('reward_actor', p['actor']) in (a, 'Obj_Rando_' + a,
+                                                                                    'Shop_Rando_' + a)]
+                if actor not in PROGRESSIVE[item] or any(i <= PROGRESSIVE[item].index(actor) for i in placed):
+                    raise ValueError(f'Starting {item} is not its lowest level: {actor}')
+            elif full_randomizer.starting_unsupported(item) or actor != item_actor(item, None):
+                raise ValueError(f'Unexpected starting item: {item} → {actor}')
         report.update(souls=len(soul_actors), derived=len(derived), beatable='checked by Archipelago',
                       spheres=plan['sphere_count'], unreachable_logic_locations=plan['unreachable'],
                       archipelago={'seed_name': multiworld.get('seed_name'), 'slot_name': multiworld.get('slot_name'),
