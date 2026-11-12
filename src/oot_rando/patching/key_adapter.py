@@ -39,6 +39,9 @@ RING_DUNGEONS = {
     'BottomOfTheWell': 3, 'GerudoTrainingGround': 9, 'InsideGanonCastle': 2,
 }
 BOSS_KEY_DUNGEONS = ('ForestTemple', 'FireTemple', 'WaterTemple', 'ShadowTemple', 'SpiritTemple')
+# Dungeons with a map and a compass (AP items ``Map (…)``/``Compass (…)``).
+MAP_DUNGEONS = ('InsideTheDekuTree', 'DodongoCavern', 'InsideJabuJabuBelly', 'ForestTemple', 'FireTemple',
+                'WaterTemple', 'ShadowTemple', 'SpiritTemple', 'BottomOfTheWell', 'IceCavern')
 DUNGEON_FOLDER = {dungeon: folder for folder, dungeon in FOLDER_DUNGEON.items()}
 # In-game names for the French message files (EUfr / CAfr).
 FRENCH_DUNGEONS = {
@@ -131,6 +134,50 @@ def key_texts(actor, language):
                 'GetMessage': f'You got the {name} key ring!', 'GetCaption': 'Its locked doors can now open.'}
     return {'Name': f'Boss Key: {name}', 'Caption': f'The boss key of the {name}.',
             'GetMessage': f'You got the {name} boss key!', 'GetCaption': 'It opens the boss door of this dungeon.'}
+
+
+def start_dungeon_values(options):
+    """GameData values written at the end of the opening for the "start with" / "removed" modes.
+
+    * maps and compasses "Start with": ``IsGetMap``/``IsGetCompass`` of every dungeon;
+    * small keys "Removed": ``SmallKeyNum`` = every key of the dungeon (AP count),
+      so the locked doors open as if the keys were found (an extra key is harmless);
+    * boss keys "Removed": ``IsGetBossKey`` of the five temples (Ganon's key apart).
+    """
+    values = {}
+    if options.get('shuffle_mapcompass') == 'startwith':
+        for folder in MAP_DUNGEONS:
+            values[f'DungeonInfo.{folder}.IsGetMap'] = True
+            values[f'DungeonInfo.{folder}.IsGetCompass'] = True
+    if options.get('shuffle_smallkeys') == 'remove':
+        for folder, count in RING_DUNGEONS.items():
+            values[f'DungeonInfo.{folder}.SmallKeyNum'] = count
+    if options.get('shuffle_bosskeys') == 'remove':
+        for folder in BOSS_KEY_DUNGEONS:
+            values[f'DungeonInfo.{folder}.IsGetBossKey'] = True
+    return values
+
+
+def start_logic_items(options):
+    """AP items the logic holds from the start for the "removed" key modes."""
+    items = {}
+    if options.get('shuffle_smallkeys') == 'remove':
+        items.update({small_key_item(folder): count for folder, count in RING_DUNGEONS.items()})
+    if options.get('shuffle_bosskeys') == 'remove':
+        items.update({f'Boss Key ({FOLDER_DUNGEON[folder]})': 1 for folder in BOSS_KEY_DUNGEONS})
+    return items
+
+
+def check_start_values(gamedata_raw, values):
+    """Every start value names a saved GameData entry of the matching type."""
+    from oot_rando.formats.inspect_resources import Byml
+    from oot_rando.patching.soul_adapter import murmur3
+    data = Byml(gamedata_raw).root['Data']
+    for name, value in values.items():
+        kind = 'Bool' if type(value) is bool else 'Int'
+        entry = next((e for e in data[kind] if e['Hash'] == murmur3(name)), None)
+        if entry is None or entry.get('SaveFileIndex') != 0:
+            raise ValueError('Start value not found in the saved game data: ' + name)
 
 
 def key_specs(actors):

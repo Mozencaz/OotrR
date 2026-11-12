@@ -61,6 +61,8 @@ def ap_option_specs():
     specs = [{'name': 'open_forest', 'kind': 'bool', 'label': 'Open the way (Kokiri Forest exit)',
               'default': True, 'values': [False, True], 'help': 'Mido no longer blocks the forest exit.'}]
     for option in rando_options.OPTIONS:
+        if option.kind == 'items':
+            continue  # starting items: the apworld's own start_inventory_from_pool
         values = [v for v in option.allowed() if option.supported(v)]
         if option.name in AP_SKIPPED or len(values) < 2:
             continue
@@ -95,6 +97,9 @@ def player_yaml(values, open_forest, name='Player'):
         text = ('true' if value else 'false') if spec['kind'] == 'bool' else f"'{ap_value_name(value)}'"
         lines.append(f'  {spec["name"]}: {text}')
     lines.append(f'  accessibility: {"full" if values["accessibility"] == "full" else "minimal"}')
+    if values['start_inventory_from_pool']:
+        import json
+        lines.append('  start_inventory_from_pool: ' + json.dumps(values['start_inventory_from_pool'], ensure_ascii=False))
     return '\n'.join(lines) + '\n'
 
 

@@ -136,6 +136,7 @@ class Logic:
         self.bundles = {}
         self.referenced = set()
         self._region = None  # region being compiled (for here())
+        self._night_needs_song = False
         for region in data.regions:
             name = region['region_name']
             self.region_dungeon[name] = region.get('dungeon')
@@ -161,7 +162,12 @@ class Logic:
                 extra_rule = shop_rule(data.vanilla_item(location))
                 if extra_rule:
                     rule = f'({rule}) and ({extra_rule})'
+                # AP logic_no_night_tokens_without_suns_song: a night skulltula
+                # only counts with Sun's Song (waiting for the night is out of logic).
+                self._night_needs_song = (self.settings.get('logic_no_night_tokens_without_suns_song')
+                                          and data.location_type(location) == 'GS Token')
                 compiled_rule = self.compile(rule, extra_location_requirements.get(location))
+                self._night_needs_song = False
                 compiled['locations'].append((location, compiled_rule))
                 self.location_region.setdefault(location, name)
                 self.location_rules.setdefault(location, []).append((name, compiled_rule))
@@ -311,6 +317,8 @@ class Logic:
                 'current_spot_adult_access': "(a=='adult')",
                 'current_spot_starting_age_access': f"(a=={self.settings['starting_age']!r})",
             }
+            if node.id == 'at_night' and self._night_needs_song:
+                special['at_night'] = "(c.get('Ocarina',0)>=1 and c.get('Suns Song',0)>=1)"
             if node.id in special:
                 if node.id.startswith('at_'):
                     self.referenced.update(('Ocarina', 'Suns Song'))

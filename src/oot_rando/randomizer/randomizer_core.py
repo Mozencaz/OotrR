@@ -46,8 +46,14 @@ def ap_records(settings):
 
 
 def starting_pouch_items(full):
-    """Actors given silently at the end of the opening: bag, quiver, Archipelago starting items."""
-    return list(STARTING_ITEMS) + [s['actor'] for s in ((full or {}).get('archipelago') or {}).get('starting', [])]
+    """Actors given silently at the end of the opening: bag, quiver, starting items.
+
+    Starting items come from the Archipelago patch, else from the starting
+    inventory option (solo seed, ``full['starting']``).
+    """
+    full = full or {}
+    starting = (full.get('archipelago') or {}).get('starting') if full.get('archipelago') else full.get('starting')
+    return list(STARTING_ITEMS) + [s['actor'] for s in starting or []]
 # Archipelago goal flag: after Defeat_Ganon's native "Complete" step (Ganon's death),
 # before the transition to Dm_Ending_0000.
 GOAL_FLOW, GOAL_EVENT = 'Event/EventFlow/Defeat_Ganon.bfevfl.zs', 'Event37'
@@ -341,6 +347,13 @@ def generate(nup_path, output, settings, progress=None):
             from oot_rando.patching.event_patch import add_pouch_items
             extra_raw[opening] = add_pouch_items(extra_raw[opening], 'RandoCollected_Event3',
                                                  starting_pouch_items(full))
+            # Maps/compasses "start with", keys "removed": dungeon data written at the start.
+            from oot_rando.patching.event_patch import add_start_values
+            from oot_rando.patching.key_adapter import start_dungeon_values, check_start_values
+            start_values = start_dungeon_values(settings.full)
+            if start_values:
+                check_start_values(extra_raw[GAMEDATA], start_values)
+                extra_raw[opening] = add_start_values(extra_raw[opening], 'RandoCollected_Event3', start_values)
         skips = {}
         if settings.full is not None:
             skips['ocarina_guide'] = ocarina_guide
@@ -354,7 +367,7 @@ def generate(nup_path, output, settings, progress=None):
             report('Skippable area presentations…')
             flows, skips['area_presentations'] = area_presentation_files(current_flow)
             extra_raw.update(flows)
-        if settings.skip_chest_cutscenes:
+        if settings.skip_chest_cutscenes or (settings.full or {}).get('fast_chests'):
             report('Chests without cutscene…')
             extra_raw[CHEST_FLOW], skips['quick_chest'] = quick_chest(current_flow(CHEST_FLOW))
             extra_raw[SMALL_CHEST_FLOW], skips['quick_small_chest'] = quick_small_chest(current_flow(SMALL_CHEST_FLOW))
@@ -508,6 +521,8 @@ def generate(nup_path, output, settings, progress=None):
             if full.get('archipelago'):
                 # Read by the Archipelago client: location IDs and items found in other worlds.
                 manifest['archipelago'] = full['archipelago']
+            elif full.get('starting'):
+                manifest['starting'] = full['starting']
         checks = {'schema_version': 1, 'seed_id': manifest['seed_id'],
                   # With the complete randomizer its catalogue lists every check (the
                   # four historical Kokiri chests included): no duplicates.

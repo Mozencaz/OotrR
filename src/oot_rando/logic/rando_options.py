@@ -18,13 +18,15 @@ class Option:
     values: tuple            # ((value, label, reason_or_None), …) or None for bool
     default: object
     help: str = ''
-    kind: str = 'choice'     # choice | bool | int
+    kind: str = 'choice'     # choice | bool | int | items (AP item name -> count)
     minimum: int = 0
     maximum: int = 0
     supported_ints: tuple = ()
     experimental: tuple = ()  # supported values requiring an in-game pilot
 
     def supported(self, value):
+        if self.kind == 'items':
+            return True
         if self.kind == 'bool':
             return dict(self.values)[value] is OK
         if self.kind == 'int':
@@ -32,6 +34,8 @@ class Option:
         return any(v == value and reason is OK for v, _, reason in self.values)
 
     def reason(self, value):
+        if self.kind == 'items':
+            return None
         if self.kind == 'bool':
             return dict(self.values).get(value)
         if self.kind == 'int':
@@ -42,6 +46,8 @@ class Option:
         return 'Unknown value.'
 
     def allowed(self):
+        if self.kind == 'items':
+            return ()
         if self.kind == 'bool':
             return (False, True)
         if self.kind == 'int':
@@ -54,6 +60,19 @@ PILOT = ('Adapter built and checked statically; in-game behaviour still to be co
          'Every ticked category is shuffled together.')
 NO_EVENT = 'Event or NPC: reward adapter still to be written and proven in game.'
 GENERIC_KEYS = 'Remake keys are generic (credited to the current dungeon): impossible outside the dungeon.'
+# Items that can be held from the start (silent pouch add at the end of the opening).
+# Songs, tunics, trade items and dungeon items have no pouch actor of their own yet.
+STARTABLE_ITEMS = (
+    'Kokiri Sword', 'Biggoron Sword', 'Deku Shield', 'Hylian Shield', 'Mirror Shield',
+    'Slingshot', 'Bow', 'Boomerang', 'Progressive Hookshot', 'Megaton Hammer', 'Lens of Truth',
+    'Bomb Bag', 'Bombchus (10)', 'Ice Arrows', 'Light Arrows', 'Dins Fire', 'Farores Wind', 'Nayrus Love',
+    'Iron Boots', 'Hover Boots', 'Progressive Strength Upgrade', 'Progressive Scale', 'Progressive Wallet',
+    'Deku Nut Capacity', 'Deku Stick Capacity', 'Magic Meter', 'Double Defense', 'Ocarina', 'Bottle',
+    'Bottle with Milk', 'Zeldas Letter', 'Stone of Agony', 'Heart Container', 'Piece of Heart',
+    'Gold Skulltula Token', 'Kokiri Emerald', 'Goron Ruby', 'Zora Sapphire', 'Forest Medallion',
+    'Fire Medallion', 'Water Medallion', 'Spirit Medallion', 'Shadow Medallion', 'Light Medallion',
+)
+MAX_START_COUNT = 100
 
 OPTIONS = [
     # ------------------------------------------------------------------ Logic
@@ -71,7 +90,7 @@ OPTIONS = [
            'Always checked by a second, independent solver after placement.'),
     Option('logic_no_night_tokens_without_suns_song', 'Logic',
            'Night skulltulas without Sun\'s Song out of logic',
-           ((False, OK), (True, NO_ADAPTER)), False, 'AP option not carried over: night skulltulas stay in logic.',
+           ((False, OK), (True, OK)), False, "Night skulltulas count only with the Ocarina and Sun's Song.",
            kind='bool'),
     # ------------------------------------------------------------------ World
     Option('open_kakariko', 'World', 'Kakariko gate',
@@ -178,30 +197,41 @@ OPTIONS = [
     Option('shuffle_rocks', 'Items', 'Rocks and stones (as checks)', ((False, OK), (True, OK)), False,
            PILOT, kind='bool', experimental=(True,)),
     Option('shuffle_frog_song_rupees', 'Items', 'Frog song rupees', ((False, OK), (True, NO_EVENT)), False, kind='bool'),
+    Option('start_inventory_from_pool', 'Items', 'Starting inventory',
+           None, {}, 'Items held from the start (copies taken out of the item pool). Hearts: '
+           '"Heart Container" or "Piece of Heart". Songs and tunics are not available yet.', kind='items'),
+    Option('item_pool_value', 'Items', 'Item pool',
+           (('balanced', 'Balanced', OK), ('plentiful', 'Plentiful (one extra copy of the major items)', OK),
+            ('scarce', 'Scarce (fewer bottles and hearts)', OK),
+            ('minimal', 'Minimal (one bottle, no extra hearts)', OK)), 'balanced',
+           'Applies to the shuffled locations only (their count never changes): extra copies '
+           'replace rupees and other filler, removed copies become rupees.'),
     # --------------------------------------------------------------- Dungeons
     Option('shuffle_mapcompass', 'Dungeons', 'Maps and compasses',
            (('vanilla', 'Vanilla', OK), ('dungeon', 'In their dungeon', OK), ('remove', 'Removed', OK),
-            ('startwith', 'Start with', NO_EVENT), ('any_dungeon', 'Any dungeon', GENERIC_KEYS),
-            ('overworld', 'Overworld', GENERIC_KEYS), ('keysanity', 'Anywhere', GENERIC_KEYS)), 'dungeon'),
+            ('startwith', 'Start with', OK), ('any_dungeon', 'Any dungeon', GENERIC_KEYS),
+            ('overworld', 'Overworld', GENERIC_KEYS), ('keysanity', 'Anywhere', GENERIC_KEYS)), 'dungeon',
+           '"Start with": every map and compass is held from the start; their chests hold other items.',
+           experimental=('startwith',)),
     Option('shuffle_smallkeys', 'Dungeons', 'Small keys',
            (('vanilla', 'Vanilla', OK),
             ('dungeon', 'In their dungeon (key rings)', OK),
-            ('remove', 'Removed', 'Locked doors are not changed.'),
+            ('remove', 'Removed (all keys from the start)', OK),
             ('any_dungeon', 'Any dungeon (key rings)', OK), ('overworld', 'Overworld (key rings)', OK),
             ('keysanity', 'Anywhere (key rings)', OK)), 'vanilla',
            'Except for "Vanilla", small keys become one key ring per dungeon (Key rings option '
            '= All dungeons): remake keys are generic, only a dungeon-specific key ring '
            'can be placed elsewhere. Small key chests receive other items.',
-           experimental=('dungeon', 'any_dungeon', 'overworld', 'keysanity')),
+           experimental=('dungeon', 'remove', 'any_dungeon', 'overworld', 'keysanity')),
     Option('shuffle_hideoutkeys', 'Dungeons', 'Gerudo hideout keys',
            (('vanilla', 'Guards', OK), ('overworld', 'Overworld', NO_EVENT), ('keysanity', 'Anywhere', NO_EVENT)), 'vanilla'),
     Option('shuffle_bosskeys', 'Dungeons', 'Boss keys',
            (('vanilla', 'Vanilla', OK), ('dungeon', 'In their dungeon', OK),
-            ('remove', 'Removed', 'Boss doors are not changed.'),
+            ('remove', 'Removed (boss keys from the start)', OK),
             ('any_dungeon', 'Any dungeon', OK), ('keysanity', 'Anywhere', OK)), 'vanilla',
            'Outside their dungeon, each boss key becomes a dungeon-specific item ("Boss Key: …") '
            'that opens the boss door of that dungeon wherever it is found. Ganon\'s key: option of the Goal tab.',
-           experimental=('dungeon', 'any_dungeon', 'keysanity')),
+           experimental=('dungeon', 'remove', 'any_dungeon', 'keysanity')),
     Option('key_rings', 'Dungeons', 'Key rings',
            (('off', 'None', OK), ('all', 'All dungeons', OK), ('choose', 'Chosen', NO_ADAPTER),
             ('random', 'Random', NO_ADAPTER)), 'off',
@@ -221,7 +251,9 @@ OPTIONS = [
     Option('no_escape_sequence', 'Quality of life', 'Skip the castle escape', ((False, OK), (True, NO_EVENT)), False, kind='bool'),
     Option('no_guard_stealth', 'Quality of life', 'Skip the castle stealth section', ((False, OK), (True, NO_EVENT)), False, kind='bool'),
     Option('no_epona_race', 'Quality of life', 'Epona without the race', ((False, OK), (True, NO_EVENT)), False, kind='bool'),
-    Option('fast_chests', 'Quality of life', 'Fast chest opening', ((False, OK), (True, NO_ADAPTER)), False, kind='bool'),
+    Option('fast_chests', 'Quality of life', 'Fast chest opening', ((False, OK), (True, OK)), False,
+           'Same patch as "Chests without cutscene" in the setup: the lid opens and Link holds the item up.',
+           kind='bool'),
     Option('free_scarecrow', 'Quality of life', 'Free scarecrow', ((False, OK), (True, NO_EVENT)), False, kind='bool'),
     Option('big_poe_count', 'Quality of life', 'Big Poes to bring back', None, 10, kind='int', minimum=1, maximum=10,
            supported_ints=(10,)),
@@ -235,7 +267,28 @@ OUT_OF_SCOPE = ('Entrance shuffle, Master Quest, multiworld and gossip stone hin
 
 
 def defaults():
-    return {option.name: option.default for option in OPTIONS}
+    return {option.name: (dict(option.default) if isinstance(option.default, dict) else option.default)
+            for option in OPTIONS}
+
+
+def parse_items(text):
+    """``"Hover Boots, Progressive Hookshot x2"`` → ``{'Hover Boots': 1, 'Progressive Hookshot': 2}``."""
+    import re
+    result = {}
+    for part in (p.strip() for p in str(text).replace(';', ',').split(',')):
+        if not part:
+            continue
+        match = re.fullmatch(r'(.+?)\s*(?:[x×*]\s*(\d+))?', part, re.IGNORECASE)
+        name, count = match.group(1).strip(), int(match.group(2) or 1)
+        canonical = next((i for i in STARTABLE_ITEMS if i.casefold() == name.casefold()), None)
+        if canonical is None:
+            raise ValueError(f'Unknown or unavailable starting item: {name}')
+        result[canonical] = result.get(canonical, 0) + count
+    return result
+
+
+def format_items(items):
+    return ', '.join(name if count == 1 else f'{name} x{count}' for name, count in sorted(items.items()))
 
 
 def validate(values, supported_only=False):
@@ -248,7 +301,12 @@ def validate(values, supported_only=False):
     result.update(values)
     for name, value in result.items():
         option = BY_NAME[name]
-        if option.kind == 'bool':
+        if option.kind == 'items':
+            if (not isinstance(value, dict) or any(item not in STARTABLE_ITEMS for item in value)
+                    or any(type(n) is not int or not 1 <= n <= MAX_START_COUNT for n in value.values())):
+                raise ValueError(f'{name}: unknown item or invalid count.')
+            result[name] = dict(sorted(value.items()))
+        elif option.kind == 'bool':
             if type(value) is not bool:
                 raise ValueError(f'{name} must be a boolean.')
         elif option.kind == 'int':
@@ -313,8 +371,19 @@ def from_ap_yaml(text):
         if key == 'open_forest':
             ignored.append('open_forest: set by "Open the way" in the setup')
             continue
+        if key == 'start_inventory':
+            key = 'start_inventory_from_pool'
         if key not in BY_NAME:
             ignored.append(f'{key}: option not carried over in this version')
+            continue
+        if BY_NAME[key].kind == 'items':
+            kept = {}
+            for item, count in (raw or {}).items() if isinstance(raw, dict) else ():
+                if item in STARTABLE_ITEMS and type(count) is int and 1 <= count <= MAX_START_COUNT:
+                    kept[item] = kept.get(item, 0) + count
+                else:
+                    ignored.append(f'{key}: {item} not available as a starting item')
+            values[key] = dict(sorted(kept.items()))
             continue
         if isinstance(raw, dict):
             weighted = [(k, w) for k, w in raw.items() if isinstance(w, (int, float)) and w > 0]
@@ -360,6 +429,9 @@ def to_ap_yaml(values, name='Player'):
         value = values[option.name]
         if option.name == 'logic_tricks':
             value = '[]'
+        elif option.kind == 'items':
+            import json
+            value = json.dumps(value, ensure_ascii=False)
         elif isinstance(value, bool):
             value = 'true' if value else 'false'
         lines.append(f'  {option.name}: {value}')

@@ -71,7 +71,27 @@ OPTION_COPY = {
     'shuffle_bushes': ('Bushes and grass', 'Shuffles the first reward of supported sources, then restores their vanilla loot.'),
     'shuffle_rocks': ('Rocks and stones', 'The first reward is shuffled. Then the rock goes back to its vanilla behaviour, even if it gave no item.'),
     'shuffle_enemy_spawns': ('Enemy souls', 'Find souls to make the matching enemies appear. A new game is required.'),
+    'start_inventory_from_pool': ('Starting inventory', 'Items held from the start, separated by commas, '
+                                  'with a count if needed: "Hover Boots, Progressive Hookshot x2, Heart Container x3". '
+                                  'Songs and tunics are not available yet.'),
+    'item_pool_value': ('Item pool', 'Plentiful: an extra copy of the major items. Scarce: at most 3 bottles '
+                        'and half the hearts. Minimal: one bottle and no extra hearts.'),
+    'logic_no_night_tokens_without_suns_song': ("Night skulltulas need Sun's Song",
+                                                 'Waiting for the night is not expected by the logic.'),
 }
+
+
+class ItemsVar:
+    """Text field holding a starting inventory (``"Hover Boots, Bow x2"``) as a dict."""
+
+    def __init__(self):
+        self.text = tk.StringVar(value='')
+
+    def get(self):
+        return rando_options.parse_items(self.text.get())
+
+    def set(self, value):
+        self.text.set(rando_options.format_items(value or {}))
 
 
 
@@ -491,7 +511,9 @@ class Application:
         ttk.Label(details, textvariable=self.full_reason, style='Page.TLabel', wraplength=780, justify='left').pack(anchor='w', padx=4, pady=(0, 10))
         grouped = {}
         for option in rando_options.OPTIONS:
-            if option.kind == 'bool':
+            if option.kind == 'items':
+                supported = [None, None]  # free text: always shown
+            elif option.kind == 'bool':
                 supported = [v for v in (False, True) if option.supported(v)]
             elif option.kind == 'int':
                 supported = list(option.supported_ints)
@@ -570,7 +592,10 @@ class Application:
         """Complete mode: each checkbox shows the state of its solver options."""
         if not self.full_enabled.get() or len(self.full_vars) != len(rando_options.OPTIONS):
             return
-        values = self.full_values()
+        try:
+            values = self.full_values()
+        except ValueError:
+            return  # starting inventory being typed
         for name, variable in self.categories.items():
             checked = name in rando_options.CATEGORY_OPTIONS and rando_options.category_checked(values, name)
             if variable.get() != checked:
@@ -882,7 +907,12 @@ class Application:
         def describe():
             self.full_reason.set(label + ' — ' + (help_text or 'Choose the value that suits your game.'))
             self.update_presets()
-        if option.kind == 'bool':
+        if option.kind == 'items':
+            variable = ItemsVar()
+            widget = ttk.Entry(parent, textvariable=variable.text, width=40) if parent else None
+            if widget:
+                widget.bind('<FocusOut>', lambda event: describe(), add='+')
+        elif option.kind == 'bool':
             variable = tk.BooleanVar(value=option.default)
             widget = self.switch_row(parent, index, label, variable, command=describe) if parent else None
         elif option.kind == 'int':
