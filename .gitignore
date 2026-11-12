@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.benchmarks/
+
+# Build outputs, generated seeds and local app data
+build/
+dist/
+data/
+backups/
+*.spec.bak
+
+# Local game data and dumps (never commit game assets)
+*.nup
+*.local.json
+*.raw
+*.bntx
+*.bntx.zs
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local tooling
+.claude/
+.impeccable/
+.cqr-memory.md
+.cqr-archive/

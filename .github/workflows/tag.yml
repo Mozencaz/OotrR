@@ -1,0 +1,45 @@
+# Manual: creates an annotated tag vX.Y.Z on the head of the chosen branch.
+# Also called by release.yml once the builds have passed.
+name: Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 0.8.1 or v0.8.1). Empty = pyproject.toml version'
+        required: false
+        default: ''
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: false
+        default: ''
+    outputs:
+      tag:
+        description: Created tag
+        value: ${{ jobs.tag.outputs.tag }}
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: Create tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve version
+        id: version
+        run: bash .github/scripts/resolve_version.sh "${{ inputs.version }}"
+      - name: Create and push tag
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$TAG" -m "OoT Randomizer $TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+          echo "### Tag $TAG created on \`${GITHUB_SHA::7}\`" >> "$GITHUB_STEP_SUMMARY"

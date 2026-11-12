@@ -1,0 +1,95 @@
+# Manual: tests + Windows/Linux builds, then tag vX.Y.Z and a GitHub release
+# with the two portable applications attached.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 0.8.1 or v0.8.1). Empty = pyproject.toml version'
+        required: false
+        default: ''
+      prerelease:
+        description: 'Mark as pre-release'
+        type: boolean
+        default: false
+      draft:
+        description: 'Create as draft (hidden from users)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve version (fails early if the tag exists)
+        id: version
+        run: bash .github/scripts/resolve_version.sh "${{ inputs.version }}"
+
+  build:
+    name: Tests and builds
+    needs: check
+    uses: ./.github/workflows/ci.yml
+
+  tag:
+    name: Tag
+    needs: [check, build]
+    permissions:
+      contents: write
+    uses: ./.github/workflows/tag.yml
+    with:
+      version: ${{ needs.check.outputs.version }}
+
+  publish:
+    name: Publish release
+    needs: [check, tag]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.tag.outputs.tag }}
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Package assets
+        run: |
+          mkdir release
+          (cd artifacts/OoT-Randomizer-windows && zip -qr "../../release/OoT-Randomizer-$VERSION-windows-x64.zip" .)
+          cp artifacts/OoT-Randomizer-linux/OoT-Randomizer-linux.tar.gz "release/OoT-Randomizer-$VERSION-linux-x64.tar.gz"
+          (cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cat > notes.md <<EOF
+          ## Downloads
+
+          | System | File |
+          |---|---|
+          | Windows 10/11 x64 | \`OoT-Randomizer-$VERSION-windows-x64.zip\` → extract, then run \`OoT-Randomizer.exe\` |
+          | Linux x64 (glibc ≥ 2.35: Ubuntu 22.04+, Debian 12+…) | \`OoT-Randomizer-$VERSION-linux-x64.tar.gz\` → \`tar xzf\`, then run \`OoT-Randomizer\` |
+
+          Portable applications, no installation or Python needed. They create a \`data/\` folder next to the executable.
+          Checksums: \`SHA256SUMS.txt\`.
+          EOF
+          flags=()
+          [[ "${{ inputs.prerelease }}" == "true" ]] && flags+=(--prerelease)
+          [[ "${{ inputs.draft }}" == "true" ]] && flags+=(--draft)
+          gh release create "$TAG" release/* --verify-tag --title "OoT Randomizer $TAG" \
+            --notes-file notes.md --generate-notes "${flags[@]}"
+          echo "### Release $TAG published" >> "$GITHUB_STEP_SUMMARY"

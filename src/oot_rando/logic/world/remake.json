@@ -1,0 +1,28 @@
+{
+ "description": "Remake layer: where the Nintendo Switch remake differs from the base OoT world. Each rule replaces the base rule of the location; each move puts a location in another region. Found in game or by the audit (python -m oot_rando audit).",
+ "location_rules": {
+  "Links Pocket": {
+   "rule": "Time_Travel",
+   "why": "The base world hands the Link's Pocket reward out at the start; the remake gives it through Rauru only after the first Master Sword pull (11/10: an Ocarina placed there was counted in sphere 0)."
+  },
+  "LW Gift from Saria": {
+   "rule": "Deku_Tree_Clear",
+   "why": "Saria's bridge gift is only proven after the Deku Tree (the only vanilla way out of the forest); with the forest opened early the cutscene trigger is not validated in game."
+  },
+  "LW Near Shortcuts Grotto Chest": {
+   "rule": "is_adult and at('Lost Woods', can_plant_bean)",
+   "why": "The only Lost Woods chest (purple rupee) is not in a grotto: it stands on a ledge of the stick-scrub room that only the adult bean platform of the soil near the bridge reaches (Obj_SmallFarm_A_03 → DestinationAnchor at 2.9 m)."
+  },
+  "Song from Saria": {
+   "rule": "is_child and Zeldas_Letter and at('GC Darunias Chamber', is_child)",
+   "why": "Saria teaches her song during the Fire Stone quest (Challenge Get_StoneOfFire, step SariaMelodyGet), only after Darunia asked for music in his chamber (11/11: Kokiri Sword behind the Skull Kid)."
+  }
+ },
+ "location_regions": {
+  "LW Near Shortcuts Grotto Chest": {
+   "from": "LW Near Shortcuts Grotto",
+   "to": "Lost Woods",
+   "why": "Same chest: on a ledge of the Lost Woods, not in the grotto."
+  }
+ }
+}

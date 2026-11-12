@@ -1,0 +1,898 @@
+{
+ "Bombs (5)": {
+  "type": "Item",
+  "progression": false
+ },
+ "Deku Nuts (5)": {
+  "type": "Item",
+  "progression": false
+ },
+ "Bombchus (10)": {
+  "type": "Item",
+  "progression": true
+ },
+ "Boomerang": {
+  "type": "Item",
+  "progression": true
+ },
+ "Deku Stick (1)": {
+  "type": "Item",
+  "progression": false
+ },
+ "Lens of Truth": {
+  "type": "Item",
+  "progression": true
+ },
+ "Megaton Hammer": {
+  "type": "Item",
+  "progression": true
+ },
+ "Cojiro": {
+  "type": "Item",
+  "progression": true
+ },
+ "Bottle": {
+  "type": "Item",
+  "progression": true
+ },
+ "Bottle with Milk": {
+  "type": "Item",
+  "progression": true
+ },
+ "Rutos Letter": {
+  "type": "Item",
+  "progression": true
+ },
+ "Deliver Letter": {
+  "type": "Item",
+  "progression": true
+ },
+ "Sell Big Poe": {
+  "type": "Item",
+  "progression": true
+ },
+ "Magic Bean": {
+  "type": "Item",
+  "progression": true
+ },
+ "Skull Mask": {
+  "type": "Item",
+  "progression": true
+ },
+ "Spooky Mask": {
+  "type": "Item",
+  "progression": false
+ },
+ "Keaton Mask": {
+  "type": "Item",
+  "progression": false
+ },
+ "Bunny Hood": {
+  "type": "Item",
+  "progression": false
+ },
+ "Mask of Truth": {
+  "type": "Item",
+  "progression": true
+ },
+ "Pocket Egg": {
+  "type": "Item",
+  "progression": true
+ },
+ "Pocket Cucco": {
+  "type": "Item",
+  "progression": true
+ },
+ "Odd Mushroom": {
+  "type": "Item",
+  "progression": true
+ },
+ "Odd Potion": {
+  "type": "Item",
+  "progression": true
+ },
+ "Poachers Saw": {
+  "type": "Item",
+  "progression": true
+ },
+ "Broken Sword": {
+  "type": "Item",
+  "progression": true
+ },
+ "Prescription": {
+  "type": "Item",
+  "progression": true
+ },
+ "Eyeball Frog": {
+  "type": "Item",
+  "progression": true
+ },
+ "Eyedrops": {
+  "type": "Item",
+  "progression": true
+ },
+ "Claim Check": {
+  "type": "Item",
+  "progression": true
+ },
+ "Kokiri Sword": {
+  "type": "Item",
+  "progression": true
+ },
+ "Giants Knife": {
+  "type": "Item",
+  "progression": true
+ },
+ "Deku Shield": {
+  "type": "Item",
+  "progression": false
+ },
+ "Hylian Shield": {
+  "type": "Item",
+  "progression": false
+ },
+ "Mirror Shield": {
+  "type": "Item",
+  "progression": true
+ },
+ "Goron Tunic": {
+  "type": "Item",
+  "progression": true
+ },
+ "Zora Tunic": {
+  "type": "Item",
+  "progression": true
+ },
+ "Iron Boots": {
+  "type": "Item",
+  "progression": true
+ },
+ "Hover Boots": {
+  "type": "Item",
+  "progression": true
+ },
+ "Stone of Agony": {
+  "type": "Item",
+  "progression": true
+ },
+ "Gerudo Membership Card": {
+  "type": "Item",
+  "progression": true
+ },
+ "Heart Container": {
+  "type": "Item",
+  "progression": true
+ },
+ "Piece of Heart": {
+  "type": "Item",
+  "progression": true
+ },
+ "Boss Key": {
+  "type": "BossKey",
+  "progression": true
+ },
+ "Compass": {
+  "type": "Compass",
+  "progression": false
+ },
+ "Map": {
+  "type": "Map",
+  "progression": false
+ },
+ "Small Key": {
+  "type": "SmallKey",
+  "progression": true
+ },
+ "Weird Egg": {
+  "type": "Item",
+  "progression": true
+ },
+ "Recovery Heart": {
+  "type": "Item",
+  "progression": false
+ },
+ "Arrows (5)": {
+  "type": "Item",
+  "progression": false
+ },
+ "Arrows (10)": {
+  "type": "Item",
+  "progression": false
+ },
+ "Arrows (30)": {
+  "type": "Item",
+  "progression": false
+ },
+ "Rupee (1)": {
+  "type": "Item",
+  "progression": false
+ },
+ "Rupees (5)": {
+  "type": "Item",
+  "progression": false
+ },
+ "Rupees (20)": {
+  "type": "Item",
+  "progression": false
+ },
+ "Milk": {
+  "type": "Item",
+  "progression": false
+ },
+ "Goron Mask": {
+  "type": "Item",
+  "progression": false
+ },
+ "Zora Mask": {
+  "type": "Item",
+  "progression": false
+ },
+ "Gerudo Mask": {
+  "type": "Item",
+  "progression": false
+ },
+ "Rupees (50)": {
+  "type": "Item",
+  "progression": false
+ },
+ "Rupees (200)": {
+  "type": "Item",
+  "progression": false
+ },
+ "Biggoron Sword": {
+  "type": "Item",
+  "progression": true
+ },
+ "Fire Arrows": {
+  "type": "Item",
+  "progression": true
+ },
+ "Ice Arrows": {
+  "type": "Item",
+  "progression": true
+ },
+ "Light Arrows": {
+  "type": "Item",
+  "progression": true
+ },
+ "Gold Skulltula Token": {
+  "type": "Token",
+  "progression": true
+ },
+ "Dins Fire": {
+  "type": "Item",
+  "progression": true
+ },
+ "Nayrus Love": {
+  "type": "Item",
+  "progression": true
+ },
+ "Farores Wind": {
+  "type": "Item",
+  "progression": true
+ },
+ "Deku Nuts (10)": {
+  "type": "Item",
+  "progression": false
+ },
+ "Bombs (10)": {
+  "type": "Item",
+  "progression": false
+ },
+ "Bombs (20)": {
+  "type": "Item",
+  "progression": false
+ },
+ "Deku Seeds (30)": {
+  "type": "Item",
+  "progression": false
+ },
+ "Bombchus (5)": {
+  "type": "Item",
+  "progression": true
+ },
+ "Bombchus (20)": {
+  "type": "Item",
+  "progression": true
+ },
+ "Rupee (Treasure Chest Game)": {
+  "type": "Item",
+  "progression": false
+ },
+ "Piece of Heart (Treasure Chest Game)": {
+  "type": "Item",
+  "progression": true
+ },
+ "Ice Trap": {
+  "type": "Item",
+  "progression": false
+ },
+ "Progressive Hookshot": {
+  "type": "Item",
+  "progression": true
+ },
+ "Progressive Strength Upgrade": {
+  "type": "Item",
+  "progression": true
+ },
+ "Bomb Bag": {
+  "type": "Item",
+  "progression": true
+ },
+ "Bow": {
+  "type": "Item",
+  "progression": true
+ },
+ "Slingshot": {
+  "type": "Item",
+  "progression": true
+ },
+ "Progressive Wallet": {
+  "type": "Item",
+  "progression": true
+ },
+ "Progressive Scale": {
+  "type": "Item",
+  "progression": true
+ },
+ "Deku Nut Capacity": {
+  "type": "Item",
+  "progression": false
+ },
+ "Deku Stick Capacity": {
+  "type": "Item",
+  "progression": false
+ },
+ "Bombchus": {
+  "type": "Item",
+  "progression": true
+ },
+ "Magic Meter": {
+  "type": "Item",
+  "progression": true
+ },
+ "Ocarina": {
+  "type": "Item",
+  "progression": true
+ },
+ "Bottle with Red Potion": {
+  "type": "Item",
+  "progression": true
+ },
+ "Bottle with Green Potion": {
+  "type": "Item",
+  "progression": true
+ },
+ "Bottle with Blue Potion": {
+  "type": "Item",
+  "progression": true
+ },
+ "Bottle with Fairy": {
+  "type": "Item",
+  "progression": true
+ },
+ "Bottle with Fish": {
+  "type": "Item",
+  "progression": true
+ },
+ "Bottle with Blue Fire": {
+  "type": "Item",
+  "progression": true
+ },
+ "Bottle with Bugs": {
+  "type": "Item",
+  "progression": true
+ },
+ "Bottle with Big Poe": {
+  "type": "Item",
+  "progression": true
+ },
+ "Bottle with Poe": {
+  "type": "Item",
+  "progression": true
+ },
+ "Boss Key (Forest Temple)": {
+  "type": "BossKey",
+  "progression": true
+ },
+ "Boss Key (Fire Temple)": {
+  "type": "BossKey",
+  "progression": true
+ },
+ "Boss Key (Water Temple)": {
+  "type": "BossKey",
+  "progression": true
+ },
+ "Boss Key (Spirit Temple)": {
+  "type": "BossKey",
+  "progression": true
+ },
+ "Boss Key (Shadow Temple)": {
+  "type": "BossKey",
+  "progression": true
+ },
+ "Boss Key (Ganons Castle)": {
+  "type": "GanonBossKey",
+  "progression": true
+ },
+ "Compass (Deku Tree)": {
+  "type": "Compass",
+  "progression": false
+ },
+ "Compass (Dodongos Cavern)": {
+  "type": "Compass",
+  "progression": false
+ },
+ "Compass (Jabu Jabus Belly)": {
+  "type": "Compass",
+  "progression": false
+ },
+ "Compass (Forest Temple)": {
+  "type": "Compass",
+  "progression": false
+ },
+ "Compass (Fire Temple)": {
+  "type": "Compass",
+  "progression": false
+ },
+ "Compass (Water Temple)": {
+  "type": "Compass",
+  "progression": false
+ },
+ "Compass (Spirit Temple)": {
+  "type": "Compass",
+  "progression": false
+ },
+ "Compass (Shadow Temple)": {
+  "type": "Compass",
+  "progression": false
+ },
+ "Compass (Bottom of the Well)": {
+  "type": "Compass",
+  "progression": false
+ },
+ "Compass (Ice Cavern)": {
+  "type": "Compass",
+  "progression": false
+ },
+ "Map (Deku Tree)": {
+  "type": "Map",
+  "progression": false
+ },
+ "Map (Dodongos Cavern)": {
+  "type": "Map",
+  "progression": false
+ },
+ "Map (Jabu Jabus Belly)": {
+  "type": "Map",
+  "progression": false
+ },
+ "Map (Forest Temple)": {
+  "type": "Map",
+  "progression": false
+ },
+ "Map (Fire Temple)": {
+  "type": "Map",
+  "progression": false
+ },
+ "Map (Water Temple)": {
+  "type": "Map",
+  "progression": false
+ },
+ "Map (Spirit Temple)": {
+  "type": "Map",
+  "progression": false
+ },
+ "Map (Shadow Temple)": {
+  "type": "Map",
+  "progression": false
+ },
+ "Map (Bottom of the Well)": {
+  "type": "Map",
+  "progression": false
+ },
+ "Map (Ice Cavern)": {
+  "type": "Map",
+  "progression": false
+ },
+ "Small Key (Forest Temple)": {
+  "type": "SmallKey",
+  "progression": true
+ },
+ "Small Key (Fire Temple)": {
+  "type": "SmallKey",
+  "progression": true
+ },
+ "Small Key (Water Temple)": {
+  "type": "SmallKey",
+  "progression": true
+ },
+ "Small Key (Spirit Temple)": {
+  "type": "SmallKey",
+  "progression": true
+ },
+ "Small Key (Shadow Temple)": {
+  "type": "SmallKey",
+  "progression": true
+ },
+ "Small Key (Bottom of the Well)": {
+  "type": "SmallKey",
+  "progression": true
+ },
+ "Small Key (Gerudo Training Ground)": {
+  "type": "SmallKey",
+  "progression": true
+ },
+ "Small Key (Thieves Hideout)": {
+  "type": "HideoutSmallKey",
+  "progression": true
+ },
+ "Small Key (Ganons Castle)": {
+  "type": "SmallKey",
+  "progression": true
+ },
+ "Double Defense": {
+  "type": "Item",
+  "progression": false
+ },
+ "Buy Magic Bean": {
+  "type": "Item",
+  "progression": true
+ },
+ "Magic Bean Pack": {
+  "type": "Item",
+  "progression": true
+ },
+ "Triforce Piece": {
+  "type": "Item",
+  "progression": true
+ },
+ "Zeldas Letter": {
+  "type": "Item",
+  "progression": true
+ },
+ "Time Travel": {
+  "type": "Event",
+  "progression": true
+ },
+ "Scarecrow Song": {
+  "type": "Event",
+  "progression": true
+ },
+ "Triforce": {
+  "type": "Event",
+  "progression": true
+ },
+ "Water Temple Clear": {
+  "type": "Event",
+  "progression": true
+ },
+ "Forest Trial Clear": {
+  "type": "Event",
+  "progression": true
+ },
+ "Fire Trial Clear": {
+  "type": "Event",
+  "progression": true
+ },
+ "Water Trial Clear": {
+  "type": "Event",
+  "progression": true
+ },
+ "Shadow Trial Clear": {
+  "type": "Event",
+  "progression": true
+ },
+ "Spirit Trial Clear": {
+  "type": "Event",
+  "progression": true
+ },
+ "Light Trial Clear": {
+  "type": "Event",
+  "progression": true
+ },
+ "Deku Stick Drop": {
+  "type": "Drop",
+  "progression": true
+ },
+ "Deku Nut Drop": {
+  "type": "Drop",
+  "progression": true
+ },
+ "Blue Fire": {
+  "type": "Drop",
+  "progression": true
+ },
+ "Fairy": {
+  "type": "Drop",
+  "progression": true
+ },
+ "Fish": {
+  "type": "Drop",
+  "progression": true
+ },
+ "Bugs": {
+  "type": "Drop",
+  "progression": true
+ },
+ "Big Poe": {
+  "type": "Drop",
+  "progression": true
+ },
+ "Bombchu Drop": {
+  "type": "Drop",
+  "progression": true
+ },
+ "Deku Shield Drop": {
+  "type": "Drop",
+  "progression": true
+ },
+ "Arrows": {
+  "type": "Refill",
+  "progression": false
+ },
+ "Bombs": {
+  "type": "Refill",
+  "progression": false
+ },
+ "Deku Seeds": {
+  "type": "Refill",
+  "progression": false
+ },
+ "Deku Sticks": {
+  "type": "Refill",
+  "progression": false
+ },
+ "Deku Nuts": {
+  "type": "Refill",
+  "progression": false
+ },
+ "Rupees": {
+  "type": "Refill",
+  "progression": false
+ },
+ "Minuet of Forest": {
+  "type": "Song",
+  "progression": true
+ },
+ "Bolero of Fire": {
+  "type": "Song",
+  "progression": true
+ },
+ "Serenade of Water": {
+  "type": "Song",
+  "progression": true
+ },
+ "Requiem of Spirit": {
+  "type": "Song",
+  "progression": true
+ },
+ "Nocturne of Shadow": {
+  "type": "Song",
+  "progression": true
+ },
+ "Prelude of Light": {
+  "type": "Song",
+  "progression": true
+ },
+ "Zeldas Lullaby": {
+  "type": "Song",
+  "progression": true
+ },
+ "Eponas Song": {
+  "type": "Song",
+  "progression": true
+ },
+ "Sarias Song": {
+  "type": "Song",
+  "progression": true
+ },
+ "Suns Song": {
+  "type": "Song",
+  "progression": true
+ },
+ "Song of Time": {
+  "type": "Song",
+  "progression": true
+ },
+ "Song of Storms": {
+  "type": "Song",
+  "progression": true
+ },
+ "Small Key Ring (Forest Temple)": {
+  "type": "SmallKey",
+  "progression": true
+ },
+ "Small Key Ring (Fire Temple)": {
+  "type": "SmallKey",
+  "progression": true
+ },
+ "Small Key Ring (Water Temple)": {
+  "type": "SmallKey",
+  "progression": true
+ },
+ "Small Key Ring (Spirit Temple)": {
+  "type": "SmallKey",
+  "progression": true
+ },
+ "Small Key Ring (Shadow Temple)": {
+  "type": "SmallKey",
+  "progression": true
+ },
+ "Small Key Ring (Bottom of the Well)": {
+  "type": "SmallKey",
+  "progression": true
+ },
+ "Small Key Ring (Gerudo Training Ground)": {
+  "type": "SmallKey",
+  "progression": true
+ },
+ "Small Key Ring (Thieves Hideout)": {
+  "type": "HideoutSmallKey",
+  "progression": true
+ },
+ "Small Key Ring (Ganons Castle)": {
+  "type": "SmallKey",
+  "progression": true
+ },
+ "Buy Deku Nut (5)": {
+  "type": "Shop",
+  "progression": true
+ },
+ "Buy Arrows (30)": {
+  "type": "Shop",
+  "progression": false
+ },
+ "Buy Arrows (50)": {
+  "type": "Shop",
+  "progression": false
+ },
+ "Buy Bombs (5) for 25 Rupees": {
+  "type": "Shop",
+  "progression": false
+ },
+ "Buy Deku Nut (10)": {
+  "type": "Shop",
+  "progression": true
+ },
+ "Buy Deku Stick (1)": {
+  "type": "Shop",
+  "progression": true
+ },
+ "Buy Bombs (10)": {
+  "type": "Shop",
+  "progression": false
+ },
+ "Buy Fish": {
+  "type": "Shop",
+  "progression": true
+ },
+ "Buy Red Potion for 30 Rupees": {
+  "type": "Shop",
+  "progression": false
+ },
+ "Buy Green Potion": {
+  "type": "Shop",
+  "progression": false
+ },
+ "Buy Blue Potion": {
+  "type": "Shop",
+  "progression": false
+ },
+ "Buy Hylian Shield": {
+  "type": "Shop",
+  "progression": true
+ },
+ "Buy Deku Shield": {
+  "type": "Shop",
+  "progression": true
+ },
+ "Buy Goron Tunic": {
+  "type": "Shop",
+  "progression": true
+ },
+ "Buy Zora Tunic": {
+  "type": "Shop",
+  "progression": true
+ },
+ "Buy Heart": {
+  "type": "Shop",
+  "progression": false
+ },
+ "Buy Bombchu (10)": {
+  "type": "Shop",
+  "progression": true
+ },
+ "Buy Bombchu (20)": {
+  "type": "Shop",
+  "progression": true
+ },
+ "Buy Bombchu (5)": {
+  "type": "Shop",
+  "progression": true
+ },
+ "Buy Deku Seeds (30)": {
+  "type": "Shop",
+  "progression": false
+ },
+ "Sold Out": {
+  "type": "Shop",
+  "progression": false
+ },
+ "Buy Blue Fire": {
+  "type": "Shop",
+  "progression": true
+ },
+ "Buy Bottle Bug": {
+  "type": "Shop",
+  "progression": true
+ },
+ "Buy Poe": {
+  "type": "Shop",
+  "progression": false
+ },
+ "Buy Fairy's Spirit": {
+  "type": "Shop",
+  "progression": true
+ },
+ "Buy Arrows (10)": {
+  "type": "Shop",
+  "progression": false
+ },
+ "Buy Bombs (20)": {
+  "type": "Shop",
+  "progression": false
+ },
+ "Buy Bombs (30)": {
+  "type": "Shop",
+  "progression": false
+ },
+ "Buy Bombs (5) for 35 Rupees": {
+  "type": "Shop",
+  "progression": false
+ },
+ "Buy Red Potion for 40 Rupees": {
+  "type": "Shop",
+  "progression": false
+ },
+ "Buy Red Potion for 50 Rupees": {
+  "type": "Shop",
+  "progression": false
+ },
+ "Kokiri Emerald": {
+  "type": "DungeonReward",
+  "progression": true
+ },
+ "Goron Ruby": {
+  "type": "DungeonReward",
+  "progression": true
+ },
+ "Zora Sapphire": {
+  "type": "DungeonReward",
+  "progression": true
+ },
+ "Forest Medallion": {
+  "type": "DungeonReward",
+  "progression": true
+ },
+ "Fire Medallion": {
+  "type": "DungeonReward",
+  "progression": true
+ },
+ "Water Medallion": {
+  "type": "DungeonReward",
+  "progression": true
+ },
+ "Spirit Medallion": {
+  "type": "DungeonReward",
+  "progression": true
+ },
+ "Shadow Medallion": {
+  "type": "DungeonReward",
+  "progression": true
+ },
+ "Light Medallion": {
+  "type": "DungeonReward",
+  "progression": true
+ }
+}

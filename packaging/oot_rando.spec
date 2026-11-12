@@ -1,0 +1,40 @@
+# PyInstaller spec: one portable executable (Windows .exe or Linux binary).
+# Build with packaging/build_windows.cmd or packaging/build_linux.sh.
+import sys
+from pathlib import Path
+
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+
+ROOT = Path(SPECPATH).resolve().parent
+SRC = ROOT / 'src'
+PKG = SRC / 'oot_rando'
+
+datas = [
+    (str(PKG / 'logic' / 'world'), 'oot_rando/logic/world'),
+    # Run by the external Python of HookshotBuilder to extract icons (by path).
+    (str(PKG / 'tracker' / 'icon_extract.py'), 'oot_rando/tracker'),
+    (str(ROOT / 'README.md'), '.'),
+]
+datas += collect_data_files('ainb')
+hiddenimports = collect_submodules('oot_rando') + collect_submodules('ainb') + collect_submodules('evfl')
+
+a = Analysis(
+    [str(ROOT / 'packaging' / 'launcher.py')],
+    pathex=[str(SRC)],
+    datas=datas,
+    hiddenimports=hiddenimports + ['yaml'],
+    excludes=['pytest', 'numpy', 'matplotlib'],
+    noarchive=False,
+)
+pyz = PYZ(a.pure)
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.datas,
+    [],
+    name='OoT-Randomizer',
+    console=False,          # graphical application; the CLI stays available from the sources
+    upx=False,
+    strip=False,
+)

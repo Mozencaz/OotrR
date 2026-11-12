@@ -1,0 +1,41 @@
+{
+ "description": "Base layer imported from the Archipelago OoT world (MIT), see LICENSE-archipelago-oot.txt.",
+ "archipelago_world_version": "7.0.0",
+ "region_files": [
+  "Overworld.json",
+  "Bosses.json",
+  "Deku Tree.json",
+  "Dodongos Cavern.json",
+  "Jabu Jabus Belly.json",
+  "Forest Temple.json",
+  "Fire Temple.json",
+  "Water Temple.json",
+  "Shadow Temple.json",
+  "Spirit Temple.json",
+  "Bottom of the Well.json",
+  "Ice Cavern.json",
+  "Gerudo Training Ground.json",
+  "Ganons Castle.json"
+ ],
+ "sources_sha256": {
+  "Items.pyc": "d6ed0481a56127a7f00fca3a6cb178e7ebd355ec835746286d54492c4f676263",
+  "LICENSE": "bdaa7a4ce33d3a59f4d375c0e1ff440cee56d8a7be457b4c1b7da58e205ec1c2",
+  "LocationList.pyc": "3cdd66c6820bbe7a621e36ba873aea5887c3996b702c6d9c121b4901042b237a",
+  "archipelago.json": "65762ddb549ee41696f1cdb1f9045c496c7b50b709ddb39d90d126ea91eecc12",
+  "data/LogicHelpers.json": "f9528269f404b34c4553a79b4ee2b2277eb23ab7708e1c750d729b7d3d322431",
+  "data/World/Bosses.json": "2913b57eeaeca61ae7b7034021f736c598fe8945f22a128c51ce187f698aed11",
+  "data/World/Bottom of the Well.json": "301e7d7cff7db8409342168ff50a46f331d8f07077333a7c3960ebcf16446738",
+  "data/World/Deku Tree.json": "3fb75e7ce6328bcb6d0c9866348f005ede4056c5fdbaa3c57f912c2432466782",
+  "data/World/Dodongos Cavern.json": "5023419f041d38a1bc04d73e91efb8b1d778560f30963538da9aab27d5541f62",
+  "data/World/Fire Temple.json": "951423e699a6569aff7592de29288055b57f87398778cc6d96e5ae1424bf6e08",
+  "data/World/Forest Temple.json": "ccb0301f0d925079bdc08ec203e50b0a005b69e5993951b0cf7fb5462b3ef05c",
+  "data/World/Ganons Castle.json": "fb1d517cc912ec6fff99c6d870afb9368394a60b782fffe34607cbdeb66a4c0c",
+  "data/World/Gerudo Training Ground.json": "0e8d10ac53a5df125dd1237ee5a7aa7cfd919f31a6c0d1f0d9aa8c3f582a70b4",
+  "data/World/Ice Cavern.json": "a2d19cb601e815bd2fa339007fe6e9f64fee048cb912ed2232c9a5ec738dfc8c",
+  "data/World/Jabu Jabus Belly.json": "411996bd77bf50b4528e59f60aa5976d3cc487418b41bd8cd9640d12a4f2dc7f",
+  "data/World/Overworld.json": "7250ff98b36b13dfca2407e7bcb04f111c5015a2ced4c11122c6b447a39c3b13",
+  "data/World/Shadow Temple.json": "148152e55eb3f81082108cf8a1bfa08c9a40d586db72371ea661257f08a89be9",
+  "data/World/Spirit Temple.json": "2175fe46745c96a0c476dfb8fd9755c36ddb4cc5bbc42235a377034900138408",
+  "data/World/Water Temple.json": "f1be8b9bb3ab3bd8f628d16be227e00ec4ff59367e8964eb7b968f54da493a79"
+ }
+}

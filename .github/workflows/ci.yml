@@ -1,0 +1,100 @@
+# Tests + portable builds (Windows and Linux) on every branch.
+# Also called by release.yml, which publishes the builds produced here.
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Called from release.yml, github.workflow is 'Release': never cancel a release build.
+  cancel-in-progress: ${{ github.workflow == 'CI' }}
+
+env:
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  tests:
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install Tk runtime (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libtk8.6
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt PyYAML
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+
+  build-windows:
+    name: Build Windows
+    needs: tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Build (PyInstaller)
+        shell: cmd
+        run: packaging\build_windows.cmd
+      - name: Selftest of the executable
+        shell: pwsh
+        run: |
+          $exe = 'dist\OoT-Randomizer-windows\OoT-Randomizer.exe'
+          # Windowed executable: wait for it explicitly, the report goes to data\selftest.json.
+          $p = Start-Process -FilePath $exe -ArgumentList 'selftest' -Wait -PassThru
+          Get-Content 'dist\OoT-Randomizer-windows\data\selftest.json'
+          if ($p.ExitCode -ne 0) { throw "selftest failed ($($p.ExitCode))" }
+          Remove-Item -Recurse -Force 'dist\OoT-Randomizer-windows\data'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OoT-Randomizer-windows
+          path: dist/OoT-Randomizer-windows/
+          if-no-files-found: error
+          retention-days: 14
+
+  build-linux:
+    name: Build Linux
+    needs: tests
+    # Oldest supported runner: the binary needs glibc >= 2.35 (Ubuntu 22.04, Debian 12...).
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install Tk runtime and binutils
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libtk8.6 binutils
+      - name: Build (PyInstaller)
+        run: bash packaging/build_linux.sh
+      - name: Selftest of the executable
+        run: |
+          dist/OoT-Randomizer-linux/OoT-Randomizer selftest
+          rm -rf dist/OoT-Randomizer-linux/data
+      # tar keeps the executable bit (artifact zips do not).
+      - name: Pack
+        run: tar -C dist -czf OoT-Randomizer-linux.tar.gz OoT-Randomizer-linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OoT-Randomizer-linux
+          path: OoT-Randomizer-linux.tar.gz
+          if-no-files-found: error
+          retention-days: 14
