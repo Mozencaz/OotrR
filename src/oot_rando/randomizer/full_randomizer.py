@@ -21,6 +21,47 @@ FILLER_PRIORITY = ('Rupee (1)', 'Rupees (5)', 'Deku Nuts (5)', 'Deku Stick (1)',
                    'Remake: Scrub Seed', 'Rupees (50)', 'Remake: Magic Jar', 'Rupees (200)')
 MAX_ATTEMPTS = int(__import__("os").environ.get("OOT_MAX_ATTEMPTS", "300"))
 SHOP_FILLER = 'Rupees (5)'
+POOL_FILLER = 'Rupees (5)'
+EMPTY_BOTTLES = ('Bottle', 'Bottle with Milk')
+HEARTS = ('Heart Container', 'Piece of Heart')
+# Never needed to finish the game: removed by the minimal item pool.
+MINIMAL_REMOVED = HEARTS + ('Double Defense', 'Deku Nut Capacity', 'Deku Stick Capacity')
+
+
+def apply_item_pool(pool, value, relevant, never_extra=()):
+    """OoTR-style item pool on the shuffled locations (their number never changes).
+
+    * plentiful: one extra copy of each major non-progressive item, replacing filler;
+    * scarce: at most 3 empty bottles, half the hearts;
+    * minimal: one empty bottle, no hearts, no double defense or capacity upgrades.
+    Removed copies become rupees.
+    """
+    pool = list(pool)
+    if value == 'plentiful':
+        for item in sorted(set(i for i in pool if i in relevant and i not in PROGRESSIVE and i not in never_extra)):
+            fillers = [i for i in pool if i in FILLER_PRIORITY]
+            if not fillers:
+                break
+            pool.remove(min(fillers, key=FILLER_PRIORITY.index))
+            pool.append(item)
+        return pool
+
+    def keep_at_most(items, limit):
+        held = 0
+        for index, item in enumerate(pool):
+            if item in items:
+                held += 1
+                if held > limit:
+                    pool[index] = POOL_FILLER
+
+    if value == 'scarce':
+        keep_at_most(EMPTY_BOTTLES, 3)
+        for heart in HEARTS:
+            keep_at_most((heart,), pool.count(heart) // 2)
+    elif value == 'minimal':
+        keep_at_most(EMPTY_BOTTLES, 1)
+        keep_at_most(MINIMAL_REMOVED, 0)
+    return pool
 # Junk reasons that still allow a source to receive filler.
 SAFE_JUNK = ('no_reliable_ap_match', 'remake_only_area')
 
@@ -86,7 +127,8 @@ def ap_settings(options, open_forest):
     values = {name: options[name] for name in ('open_kakariko', 'open_door_of_time', 'zora_fountain',
                                                'gerudo_fortress', 'starting_age', 'bridge', 'trials',
                                                'shuffle_ganon_bosskey', 'big_poe_count', 'chicken_count',
-                                               'free_scarecrow', 'shuffle_child_trade', 'logic_rules')}
+                                               'free_scarecrow', 'shuffle_child_trade', 'logic_rules',
+                                               'logic_no_night_tokens_without_suns_song')}
     values['open_forest'] = 'closed_deku' if open_forest else 'closed'
     values['keysanity'] = False
     return values
@@ -175,6 +217,10 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
     # A ring counts as every small key of its dungeon (logic.bundles).
     logic.bundles.update({ring_item(f): (small_key_item(f), RING_DUNGEONS[f]) for f in ring_folders})
     relevant |= set(ring_keys.values())
+    # "Removed" keys: every key is held from the start (start_dungeon_values), the
+    # key chests hold filler instead.
+    from oot_rando.patching.key_adapter import start_logic_items
+    removed_keys = start_logic_items(options)
 
     def in_scope(entry):
         item = entry['vanilla']
@@ -185,13 +231,13 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
         if item in ring_keys:
             return True       # the ring replaces every small key of the dungeon
         if item.startswith('Small Key ('):
-            return item in key_dungeons
+            return item in key_dungeons or item in removed_keys
         if item in boss_keys:
             return True
         if item.startswith('Boss Key ('):
-            return item in key_dungeons and 'Ganons Castle' not in item
+            return (item in key_dungeons or item in removed_keys) and 'Ganons Castle' not in item
         if is_mapcompass(item):
-            return options['shuffle_mapcompass'] in ('dungeon', 'remove')
+            return options['shuffle_mapcompass'] in ('dungeon', 'remove', 'startwith')
         if item == 'Kokiri Sword':
             return options['shuffle_kokiri_sword']
         if item.startswith('Remake: '):
@@ -291,7 +337,9 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
     pool = []
     for gid, entry in shuffled.items():
         item = entry['vanilla']
-        if is_mapcompass(item) and options['shuffle_mapcompass'] == 'remove':
+        if is_mapcompass(item) and options['shuffle_mapcompass'] in ('remove', 'startwith'):
+            item = 'Rupees (5)'
+        if item in removed_keys:
             item = 'Rupees (5)'
         if entry['source'] == 'shop':
             item = SHOP_FILLER  # the displaced purchase stays sold in other slots
@@ -311,6 +359,18 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
         victim = min(fillers, key=lambda i: FILLER_PRIORITY.index(i) if i in FILLER_PRIORITY else 99)
         pool.remove(victim)
         pool.append(soul)
+    pool = apply_item_pool(pool, options['item_pool_value'], relevant,
+                           never_extra=set(ring_keys.values()) | set(souls['items']))
+    # Starting inventory: each copy found in the pool is taken out of it (OoTR /
+    # AP start_inventory_from_pool); progressive copies take the lowest tiers.
+    start_items = []
+    from_pool = Counter()
+    for item, count in sorted(options['start_inventory_from_pool'].items()):
+        for _ in range(count):
+            start_items.append(item)
+            if item in pool:
+                pool[pool.index(item)] = POOL_FILLER
+                from_pool[item] += 1
     logic_locations = sorted(g for g in shuffled if vname(g) in logic.virtual)
     restricted_dungeon = {}   # item -> (zone rule, dungeon)
     for item in set(pool):
@@ -328,7 +388,14 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
     if len(progression) > len(logic_locations):
         raise FillError(f'{len(progression)} progression items for {len(logic_locations)} chests in logic: '
                         'enable zone matching or reduce the options.')
-    family_tiers = tier_layout(matches, shuffled, pool)
+    start_family = Counter(i for i in start_items if i in PROGRESSIVE)
+    family_tiers = tier_layout(matches, shuffled, pool, start_family)
+    for family, count in start_family.items():
+        if family_tiers.get(family) is None:
+            raise FillError(f'Too many {family} (starting items included).')
+    start_actors = starting_actors(start_items, family_tiers)
+    # Tiers left for the copies placed in the world.
+    placed_tiers = {f: (None if t is None else t[start_family[f]:]) for f, t in family_tiers.items()}
     folder_dungeon = {gid: _dungeon_name(e['folder']) for gid, e in shuffled.items()}
 
     canonical_cache = {}
@@ -351,8 +418,9 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
 
     # OoTR/AP vanilla-key compensation: with vanilla Fire Temple keys the logic
     # starts with one extra key (the vanilla layout expects the hammer door order).
-    starting = Counter()
-    if 'Small Key (Fire Temple)' not in key_dungeons and 'Small Key (Fire Temple)' not in ring_keys:
+    starting = Counter(removed_keys) + Counter(start_items)
+    if ('Small Key (Fire Temple)' not in key_dungeons and 'Small Key (Fire Temple)' not in ring_keys
+            and 'Small Key (Fire Temple)' not in removed_keys):
         starting['Small Key (Fire Temple)'] += 1
 
     def sweep(placed, counts=None):
@@ -370,6 +438,7 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
         pool=pool, relevant=relevant, progression=progression, logic_locations=logic_locations,
         restricted_dungeon=restricted_dungeon, allowed=allowed, sweep=sweep, base=base, souls=souls,
         unmatched_ap=unmatched_ap, family_tiers=family_tiers, starting=starting, report=report,
+        placed_tiers=placed_tiers, start_items=start_items, start_actors=start_actors,
         is_key=is_key, is_mapcompass=is_mapcompass)
 
 
@@ -383,7 +452,7 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
     options, logic, matches, shuffled, pool = c.options, c.logic, c.matches, c.shuffled, c.pool
     relevant, progression, logic_locations = c.relevant, c.progression, c.logic_locations
     restricted_dungeon, allowed, sweep, base, souls = c.restricted_dungeon, c.allowed, c.sweep, c.base, c.souls
-    unmatched_ap, family_tiers, report = c.unmatched_ap, c.family_tiers, c.report
+    unmatched_ap, family_tiers, report = c.unmatched_ap, c.placed_tiers, c.report
     rng = DetRandom(hashlib.sha256((seed_key + '\0full-fill-v1').encode()).digest())
     if forced is not None:
         state, collected, spheres = sweep(forced)
@@ -478,8 +547,10 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
             continue
         sphere_of = {loc: index for index, sphere in enumerate(spheres) for loc in sphere}
         report(f'Beatable seed found (attempt {attempt + 1}, {len(spheres)} spheres).')
-        return _result(data, logic, options, matches, shuffled, placed, tiers, sphere_of, spheres, souls,
-                       unmatched_ap, attempt + 1, base)
+        result = _result(data, logic, options, matches, shuffled, placed, tiers, sphere_of, spheres, souls,
+                         unmatched_ap, attempt + 1, base)
+        result['starting'] = [{'item': item, 'actor': actor} for item, actor in zip(c.start_items, c.start_actors)]
+        return result
     raise FillError('No beatable seed in ' + str(MAX_ATTEMPTS) + ' attempts (' + last_error
                     + '). Change the seed or the options.')
 
@@ -487,6 +558,16 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
 # Starting items that cannot be handed over silently at the end of the opening:
 # dungeon items (generic actors, or a key count only applied at the next item get).
 STARTING_UNSUPPORTED = ('Map (', 'Compass (', 'Small Key (', 'Boss Key (', 'Small Key Ring (', 'Remake: ')
+
+
+def covered_by_start_values(item, options):
+    if item.startswith(('Map (', 'Compass (')):
+        return options['shuffle_mapcompass'] == 'startwith'
+    if item.startswith('Small Key ('):
+        return options['shuffle_smallkeys'] == 'remove'
+    if item.startswith('Boss Key (') and 'Ganons Castle' not in item:
+        return options['shuffle_bosskeys'] == 'remove'
+    return False
 
 
 def starting_unsupported(item):
@@ -536,7 +617,9 @@ def plan_assigned(data, options, groups, enemies, seed_key, assigned, open_fores
         if not c.allowed(item, gid):
             raise FillError(f'{item} cannot be placed at {gid}.')
     placed = dict(assigned)
-    starting = list(starting)
+    # Maps, compasses and keys of the "start with" / "removed" modes are written at
+    # the start (key_adapter.start_dungeon_values), not handed over as pouch items.
+    starting = [item for item in starting if not covered_by_start_values(item, c.options)]
     start_actors = starting_actors(starting, c.family_tiers)
     start_counts = Counter(starting)
     state, collected, spheres = c.sweep(placed, start_counts)
@@ -571,7 +654,7 @@ def _sweep_with_requirements(logic, placements, state):
     return logic.sweep(placements, state)
 
 
-def tier_layout(matches, shuffled, pool):
+def tier_layout(matches, shuffled, pool, starting=None):
     """Tiers given by shuffled copies of each progressive family.
 
     Unshuffled sources keep their native behaviour: a chest or a static gift
@@ -581,7 +664,7 @@ def tier_layout(matches, shuffled, pool):
     layout = {}
     covered = {l for gid in shuffled for l in matches[gid]['ap']}
     for family, actors in PROGRESSIVE.items():
-        count = pool.count(family)
+        count = pool.count(family) + (starting or {}).get(family, 0)
         if not count:
             continue
         static = set()

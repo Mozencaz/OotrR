@@ -234,12 +234,19 @@ def verify(nup_path, seed_dir):
                 # Seed bag and quiver given silently at the end of the opening.
                 from oot_rando.randomizer.randomizer_core import starting_pouch_items
                 from oot_rando.patching.event_patch import starting_item_events
-                given = starting_pouch_items({'archipelago': manifest.get('archipelago')})
+                given = starting_pouch_items({'archipelago': manifest.get('archipelago'),
+                                              'starting': manifest.get('starting')})
                 for item, name in zip(given, starting_item_events(given)):
                     before[name] = {'Num': 1, 'IsEquipDIrect': False,
                                                         'IsSetMessageTargetActorName': False,
                                                         'Actor': item, 'IsGetEvent': False}
                     report['starting_items'] = report.get('starting_items', 0) + 1
+                from oot_rando.patching.event_patch import start_value_events
+                from oot_rando.patching.key_adapter import start_dungeon_values
+                values = start_dungeon_values((manifest.get('settings') or {}).get('full') or {})
+                for (key, value), name in zip(sorted(values.items()), start_value_events(values)):
+                    before[name] = {'GameDataName': key, 'Value': value, 'Index': -1}
+                    report['start_values'] = report.get('start_values', 0) + 1
             if before != after:
                 raise ValueError('Event modified outside the spoiler: ' + path)
             continue
