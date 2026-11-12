@@ -5,7 +5,8 @@ under another project name (``Item_Medal_Arch``):
 
 * the glass dome, the fire emblem under it and the glaze of the back
   (shapes ``Glass``, ``Glass_Back``, ``Glaze``) are hidden: their vertices are
-  collapsed to one point, so their triangles have no area;
+  collapsed to one point, so their triangles have no area; so are the pieces
+  of the golden flame in relief on the base (``Medal_Base``, every LOD);
 * the six textures of the base (``Mt_Item_Medal_Fire_*``) are renamed to
   ``Mt_Item_Medal_Arch_*`` (same length: no offset moves) and replaced.
 
@@ -37,6 +38,9 @@ MODEL_INFO = {'FmdbName': 'Item_Medal_Fire', 'ModelProjectName': PROJECT}
 NEW_MODEL_FILE = f'Model/{PROJECT}.Item_Medal_Fire.bfres.zs'
 OLD_TEX, NEW_TEX = 'Mt_Item_Medal_Fire', 'Mt_Item_Medal_Arch'
 HIDDEN_SHAPES = ('Glass_Back__Mt_Medal_Glass_Back', 'Glass__Mt_Medal_Glass', 'Glaze__Mt_Medal_Glaze')
+# The golden flame in relief: separate pieces of the base standing on its front
+# face (shape, plane of the face, radius of the face).
+RELIEF = ('Medal_Base__Mt_Item_Medal_Fire', 0.0095, 0.105)
 # Texture suffix -> source BNTX (same size and name length as the medallion's own).
 SOURCES = {'Alb': 'Tex/Mt_Upper_Enemy_Poe_Alb.bntx.zs'}
 REPLACED = ('Alb', 'AO', 'Emc', 'Mtl', 'Nrm', 'Rgh')
@@ -298,13 +302,12 @@ def metal_block(x0, y0, width, height, scale):
 
 
 # ------------------------------------------------------------------ BFRES
-def hide_shapes(model, names=HIDDEN_SHAPES):
-    """Collapse every vertex of the named shapes to the origin (their triangles vanish).
+def _shapes(data):
+    """``{name: shape}`` of a BFRES model: vertex positions (``_p0``, half4) and LOD meshes.
 
-    Positions are read from the vertex buffer of each shape (``_p0``, four half
-    floats); the buffer section is the second one of the relocation table.
+    The buffer section (second one of the relocation table) holds the index
+    buffers first, then the vertex buffers.
     """
-    data = bytearray(model)
     if data[:8] != b'FRES    ':
         raise ValueError('Not a BFRES model.')
     rlt = struct.unpack_from('<I', data, 0x18)[0]
@@ -316,33 +319,103 @@ def hide_shapes(model, names=HIDDEN_SHAPES):
         length = struct.unpack_from('<H', data, offset)[0]
         return bytes(data[offset + 2:offset + 2 + length]).decode('utf-8', 'replace')
 
-    hidden = set()
+    shapes = {}
     at = data.find(b'FSHP')
     while 0 <= at < rlt:
         name = string(struct.unpack_from('<Q', data, at + 8)[0])
-        if name in names:
-            fvtx = struct.unpack_from('<Q', data, at + 0x10)[0]
-            if data[fvtx:fvtx + 4] != b'FVTX' or data[fvtx + 0x4D] != 1:
-                raise ValueError('Unexpected vertex buffer for ' + name)
-            attributes = struct.unpack_from('<Q', data, fvtx + 8)[0]
-            position = None
-            for index in range(data[fvtx + 0x4C]):
-                entry = attributes + index * 16
-                if string(struct.unpack_from('<Q', data, entry)[0]) == '_p0':
-                    position = struct.unpack_from('<HH', data, entry + 8)
-                    offset = struct.unpack_from('<H', data, entry + 12)[0]
-            if position is None or position[0] != 0x1505:
-                raise ValueError('Unexpected position format for ' + name)
-            stride = struct.unpack_from('<I', data, struct.unpack_from('<Q', data, fvtx + 0x38)[0])[0]
-            first = buffers + struct.unpack_from('<I', data, fvtx + 0x48)[0]
-            count = struct.unpack_from('<I', data, fvtx + 0x50)[0]
-            for vertex in range(count):
-                base = first + vertex * stride + offset
-                data[base:base + 6] = bytes(6)            # x, y, z = 0 (w kept)
-            hidden.add(name)
+        fvtx = struct.unpack_from('<Q', data, at + 0x10)[0]
+        if data[fvtx:fvtx + 4] != b'FVTX' or data[fvtx + 0x4D] != 1:
+            raise ValueError('Unexpected vertex buffer for ' + name)
+        attributes = struct.unpack_from('<Q', data, fvtx + 8)[0]
+        position = None
+        for index in range(data[fvtx + 0x4C]):
+            entry = attributes + index * 16
+            if string(struct.unpack_from('<Q', data, entry)[0]) == '_p0':
+                position = struct.unpack_from('<HH', data, entry + 8)
+                offset = struct.unpack_from('<H', data, entry + 12)[0]
+        if position is None or position[0] != 0x1505:
+            raise ValueError('Unexpected position format for ' + name)
+        stride = struct.unpack_from('<I', data, struct.unpack_from('<Q', data, fvtx + 0x38)[0])[0]
+        first = buffers + struct.unpack_from('<I', data, fvtx + 0x48)[0]
+        count = struct.unpack_from('<I', data, fvtx + 0x50)[0]
+        meshes = []
+        mesh_array = struct.unpack_from('<Q', data, at + 0x18)[0]
+        for level in range(data[at + 0x5B]):
+            mesh = mesh_array + level * 0x38
+            start, primitive, kind, total, base = struct.unpack_from('<5I', data, mesh + 0x20)
+            if primitive != 3 or kind != 1:
+                raise ValueError('Unexpected index buffer for ' + name)
+            indices = struct.unpack_from(f'<{total}H', data, buffers + start)
+            if max(indices) + base >= count:
+                raise ValueError('Index out of range for ' + name)
+            meshes.append([index + base for index in indices])
+        shapes[name] = {'positions': [first + v * stride + offset for v in range(count)], 'meshes': meshes}
         at = data.find(b'FSHP', at + 4)
-    if hidden != set(names):
-        raise ValueError('Shapes not found in the model: ' + ', '.join(sorted(set(names) - hidden)))
+    return shapes
+
+
+def hide_shapes(model, names=HIDDEN_SHAPES):
+    """Collapse every vertex of the named shapes to the origin (their triangles vanish)."""
+    data = bytearray(model)
+    shapes = _shapes(data)
+    missing = set(names) - set(shapes)
+    if missing:
+        raise ValueError('Shapes not found in the model: ' + ', '.join(sorted(missing)))
+    for name in names:
+        for address in shapes[name]['positions']:
+            data[address:address + 6] = bytes(6)          # x, y, z = 0 (w kept)
+    return bytes(data)
+
+
+def relief_islands(model, shape, face, radius):
+    """Vertex sets of the separate pieces of ``shape`` lying in front of the plane
+    ``z = face`` within ``radius`` of the axis (the emblem standing on the disc).
+
+    Pieces are triangles joined by shared indices or by equal positions (split
+    normals and UV seams), over every LOD.
+    """
+    shapes = _shapes(model)
+    if shape not in shapes:
+        raise ValueError('Shape not found in the model: ' + shape)
+    points = [struct.unpack_from('<3e', model, address) for address in shapes[shape]['positions']]
+    parent = list(range(len(points)))
+
+    def root(v):
+        while parent[v] != v:
+            parent[v] = parent[parent[v]]
+            v = parent[v]
+        return v
+
+    def join(a, b):
+        a, b = root(a), root(b)
+        if a != b:
+            parent[a] = b
+
+    for indices in shapes[shape]['meshes']:
+        for t in range(0, len(indices) - 2, 3):
+            join(indices[t], indices[t + 1])
+            join(indices[t], indices[t + 2])
+    seen = {}
+    for vertex, point in enumerate(points):
+        join(vertex, seen.setdefault(point, vertex))
+    pieces = {}
+    for vertex in range(len(points)):
+        pieces.setdefault(root(vertex), []).append(vertex)
+    return [piece for piece in pieces.values()
+            if len(piece) > 3 and all(points[v][2] >= face and points[v][0] ** 2 + points[v][1] ** 2 < radius ** 2
+                                      for v in piece)]
+
+
+def remove_relief(model, relief=RELIEF):
+    """Collapse the emblem pieces standing on the disc to the origin (inside the disc)."""
+    data = bytearray(model)
+    islands = relief_islands(data, *relief)
+    if not islands:
+        raise ValueError('No relief found on ' + relief[0])
+    addresses = _shapes(data)[relief[0]]['positions']
+    for piece in islands:
+        for vertex in piece:
+            data[addresses[vertex]:addresses[vertex] + 6] = bytes(6)
     return bytes(data)
 
 
@@ -369,7 +442,7 @@ def build_model_files(read_raw):
         if not painted:
             raise ValueError(f'Archipelago texture left unchanged: {suffix}')
         files[f'Tex/{NEW_TEX}_{suffix}.bntx.zs'] = (raw, source)
-    model = hide_shapes(read_raw(MODEL_FILE))
+    model = remove_relief(hide_shapes(read_raw(MODEL_FILE)))
     for suffix in REPLACED:
         name = f'{OLD_TEX}_{suffix}'
         if model.count(name.encode()) != 1:

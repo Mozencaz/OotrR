@@ -163,6 +163,18 @@ class WithGame(unittest.TestCase):
         with self.assertRaises(ValueError):
             ap_item.hide_shapes(original, ('Missing__Shape',))
 
+    def test_flame_relief_removed(self):
+        original = self.raw[ap_item.MODEL_FILE]
+        islands = ap_item.relief_islands(original, *ap_item.RELIEF)
+        self.assertEqual(len(islands), 1)                          # one flame, every LOD joined
+        shape = ap_item._shapes(original)[ap_item.RELIEF[0]]
+        levels = [min(indices) for indices in shape['meshes']]
+        self.assertTrue(all(any(v >= low for v in islands[0]) for low in levels))
+        flat = ap_item.remove_relief(original)
+        self.assertEqual(ap_item.relief_islands(flat, *ap_item.RELIEF), [])
+        model = ap_item.build_model_files(self.raw.__getitem__)[ap_item.NEW_MODEL_FILE][0]
+        self.assertEqual(ap_item.relief_islands(model, *ap_item.RELIEF), [])
+
     def test_spin_parts(self):
         files, components, info = ap_item.spin_parts(self.raw.__getitem__)
         self.assertEqual(components['ASRef'], ap_item.SPIN_AS)
