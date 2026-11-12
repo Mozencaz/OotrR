@@ -1,0 +1,215 @@
+"""OoT Remake world for Archipelago.
+
+This file becomes ``oot_remake/__init__.py`` inside the ``.apworld`` built by
+the OoT Randomizer application (``python -m oot_rando apworld``). It is never
+imported by the application itself: it needs Archipelago's modules.
+
+The logic, the item pool and the location list come from the application
+(vendored under ``vendor/``) and from ``catalog.json``, built from the game of
+whoever built the apworld. Generation writes one ``.aprmk`` patch per remake
+player; the application turns it into the RomFS mod.
+"""
+import json
+import logging
+import os
+import pkgutil
+import sys
+from dataclasses import make_dataclass
+
+_VENDOR = os.path.join(os.path.dirname(__file__), 'vendor')
+if _VENDOR not in sys.path:
+    sys.path.insert(0, _VENDOR)
+
+from BaseClasses import Item, ItemClassification, Location, LocationProgressType, Region  # noqa: E402
+from Options import Choice, DefaultOnToggle, OptionError, PerGameCommonOptions, Toggle  # noqa: E402
+from worlds.AutoWorld import World  # noqa: E402
+
+from oot_rando.archipelago import bridge  # noqa: E402
+
+CATALOG = json.loads(pkgutil.get_data(__name__, 'catalog.json').decode('utf-8'))
+SPECS = bridge.ap_option_specs()
+GAME = bridge.GAME
+
+
+def _option_class(spec):
+    name = ''.join(part.title() for part in spec['name'].split('_'))
+    attrs = {'__doc__': spec['help'] or spec['label'], 'display_name': spec['label'], '__module__': __name__}
+    if spec['kind'] == 'bool':
+        return type(name, (DefaultOnToggle if spec['default'] else Toggle,), attrs)
+    for index, value in enumerate(spec['values']):
+        attrs['option_' + bridge.ap_value_name(value)] = index
+    attrs['default'] = spec['values'].index(spec['default'])
+    return type(name, (Choice,), attrs)
+
+
+OPTION_CLASSES = {spec['name']: _option_class(spec) for spec in SPECS}
+for _cls in OPTION_CLASSES.values():
+    globals()[_cls.__name__] = _cls
+RemakeOptions = make_dataclass('RemakeOptions', [(name, cls) for name, cls in OPTION_CLASSES.items()],
+                               bases=(PerGameCommonOptions,))
+RemakeOptions.__module__ = __name__
+
+CLASSIFICATION = {'progression': ItemClassification.progression, 'useful': ItemClassification.useful,
+                  'filler': ItemClassification.filler}
+
+
+class RemakeItem(Item):
+    game = GAME
+
+
+class RemakeLocation(Location):
+    game = GAME
+
+
+class OoTRemakeWorld(World):
+    """Ocarina of Time remake (Hookshot or emulator), glitchless logic of the OoT Randomizer application."""
+
+    game = GAME
+    options_dataclass = RemakeOptions
+    options: RemakeOptions
+    topology_present = False
+    item_name_to_id = bridge.item_ids(CATALOG)
+    location_name_to_id = bridge.location_ids(CATALOG)
+
+    def generate_early(self):
+        values = {}
+        for spec in SPECS:
+            option = getattr(self.options, spec['name'])
+            values[spec['name']] = bool(option.value) if spec['kind'] == 'bool' else spec['values'][option.value]
+        seed_key = f'archipelago|{self.multiworld.seed_name}|{self.player}'
+        try:
+            self.remake = bridge.PlayerWorld(CATALOG, values, seed_key)
+        except ValueError as error:
+            raise OptionError(f'{GAME} ({self.player_name}): {error}') from error
+        # Dungeon-bound keys and progressive tiers are actors of this game: they stay here.
+        self.options.local_items.value |= self.remake.local_only
+
+    def create_regions(self):
+        menu = Region('Menu', self.player, self.multiworld)
+        remake, player = self.remake, self.player
+        for gid in sorted(remake.names):
+            name = remake.names[gid]
+            location = RemakeLocation(player, name, self.location_name_to_id[name], menu)
+            if remake.in_logic[gid]:
+                location.access_rule = lambda state, gid=gid: remake.reachable(gid, state.prog_items[player])
+            else:
+                # Outside the remake logic (no reliable AP match): filler only.
+                location.progress_type = LocationProgressType.EXCLUDED
+            location.item_rule = lambda item, gid=gid: remake.can_hold(
+                gid, item.name if item.player == player and item.game == GAME else None)
+            menu.locations.append(location)
+        self.multiworld.regions.append(menu)
+
+    def create_item(self, name):
+        remake = getattr(self, 'remake', None)
+        kind = remake.classification(name) if remake else (
+            'filler' if name.startswith(bridge.FILLER) else 'progression')
+        return RemakeItem(name, CLASSIFICATION[kind], self.item_name_to_id[name], self.player)
+
+    def create_items(self):
+        for name in self.remake.pool:
+            self.multiworld.itempool.append(self.create_item(name))
+
+    def get_filler_item_name(self):
+        return 'Rupees (5)'
+
+    def set_rules(self):
+        remake, player = self.remake, self.player
+        self.multiworld.completion_condition[player] = lambda state: remake.reach(state.prog_items[player])[1]
+
+    def pre_fill(self):
+        """Dungeon-bound items first, inside their dungeon (like the built-in fill)."""
+        from Fill import FillError, fill_restrictive
+        restricted = [i for i in self.multiworld.itempool
+                      if i.player == self.player and i.name in self.remake.restricted]
+        if not restricted:
+            return
+        for item in restricted:
+            self.multiworld.itempool.remove(item)
+        progression = [i for i in restricted if i.advancement]
+        if progression:
+            locations = self.multiworld.get_unfilled_locations(self.player)
+            self.random.shuffle(locations)
+            state = self.multiworld.get_all_state(False)
+            fill_restrictive(self.multiworld, state, locations, progression, single_player_placement=True,
+                             lock=True, allow_excluded=False, name=f'{GAME} dungeon items')
+        for item in [i for i in restricted if not i.advancement]:
+            free = [loc for loc in self.multiworld.get_unfilled_locations(self.player)
+                    if loc.can_fill(self.multiworld.state, item, False)]
+            if not free:
+                raise FillError(f'{GAME}: no free location for {item.name}.')
+            junk = [loc for loc in free if loc.progress_type == LocationProgressType.EXCLUDED]
+            self.random.choice(junk or free).place_locked_item(item)
+
+    # ------------------------------------------------------------ progressive tiers
+    def _own_items(self):
+        result = {}
+        for gid, name in self.remake.names.items():
+            item = self.multiworld.get_location(name, self.player).item
+            if item and item.player == self.player and item.game == GAME:
+                result[gid] = item.name
+        return result
+
+    def _spheres(self):
+        """gid → sphere of the multiworld playthrough (reachable locations only)."""
+        result = {}
+        for index, sphere in enumerate(self.multiworld.get_spheres()):
+            for location in sphere:
+                if location.player == self.player and location.name in self.remake.gids:
+                    result[self.remake.gids[location.name]] = index
+        return result
+
+    def post_fill(self):
+        """Progressive copies in distinct spheres (their tier actors are fixed, lowest first).
+
+        Like the built-in fill: swap one copy with another item of this world and keep
+        the swap only when every world still fulfils its accessibility.
+        """
+        remake = self.remake
+        for _ in range(200):
+            items = self._own_items()
+            sphere_of = self._spheres()
+            family = remake.tier_conflict(items, sphere_of)
+            if family is None:
+                return
+            sources = [g for g, i in items.items() if i == family]
+            source = self.random.choice(sources)
+            targets = [g for g, i in items.items() if i != family and remake.can_hold(g, family)
+                       and remake.can_hold(source, i)]
+            first = self.multiworld.get_location(remake.names[source], self.player)
+            targets = [g for g in targets if not self.multiworld.get_location(remake.names[g], self.player).locked]
+            if first.locked or not targets:
+                continue
+            second = self.multiworld.get_location(remake.names[self.random.choice(targets)], self.player)
+            first.item, second.item = second.item, first.item
+            first.item.location, second.item.location = first, second
+            if not self.multiworld.fulfills_accessibility():
+                first.item, second.item = second.item, first.item
+                first.item.location, second.item.location = first, second
+        logging.warning(f'{GAME} ({self.player_name}): progressive copies left in a shared sphere.')
+
+    def generate_output(self, output_directory):
+        remake, multiworld = self.remake, self.multiworld
+        sphere_of = self._spheres()
+        placements = {}
+        for gid, name in remake.names.items():
+            item = multiworld.get_location(name, self.player).item
+            own = item.player == self.player and item.game == GAME
+            if not remake.can_hold(gid, item.name if own else None):
+                raise Exception(f'{GAME}: {item.name} cannot be given by {name}.')
+            placements[gid] = {'item': item.name, 'own': own, 'player': multiworld.get_player_name(item.player),
+                               'game': item.game, 'progression': bool(item.advancement),
+                               'sphere': sphere_of.get(gid)}
+        remote = [{'item': loc.item.name, 'location': loc.name, 'player': multiworld.get_player_name(loc.player)}
+                  for loc in multiworld.get_locations()
+                  if loc.item and loc.address is not None and loc.item.player == self.player
+                  and loc.player != self.player]
+        precollected = [item.name for item in multiworld.precollected_items[self.player]]
+        patch = remake.patch(placements, remote, multiworld.seed_name, self.player_name, self.player,
+                             CATALOG['game_build'], precollected)
+        path = os.path.join(output_directory, multiworld.get_out_file_name_base(self.player) + bridge.PATCH_SUFFIX)
+        with open(path, 'w', encoding='utf-8') as handle:
+            json.dump(patch, handle, ensure_ascii=False, indent=1)
+
+    def fill_slot_data(self):
+        return {'patch_version': bridge.PATCH_VERSION, 'scan': CATALOG['scan'], 'seed_key': self.remake.seed_key}

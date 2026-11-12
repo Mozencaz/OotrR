@@ -303,6 +303,34 @@ def verify(nup_path, seed_dir):
     plan = full_randomizer.replay(data, manifest['settings']['full'], groups, enemies,
                                   {p['id']: p['ap_item'] for p in full}, manifest['settings']['open_forest'],
                                   extra=extra)
+    multiworld = manifest.get('archipelago')
+    warnings = []
+    if multiworld is not None:
+        # Placed by Archipelago: victory may need items of other worlds (checked by
+        # Archipelago); the tier order follows the multiworld playthrough.
+        order = multiworld.get('spheres') or {}
+        if manifest['settings']['full'].get('progressive_order', True):
+            for family, actors in PROGRESSIVE.items():
+                spheres = {}
+                for p in full:
+                    if p['ap_item'] == family:
+                        reward_actor = p.get('reward_actor', p['actor'])
+                        base = next((a for a in actors if reward_actor in (a, 'Obj_Rando_' + a, 'Shop_Rando_' + a)),
+                                    None)
+                        spheres[base] = order.get(p['id'])
+                ordered = [spheres[a] for a in actors if a in spheres]
+                pairs = list(zip(ordered, ordered[1:]))
+                if any(x is not None and y is not None and x > y for x, y in pairs):
+                    raise ValueError(f'Level order not respected for {family}: {spheres}')
+                if any(x is None or y is None or x == y for x, y in pairs):
+                    warnings.append(f'{family}: levels in the same multiworld sphere {spheres}')
+        report.update(souls=len(soul_actors), derived=len(derived), beatable='checked by Archipelago',
+                      spheres=plan['sphere_count'], unreachable_logic_locations=plan['unreachable'],
+                      archipelago={'seed_name': multiworld.get('seed_name'), 'slot_name': multiworld.get('slot_name'),
+                                   'items_in_other_worlds': len(multiworld.get('remote', []))},
+                      warnings=warnings)
+        nup.stream.close()
+        return report
     if not plan['beatable']:
         raise ValueError('Logic replay: victory not reached.')
     if manifest['settings']['full'].get('progressive_order', True):

@@ -7,7 +7,7 @@ import queue
 import secrets
 import threading
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 
 from oot_rando.randomizer.randomizer_core import Settings, CHECKS, GENERATOR_VERSION, generate
 from oot_rando.randomizer.randomizer_services import read_artifact, generate_in_mods, validate_mod_directory
@@ -327,6 +327,17 @@ class Application:
         row.pack(fill='x', pady=(0, 18))
         ttk.Button(row, text='Import a YAML…', command=self.import_ap_yaml).pack(side='left')
         ttk.Button(row, text='Export a YAML…', command=self.export_ap_yaml).pack(side='left', padx=8)
+        ttk.Label(parent, text='Archipelago multiworld', style='Heading.TLabel').pack(anchor='w')
+        ttk.Label(parent, text='Send your multiworld YAML to the host; the host puts the apworld in the '
+                  'custom_worlds folder of Archipelago and generates. Then generate here from your .aprmk patch '
+                  '(in the zip produced by Archipelago). Items of other players show as green rupees; '
+                  'sending and receiving items in game needs the Archipelago client (not available yet).',
+                  style='Muted.TLabel', wraplength=940).pack(anchor='w')
+        row = ttk.Frame(parent)
+        row.pack(fill='x', pady=(4, 18))
+        ttk.Button(row, text='Export my multiworld YAML…', command=self.export_multiworld_yaml).pack(side='left')
+        ttk.Button(row, text='Build the apworld…', command=self.build_apworld).pack(side='left', padx=8)
+        ttk.Button(row, text='Generate from a patch (.aprmk)…', command=self.generate_from_patch).pack(side='left')
         self.build_generate_section(parent)
         for name in {o for opts in rando_options.CATEGORY_OPTIONS.values() for o, _, _ in opts}:
             self.full_vars[name].trace_add('write', lambda *args: self.sync_categories())
@@ -595,6 +606,63 @@ class Application:
             if name:
                 Path(name).write_text(rando_options.to_ap_yaml(values), encoding='utf-8')
                 self.status.set('Archipelago YAML exported.')
+        except Exception as error:
+            self.error(error)
+
+    def export_multiworld_yaml(self):
+        from oot_rando.archipelago import bridge
+        try:
+            if not self.full_enabled.get():
+                raise ValueError('Enable the full randomizer: the multiworld uses its options.')
+            values = self.full_values()
+            player = simpledialog.askstring('Multiworld YAML', 'Your player name in the multiworld (16 characters):',
+                                            parent=self.root)
+            if not player:
+                return
+            text = bridge.player_yaml(values, self.options['open_forest'].get(), player)
+            name = filedialog.asksaveasfilename(defaultextension='.yaml', initialfile=f'{player}.yaml',
+                                                filetypes=[('Archipelago YAML', '*.yaml')])
+            if name:
+                Path(name).write_text(text, encoding='utf-8')
+                self.status.set('Multiworld YAML exported.')
+        except Exception as error:
+            self.error(error)
+
+    def build_apworld(self):
+        from oot_rando.archipelago.apworld_build import build_apworld
+        try:
+            nup = Path(self.nup.get())
+            if not nup.is_file():
+                raise ValueError('Select the local NUP file.')
+            name = filedialog.asksaveasfilename(defaultextension='.apworld', initialfile='oot_remake.apworld',
+                                                filetypes=[('Archipelago world', '*.apworld')])
+            if not name:
+                return
+
+            def done(path):
+                self.status.set('apworld written: ' + str(path))
+                messagebox.showinfo('apworld ready', str(path) + '\n\nCopy it into the custom_worlds folder of '
+                                    'Archipelago on the computer that generates the multiworld.')
+            self.run_job(lambda progress: build_apworld(nup, name, progress), done)
+        except Exception as error:
+            self.error(error)
+
+    def generate_from_patch(self):
+        from oot_rando.archipelago import bridge
+        try:
+            name = filedialog.askopenfilename(filetypes=[('Archipelago patch', '*' + bridge.PATCH_SUFFIX)])
+            if not name:
+                return
+            settings = bridge.settings_from_patch(bridge.load_patch(name)).validate_supported()
+            nup = Path(self.nup.get())
+            if not nup.is_file():
+                raise ValueError('Select the local NUP file.')
+            mods = validate_mod_directory(self.mods.get())
+
+            def job(progress):
+                installed = generate_in_mods(nup, mods, settings, progress, archive=ARCHIVE, generate=generate)
+                return installed, installed
+            self.run_job(job, self.generated_and_installed)
         except Exception as error:
             self.error(error)
 

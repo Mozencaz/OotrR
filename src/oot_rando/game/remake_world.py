@@ -15,7 +15,6 @@ AP OoT location(s) it most plausibly corresponds to:
 import re
 from collections import Counter, defaultdict
 
-from oot_rando.formats.inspect_resources import Byml, decompress
 
 # Remake region folder → AP hint areas (first element of LocationList categories).
 FOLDER_AREAS = {
@@ -270,6 +269,7 @@ def enemy_counter_locks(path, root):
 
 def scan_maps(nup, dictionaries, members, progress=None):
     """Return decoded maps, chest groups and enemy instances (read-only)."""
+    from oot_rando.formats.inspect_resources import Byml, decompress  # zstd: not needed by the logic
     report = progress or (lambda message: None)
     maps, groups, enemies = {}, defaultdict(list), []
     walls = defaultdict(list)  # folder -> (age, position) of destructible walls

@@ -63,6 +63,8 @@ class Settings:
     skip_chest_cutscenes: bool = False
     categories: dict[str, bool] = field(default_factory=lambda: dict.fromkeys(CATEGORIES, False))
     full: dict | None = None
+    # Archipelago patch (``.aprmk`` content): the placements come from a multiworld.
+    archipelago: dict | None = None
 
     def validate(self):
         if not isinstance(self.seed, str) or not self.seed.strip() or len(self.seed) > 256:
@@ -90,6 +92,13 @@ class Settings:
             if overlap:
                 raise ValueError('These categories are already shuffled as checks by the full randomizer: '
                                  + ', '.join(overlap) + '. Untick the matching cosmetic category.')
+        if self.archipelago is not None:
+            from oot_rando.archipelago.bridge import check_patch
+            check_patch(self.archipelago)
+            if self.full is None or self.full != rando_options.validate(self.archipelago['options']):
+                raise ValueError('The full randomizer options must be those of the Archipelago patch.')
+            if self.open_forest != self.archipelago['open_forest']:
+                raise ValueError('"Open the way" must match the Archipelago patch.')
         if self.randomize_chests:
             for ident, original in CHESTS.items():
                 if str(ident) not in self.excluded_checks and not [v for v in self.pool if not self.avoid_vanilla or v != original]:
@@ -119,7 +128,7 @@ class Settings:
                         else {name: self.categories.get(name, False) for name in sorted(CATEGORIES)}
                         if f.name == 'categories' else dict(sorted(self.full.items()))
                         if f.name == 'full' else getattr(self, f.name))
-                for f in fields(self) if not (f.name == 'full' and self.full is None)
+                for f in fields(self) if not (f.name in ('full', 'archipelago') and getattr(self, f.name) is None)
                 and not (f.name in OPTIONAL_SKIPS and not getattr(self, f.name))}
 
     @classmethod
@@ -422,6 +431,9 @@ def generate(nup_path, output, settings, progress=None):
                 'derived_actors': full['derived_actors'],
                 'sources': dict(sorted(__import__('collections').Counter(
                     p['source'] for p in full['placements']).items()))}
+            if full.get('archipelago'):
+                # Read by the Archipelago client: location IDs and items found in other worlds.
+                manifest['archipelago'] = full['archipelago']
         checks = {'schema_version': 1, 'seed_id': manifest['seed_id'],
                   # With the complete randomizer its catalogue lists every check (the
                   # four historical Kokiri chests included): no duplicates.
@@ -495,9 +507,24 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
     report('Reading the remake logic…')
     data = World()
     maps, groups, enemies, extra = scan_world(nup, dictionaries_, members, report)
-    report('Glitchless placement and independent check…')
-    plan = full_randomizer.plan(data, settings.full, groups, enemies, settings_identity(settings),
-                                settings.open_forest, report, extra=extra)
+    if settings.archipelago is not None:
+        from oot_rando.archipelago import bridge
+        patch = settings.archipelago
+        if patch['game_build'] != BUILD or patch['world'] != data.fingerprint()                 or patch['scan'] != bridge.scan_fingerprint(groups, enemies, extra):
+            raise ValueError('This Archipelago patch was generated with an apworld built from another game '
+                             'or another version of the application: rebuild the apworld and generate again.')
+        report('Applying the Archipelago placements…')
+        plan = full_randomizer.plan_assigned(data, settings.full, groups, enemies, patch['seed_key'],
+                                             bridge.assigned_items(patch), settings.open_forest, report,
+                                             extra=extra, labels=bridge.foreign_labels(patch),
+                                             order=bridge.patch_spheres(patch))
+        plan['archipelago'] = {'seed_name': patch.get('seed_name'), 'slot_name': patch.get('slot_name'),
+                               'player': patch.get('player'), 'location_ids': patch.get('location_ids', {}),
+                               'remote': patch['remote'], 'spheres': bridge.patch_spheres(patch)}
+    else:
+        report('Glitchless placement and independent check…')
+        plan = full_randomizer.plan(data, settings.full, groups, enemies, settings_identity(settings),
+                                    settings.open_forest, report, extra=extra)
     from oot_rando.patching.repeatable_adapter import (prepare_repeatables, patch_repeatable_sources,
                                      build_repeatable_packs, register_repeatable_flags)
     repeatables = prepare_repeatables(plan, maps)

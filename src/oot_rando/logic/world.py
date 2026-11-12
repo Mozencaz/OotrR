@@ -20,7 +20,12 @@ WORLD_DIR = ('logic', 'world')
 
 
 def _load(*parts):
-    return json.loads(resource(*WORLD_DIR, *parts).read_text(encoding='utf-8'))
+    path = resource(*WORLD_DIR, *parts)
+    if path.is_file():
+        return json.loads(path.read_text(encoding='utf-8'))
+    # Packaged inside a zip (the Archipelago .apworld): read through the loader.
+    import pkgutil
+    return json.loads(pkgutil.get_data('oot_rando', '/'.join(WORLD_DIR + parts)).decode('utf-8'))
 
 
 _REMAKE = _load('remake.json')

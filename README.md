@@ -80,6 +80,26 @@ A speeds up their text instead. Presentation flows that write data or change map
 patch is read back and compared semantically; `python -m oot_rando verify` reapplies
 the quality-of-life patches on the original flows.
 
+## Archipelago multiworld (first stage)
+
+The full randomizer can take part in an [Archipelago](https://archipelago.gg)
+multiworld as the game **OoT Remake**: Archipelago places the items over every
+world, with the same locations, item pool and glitchless rules as the built-in fill.
+
+1. **Build the apworld** (Settings tab, or `python -m oot_rando apworld GAME.nup`):
+   it holds the logic and a catalog of the remake's locations read from your game
+   (identifiers only, no game asset). Whoever generates the multiworld copies
+   `oot_remake.apworld` into Archipelago's `custom_worlds` folder.
+2. **Export my multiworld YAML** with your options and send it to the host.
+3. The host generates; your `.aprmk` patch is in the zip produced by Archipelago.
+4. **Generate from a patch (.aprmk)** (or `python -m oot_rando ap-install PATCH GAME.nup MODS`)
+   builds and installs the mod; the apworld must come from the same game and
+   application version.
+
+Limits of this stage: items of other players show as green rupees and nothing is
+sent or received in game yet (the client is the next stage); dungeon-bound keys
+and progressive items stay in your world; Archipelago starting items are not given.
+
 ## Development
 
 ```powershell
@@ -116,7 +136,7 @@ format stays available (optional PyYAML).
 
 ```
 src/oot_rando/
-  __main__.py      entry point (GUI; audit, verify, memory, selftest commands)
+  __main__.py      entry point (GUI; audit, verify, memory, selftest, apworld, ap-install)
   paths.py         application folders (sources: build/; portable: data/)
   formats/         NUP, zstd/SARC resources, BYML, MSBT
   game/            remake map reading, matching, item forms
@@ -124,6 +144,7 @@ src/oot_rando/
   patching/        map, event and quality-of-life patches, souls, repeatable sources
   randomizer/      generation (core), planner (full_randomizer), verification, spoiler
   tracker/         automatic tracking, saves, live memory, overlay, turbo A
+  archipelago/     apworld build, Archipelago bridge, multiworld patches
   gui/             Tk interface
 tests/             unit tests and verifiers
 tools/             development tools (base world import)
