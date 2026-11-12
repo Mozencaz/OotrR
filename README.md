@@ -5,6 +5,10 @@
 **[Download the latest release](https://github.com/Mozencaz/OotrR/releases/latest)**
 (Windows `.zip` or Linux `.tar.gz`, portable, no installation).
 
+> **AI disclosure:** this project was built relying on AI for coding. Most of the
+> code was written with AI assistance (Claude Code), then reviewed and tested by
+> the maintainer.
+
 Desktop application that builds a randomized seed of the Ocarina of Time remake
 from your local NUP game file, and installs it as a RomFS mod for Hookshot or an
 emulator.
