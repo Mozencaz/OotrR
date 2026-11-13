@@ -4,6 +4,12 @@ Generated pickups retain the real item's PouchActor. Their private event AINB
 sets a saved check flag only after the native add-to-pouch action. Complementary
 Presence conditions select the randomized source before that flag and a clone
 of the untouched vanilla source afterwards. Gameplay validation remains required.
+
+Shop shelves holding a shuffled item (``Shop_Rando_*``) are bought once the same
+way: each gets its own actor whose shop AI writes the check flag when the item is
+bought, and reads that flag as its "sold out" state: the item at rest then
+deletes itself. The map is unchanged (no Presence: some shelves, like the Kokiri
+shop's, already have one).
 """
 import copy
 import hashlib
@@ -11,7 +17,7 @@ import uuid
 
 from oot_rando.formats import byml_codec
 from oot_rando.formats.inspect_resources import sarc
-from oot_rando.game.item_forms import (WORLD_CANONICAL, WORLD_PREFIX, build_pack, canonical_of,
+from oot_rando.game.item_forms import (WORLD_CANONICAL, WORLD_PREFIX, SHOP_PREFIX, build_pack, canonical_of,
                         is_derived, add_rsdb_rows)
 from oot_rando.patching.soul_adapter import FLAG_PREFIX as SOUL_FLAG_PREFIX, murmur3
 
@@ -19,6 +25,8 @@ REPEATABLE = frozenset(('pots', 'bushes', 'rocks', 'crates', 'beehives'))
 EVENT_PACK = 'Pack/AI.Global.Product.111.pack.zs'
 EVENT_MEMBER = 'AI/PouchContent.event.root.ainb'
 LARGE_GET_TYPE = 1746592023
+SHOP_ONCE_PREFIX = 'Shop_RandoOnce_'
+SHOP_AI_MEMBER = 'AI/Shop_Item_Base.root.ainb'
 
 
 def _guid(text):
@@ -133,6 +141,145 @@ def instrument_pickup_event(raw, flag, filename, canonical=None, also_set=()):
     return result
 
 
+def _default(name, value):
+    return {'Name': name, 'Default Value': value, 'Node Index': -1, 'Output Index': 0, 'Flags': ['Uses Default']}
+
+
+def _retarget(value, old, new):
+    """Replace every ``'Node Index': old`` reference inside a node description."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == 'Node Index' and item == old:
+                value[key] = new
+            else:
+                _retarget(item, old, new)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            if item == old and isinstance(item, int) and not isinstance(item, bool):
+                value[index] = new
+            else:
+                _retarget(item, old, new)
+
+
+def _refers(value, index):
+    """Whether a node description holds a ``'Node Index': index`` reference."""
+    if isinstance(value, dict):
+        return value.get('Node Index') == index or any(_refers(item, index) for item in value.values())
+    if isinstance(value, list):
+        return any(_refers(item, index) for item in value)
+    return False
+
+
+def as_command(node):
+    """``ASCommand`` of an ``ExecuteASPlay`` node (a property or a default input), or None."""
+    values = list(node.get('Properties', {}).get('String', []))
+    values += node.get('Parameters', {}).get('Inputs', {}).get('String', [])
+    return next((p.get('Default Value') for p in values if p['Name'] == 'ASCommand'), None)
+
+
+def instrument_shop_ai(raw, flag, filename):
+    """Clone the shop item AI so that a shelf is bought once.
+
+    * the saved ``flag`` is set by a node added to the two branches a bought item
+      goes through: the get demo (``ExecuteASPlay`` ``Rotate_GetDemo``, the item
+      held up by Link: checked in game, bought items take this one) and
+      ``ExecuteShopItemPutInPouch``;
+    * every reader of the native ``QueryShopItemIsSoldOut`` (model hidden, sold
+      out message to the shop) reads ``flag`` instead, and the hidden branch
+      deletes the actor: the shop still sells a hidden shelf, not an absent one.
+      Since the flag is saved, the shelf deletes itself again after each reload.
+    """
+    try:
+        import ainb
+    except ImportError as error:
+        raise ValueError('Install ainb==0.2.17 for single purchases in shops.') from error
+    script = ainb.AINB.from_binary(raw)
+    original = script.as_dict()
+
+    def build(document):
+        # ainb 0.2.17 drops this graph's blackboard in as_dict(): restore it (no
+        # node refers to it by index), else the written file is unreadable.
+        result = ainb.AINB.from_dict(document)
+        result.blackboard = script.blackboard
+        return result.to_binary()
+    if build(original) != script.to_binary():
+        raise ValueError('The shop item AI cannot be rewritten faithfully.')
+    document = copy.deepcopy(original)
+    if document['Version'] != 0x408:
+        raise ValueError('Unexpected AINB version for the shop item AI.')
+    nodes = document['Nodes']
+
+    def only(name):
+        found = [n for n in nodes if n['Name'] == name]
+        if len(found) != 1:
+            raise ValueError(f'Shop item AI: {name} ambiguous or missing.')
+        return found[0]
+    put = only('ExecuteShopItemPutInPouch')['Node Index']
+    sold_out = only('QueryShopItemIsSoldOut')['Node Index']
+    template = only('QueryGetNonStructGameDataBool')
+    def parent_of(index):
+        found = [n for n in nodes if any(p['Node Index'] == index for p in n.get('Plugs', {}).get('Child', []))]
+        if len(found) != 1 or found[0]['Node Type'] != 'Element_Simultaneous':
+            raise ValueError('Shop item AI: purchase step without a simultaneous parent.')
+        return found[0]
+
+    demo = [n['Node Index'] for n in nodes if n['Name'] == 'ExecuteASPlay' and as_command(n) == 'Rotate_GetDemo']
+    if len(demo) != 1:
+        raise ValueError('Shop item AI: get demo ambiguous or missing.')
+    parents = [parent_of(demo[0]), parent_of(put)]
+    setter_index, query_index = len(nodes), len(nodes) + 1
+    setter = {'Node Type': 'UserDefined', 'Node Index': setter_index,
+              'Name': 'OneShotSetNonStructGameDataBool', 'GUID': _guid(flag + '/bought'),
+              'Flags': [], 'Queries': [], 'Attachments': [],
+              'Properties': {'Bool': [{'Name': 'ExecuteEveryFrame', 'Default Value': False, 'Flags': []}]},
+              'Parameters': {'Inputs': {'Int': [_default('GameDataIndex', -1)],
+                                        'Bool': [_default('Value', True)],
+                                        'String': [_default('GameDataFullName', flag)]}, 'Outputs': {}},
+              'XLink Actions': [], 'Plugs': {}}
+    readers = [n for n in nodes if n['Node Index'] != sold_out
+               and (sold_out in n.get('Queries', []) or _refers(n.get('Parameters'), sold_out))]
+    if not readers:
+        raise ValueError('Shop item AI: sold out state not read.')
+    for node in readers:
+        _retarget(node.get('Queries', []), sold_out, query_index)
+        _retarget(node.get('Parameters', {}), sold_out, query_index)
+        _retarget(node.get('Plugs', {}), sold_out, query_index)
+    query = copy.deepcopy(template)
+    query.update({'Node Index': query_index, 'GUID': _guid(flag + '/sold-out'), 'Queries': [], 'Plugs': {}})
+    query['Parameters']['Inputs']['String'] = [_default('GameDataFullName', flag)]
+    for parent in parents:
+        parent['Plugs']['Child'].append({'Node Index': setter_index, 'Name': ''})
+    # The shop sells a shelf as long as its actor exists, whatever the sold out
+    # message says (checked in game): once bought, the item at rest deletes itself.
+    # Its visibility selector is the "sold out" one; it no longer runs while the item
+    # is put in the pouch, so the deletion never cuts that short.
+    selectors = [n for n in readers if n['Node Type'] == 'Element_BoolSelector']
+    if len(selectors) != 1:
+        raise ValueError('Shop item AI: sold out visibility ambiguous or missing.')
+    selector = selectors[0]
+    branch = next((p for p in selector['Plugs'].get('Child', []) if p['Name'] == 'True'), None)
+    if branch is None or nodes[branch['Node Index']]['Name'] != 'OneShotGameModelControllerSetVisible':
+        raise ValueError('Shop item AI: sold out branch not recognised.')
+    put_parent = parents[1]
+    put_parent['Plugs']['Child'] = [p for p in put_parent['Plugs']['Child'] if p['Node Index'] != selector['Node Index']]
+    delete_index = len(nodes) + 2
+    delete = {'Node Type': 'UserDefined', 'Node Index': delete_index, 'Name': 'OneShotGenericDeleteThisActor',
+              'GUID': _guid(flag + '/delete'), 'Flags': [], 'Queries': [], 'Attachments': [],
+              'Properties': {'Bool': [{'Name': 'ExecuteEveryFrame', 'Default Value': False, 'Flags': []},
+                                      {'Name': 'IsFade', 'Default Value': False, 'Flags': []}]},
+              'Parameters': {'Inputs': {}, 'Outputs': {}}, 'XLink Actions': [], 'Plugs': {}}
+    branch['Node Index'] = delete_index
+    nodes.extend([setter, query, delete])
+    document['Filename'] = filename
+    binary = build(document)
+    result = ainb.AINB.from_binary(binary).as_dict()
+    if result != document:
+        raise ValueError('The modified shop item AI does not read back identically.')
+    if result['Commands'] != original['Commands']:
+        raise ValueError('Shop item AI commands changed unexpectedly.')
+    return binary
+
+
 def prepare_repeatables(plan, maps):
     """Rename selected repeatable world rewards; return generation descriptors.
 
@@ -141,17 +288,19 @@ def prepare_repeatables(plan, maps):
     """
     records = []
     for placement in plan['placements']:
-        if placement.get('source') not in REPEATABLE:
-            continue
         previous = placement['after']
+        # A shelf holding a shuffled item (not a native shop refill) is bought once.
+        shop = placement.get('source') == 'shop' and previous.startswith(SHOP_PREFIX)
+        if placement.get('source') not in REPEATABLE and not shop:
+            continue
         canonical = canonical_of(previous) if is_derived(previous) else WORLD_CANONICAL.get(previous)
         if canonical is None:
             raise ValueError('Repeatable reward without a known native form: ' + previous)
         key = hashlib.sha256(placement['id'].encode('utf-8')).hexdigest()[:16]
-        actor = 'Obj_RandoOnce_' + key
+        actor = (SHOP_ONCE_PREFIX if shop else 'Obj_RandoOnce_') + key
         flag = 'Rando.Check.' + key
         variants = []
-        for patch in placement['patches']:
+        for patch in ([] if shop else placement['patches']):
             if 'event' in patch or tuple(patch['path'][:1]) != ('Actors',):
                 raise ValueError('Repeatable source without a proven physical actor.')
             resource, index = patch['resource'], patch['path'][1]
@@ -167,7 +316,7 @@ def prepare_repeatables(plan, maps):
             fallback_hash = int.from_bytes(hashlib.sha256((placement['id'] + '/vanilla-source').encode()).digest()[:8], 'little')
             variants.append({'resource': resource, 'index': index, 'native_once': native_once,
                              'original_hash': int(original['Hash']), 'fallback_hash': fallback_hash})
-        record = {'id': placement['id'], 'actor': actor, 'canonical': canonical,
+        record = {'id': placement['id'], 'actor': actor, 'canonical': canonical, 'kind': 'shop' if shop else 'pickup',
                   'original_reward_actor': previous, 'flag': flag, 'flag_hash': murmur3(flag),
                   'event_filename': 'RandoOnce_' + key + '.event.root', 'variants': variants}
         placement['after'] = actor
@@ -190,10 +339,28 @@ def build_repeatable_packs(records, read_pack, read_raw, tables):
     """
     if not records:
         return {}
-    global_ai = sarc(read_raw(EVENT_PACK))
-    event = global_ai[EVENT_MEMBER]
+    event = None
     new = {}
     for record in records:
+        if record.get('kind') == 'shop':
+            standard = record['original_reward_actor']
+            raw, template = build_pack(standard, read_pack, byml_codec)
+            files = sarc(raw)
+            document = byml_codec.load(files.pop(f'Actor/{standard}.engine__actor__ActorParam.bgyml'))
+            if SHOP_AI_MEMBER not in files:
+                raise ValueError('Shop item AI missing from the shop model.')
+            root = record['actor'] + '.root'
+            ai_info = f'AI/AIInfo/{record["actor"]}.engine__actor__AIInfo.bgyml'
+            files['AI/' + root + '.ainb'] = instrument_shop_ai(files[SHOP_AI_MEMBER], record['flag'], root)
+            files[ai_info] = byml_codec.dump({'endian': '<', 'version': 7,
+                                              'root': {'RootAIRef': 'Work/AI/Root/' + root + '.ain'}})
+            document['root']['Components']['AIInfoRef'] = '?' + ai_info
+            files[f'Actor/{record["actor"]}.engine__actor__ActorParam.bgyml'] = byml_codec.dump(document)
+            new['Pack/Actor/' + record['actor'] + '.pack.zs'] = (byml_codec.build_sarc(files), template)
+            _alias_rows(tables, standard, record['actor'])
+            continue
+        if event is None:
+            event = sarc(read_raw(EVENT_PACK))[EVENT_MEMBER]
         standard = WORLD_PREFIX + record['canonical']
         raw, template = build_pack(standard, read_pack, byml_codec)
         files = sarc(raw)
@@ -219,27 +386,32 @@ def build_repeatable_packs(records, read_pack, read_raw, tables):
         files[event_member] = instrument_pickup_event(event, record['flag'], event_name, record['canonical'], also)
         files[f'Actor/{record["actor"]}.engine__actor__ActorParam.bgyml'] = byml_codec.dump(document)
         new['Pack/Actor/' + record['actor'] + '.pack.zs'] = (byml_codec.build_sarc(files), template)
-        # Reuse the existing derived-row builder under a temporary name, then
-        # rename only those freshly appended rows. Their reward metadata stays.
-        existing = {name: {row['__RowId'] for row in rows} for name, rows in tables.items()}
-        if any(standard in ids for ids in existing.values()):
-            # A standard derived reward might already be needed by another
-            # location. Build rows in an isolated copy and copy only the alias.
-            scratch = {name: [copy.deepcopy(row) for row in rows if row['__RowId'] != standard]
-                       for name, rows in tables.items()}
-            add_rsdb_rows(scratch, [standard])
-            for name, rows in scratch.items():
-                row = copy.deepcopy(next(row for row in rows if row['__RowId'] == standard))
-                row['__RowId'] = record['actor']
-                tables[name].append(row)
-        else:
-            add_rsdb_rows(tables, [standard])
-            for rows in tables.values():
-                row = next(row for row in rows if row['__RowId'] == standard)
-                row['__RowId'] = record['actor']
-        for rows in tables.values():
-            rows.sort(key=lambda row: row['__RowId'])
+        _alias_rows(tables, standard, record['actor'])
     return new
+
+
+def _alias_rows(tables, standard, actor):
+    """RSDB rows of ``actor``: those of the derived reward ``standard``, renamed."""
+    # Reuse the existing derived-row builder under a temporary name, then
+    # rename only those freshly appended rows. Their reward metadata stays.
+    existing = {name: {row['__RowId'] for row in rows} for name, rows in tables.items()}
+    if any(standard in ids for ids in existing.values()):
+        # A standard derived reward might already be needed by another
+        # location. Build rows in an isolated copy and copy only the alias.
+        scratch = {name: [copy.deepcopy(row) for row in rows if row['__RowId'] != standard]
+                   for name, rows in tables.items()}
+        add_rsdb_rows(scratch, [standard])
+        for name, rows in scratch.items():
+            row = copy.deepcopy(next(row for row in rows if row['__RowId'] == standard))
+            row['__RowId'] = actor
+            tables[name].append(row)
+    else:
+        add_rsdb_rows(tables, [standard])
+        for rows in tables.values():
+            row = next(row for row in rows if row['__RowId'] == standard)
+            row['__RowId'] = actor
+    for rows in tables.values():
+        rows.sort(key=lambda row: row['__RowId'])
 
 
 def patch_repeatable_sources(records, maps, raw_maps):

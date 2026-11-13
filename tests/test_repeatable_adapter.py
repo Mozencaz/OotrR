@@ -105,6 +105,24 @@ class RepeatableSourceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '(?i)collision'):
             register_repeatable_flags(after, records)
 
+    def test_shuffled_shop_item_gets_its_own_once_actor(self):
+        shelf = {'id': 'Market#shop#Shop_Bottle_Fish#3', 'source': 'shop', 'after': 'Shop_Rando_Item_Hookshot',
+                 'before': 'Shop_Bottle_Fish', 'patches': [{'resource': 'map', 'path': ['Actors', 0, 'Gyaml']}]}
+        refill = {'id': 'Market#shop#Shop_ArrowBundle_01#0', 'source': 'shop', 'after': 'Shop_DekuNutBundle_01',
+                  'before': 'Shop_ArrowBundle_01', 'patches': [{'resource': 'map', 'path': ['Actors', 1, 'Gyaml']}]}
+        plan = {'placements': [shelf, refill], 'matches': {shelf['id']: {}}}
+        records = prepare_repeatables(plan, {})
+        self.assertEqual(len(records), 1)            # a native refill stays as it is
+        record = records[0]
+        self.assertEqual(record['kind'], 'shop')
+        self.assertTrue(record['actor'].startswith('Shop_RandoOnce_'))
+        self.assertEqual((record['canonical'], record['original_reward_actor']), ('Item_Hookshot', 'Shop_Rando_Item_Hookshot'))
+        self.assertEqual(record['variants'], [])     # the shelf keeps its Presence: none added
+        self.assertEqual(shelf['after'], record['actor'])
+        self.assertEqual(plan['matches'][shelf['id']]['first_collect_flag'], record['flag'])
+        output = {}
+        self.assertEqual(patch_repeatable_sources(records, {}, output), [])
+
     def test_uncombinable_presence_fails_instead_of_bypassing_original_requirement(self):
         plan, maps = self.fixtures({'FlagName': 'QuestGate', 'IsNegation': False})
         with self.assertRaisesRegex(ValueError, 'Conditional presence'):
@@ -113,6 +131,45 @@ class RepeatableSourceTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get('OOT_NUP'), 'OOT_NUP absent')
 class LocalGraphTests(unittest.TestCase):
+    def test_shop_item_ai_sets_and_reads_its_own_sold_out_flag(self):
+        import ainb
+        from oot_rando.formats.inspect_nup import Nup
+        from oot_rando.formats.inspect_resources import dictionaries
+        from oot_rando.game.world_maps import effective_members
+        from oot_rando.patching.repeatable_adapter import SHOP_AI_MEMBER, as_command, instrument_shop_ai, _refers
+        nup = Nup(os.environ['OOT_NUP'])
+        try:
+            dic, members = dictionaries(nup), effective_members(nup)
+            raw = sarc(decompress(nup.read(members['Pack/Actor/Shop_ArrowBundle_01.pack.zs']), dic))[SHOP_AI_MEMBER]
+        finally:
+            nup.stream.close()
+        before = ainb.AINB.from_binary(raw).as_dict()
+        after = ainb.AINB.from_binary(instrument_shop_ai(raw, 'Rando.Check.test', 'Shop_RandoOnce_test.root')).as_dict()
+        self.assertEqual(before['Commands'], after['Commands'])
+        nodes = {n['Node Index']: n for n in after['Nodes']}
+        setter, query, delete = after['Nodes'][len(before['Nodes']):]
+        self.assertEqual((setter['Name'], query['Name'], delete['Name']),
+                         ('OneShotSetNonStructGameDataBool', 'QueryGetNonStructGameDataBool', 'OneShotGenericDeleteThisActor'))
+        visibility = next(n for n in after['Nodes'] if n['Node Type'] == 'Element_BoolSelector'
+                          and _refers(n.get('Parameters'), query['Node Index']))
+        self.assertEqual({p['Name']: p['Node Index'] for p in visibility['Plugs']['Child']}['True'], delete['Node Index'])
+        put = next(n['Node Index'] for n in after['Nodes'] if n['Name'] == 'ExecuteShopItemPutInPouch')
+        put_parent = next(n for n in after['Nodes'] if any(p['Node Index'] == put for p in n['Plugs'].get('Child', [])))
+        self.assertNotIn(visibility['Node Index'], [p['Node Index'] for p in put_parent['Plugs']['Child']])
+        for node in (setter, query):
+            self.assertEqual(node['Parameters']['Inputs']['String'][0]['Default Value'], 'Rando.Check.test')
+        parents = [n for n in after['Nodes'] if any(p['Node Index'] == setter['Node Index']
+                                                     for p in n['Plugs'].get('Child', []))]
+        steps = {(nodes[p['Node Index']]['Name'], as_command(nodes[p['Node Index']]))
+                 for parent in parents for p in parent['Plugs']['Child']}
+        self.assertEqual(len(parents), 2)   # bought with a get demo, or put in the pouch
+        self.assertIn(('ExecuteASPlay', 'Rotate_GetDemo'), steps)
+        self.assertIn(('ExecuteShopItemPutInPouch', None), steps)
+        sold_out = next(n['Node Index'] for n in after['Nodes'] if n['Name'] == 'QueryShopItemIsSoldOut')
+        readers = [i for i, n in nodes.items() if _refers(n.get('Parameters'), query['Node Index'])]
+        self.assertEqual(len(readers), 2)   # model visibility and sold out message
+        self.assertFalse([i for i, n in nodes.items() if i != sold_out and _refers(n.get('Parameters'), sold_out)])
+
     def test_native_pickup_graph_adds_flag_after_pouch_action_and_preserves_commands(self):
         import ainb
         from oot_rando.formats.inspect_nup import Nup
