@@ -343,8 +343,7 @@ class Application:
         ttk.Label(box, textvariable=self.turbo_status, style='Small.TLabel').pack(anchor='w')
 
     def build_qol_card(self, parent):
-        box = self.card(parent, 'Quality of life only', 'No randomization: your game stays as it is, with only the '
-                        'options below, in its own folder (OoT_QoL) next to the seeds.')
+        box = self.card(parent, 'Quality of life only', 'No randomization: only the options below, in their own folder (OoT_QoL).')
         ttk.Checkbutton(box, text='Skip the introduction cutscene', variable=self.qol_options['intro_skip']).pack(anchor='w')
         ttk.Checkbutton(box, text='Chests (big and small) without cutscene', variable=self.qol_options['fast_chests']).pack(anchor='w')
         row = self.buttons(box, pady=(8, 0))
