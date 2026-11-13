@@ -165,11 +165,25 @@ The glitchless logic is built in: `src/oot_rando/logic/world/`.
 Archipelago itself is not needed. Settings import/export in the Archipelago YAML
 format stays available (optional PyYAML).
 
+## Quality of life only
+
+To keep the game as it is and only skip the introduction cutscene and open chests without
+their cutscene, use the **Quality of life only** card of the Setup tab, or
+
+```
+python -m oot_rando qol-install GAME.nup MODS_FOLDER [--no-intro-skip] [--no-fast-chests]
+```
+
+It writes `OoT_QoL` (with a `manifest.json`, no seed) into the emulator's title folder
+`load/0400486024DEC000`, generated from your own game file. Installing again replaces
+it. A randomizer seed already contains these patches: while a seed is enabled, turn
+`OoT_QoL` off (the install warns about it).
+
 ## Layout
 
 ```
 src/oot_rando/
-  __main__.py      entry point (GUI; audit, verify, memory, selftest, apworld, ap-install, ap-client)
+  __main__.py      entry point (GUI; audit, verify, memory, selftest, apworld, ap-install, qol-install, ap-client)
   paths.py         application folders (sources: build/; portable: data/)
   formats/         NUP, zstd/SARC resources, BYML, MSBT
   game/            remake map reading, matching, item forms

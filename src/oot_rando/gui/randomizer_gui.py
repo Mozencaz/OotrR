@@ -12,6 +12,7 @@ from tkinter import ttk, filedialog, messagebox, simpledialog
 
 from oot_rando.randomizer.randomizer_core import Settings, CHECKS, GENERATOR_VERSION, generate
 from oot_rando.randomizer.randomizer_services import read_artifact, generate_in_mods, validate_mod_directory
+from oot_rando.randomizer.qol_install import install_qol
 from oot_rando.tracker.auto_tracker import TrackerSession, newest_save
 from oot_rando.tracker import game_overlay
 from oot_rando.tracker import live_memory
@@ -125,6 +126,7 @@ class Application:
         self.pool = {name: tk.BooleanVar(value=name.startswith('TBox_Rupee_')) for name in POOL}
         self.categories = {name: tk.BooleanVar(value=False) for name in CATEGORIES}
         self.excluded = {check['id']: tk.BooleanVar(value=False) for check in CHECKS}
+        self.qol_options = {'intro_skip': tk.BooleanVar(value=True), 'fast_chests': tk.BooleanVar(value=True)}
         self.show_completed = tk.BooleanVar(value=True)
         self.show_blocked = tk.BooleanVar(value=True)
         self.tracker_search, self.save_path = tk.StringVar(), tk.StringVar()
@@ -323,6 +325,7 @@ class Application:
         ttk.Label(box, text='Live tracking finds Hookshot, Longshot, Lichii, Ryuchii, Eden, yuzu, suyu, citron and sudachi. '
                   'Another yuzu-based emulator? Add its .exe name here (comma-separated).',
                   style='Small.TLabel', wraplength=780).pack(anchor='w')
+        self.build_qol_card(parent)
         box = self.card(parent, 'Save', 'The tracker reads your progress.sav. It is found automatically; pick it by hand only if needed.')
         ttk.Checkbutton(box, text='Follow the most recent save (every slot)', variable=self.auto_save,
                         command=self.auto_save_toggled).pack(anchor='w', pady=(0, 12))
@@ -337,6 +340,35 @@ class Application:
         ttk.Button(row, text='Reload the tracker', command=self.load_tracker).pack(side='left', padx=(8, 0))
         ttk.Label(box, textvariable=self.connection_status, style='Small.TLabel', wraplength=780).pack(anchor='w')
         ttk.Label(box, textvariable=self.turbo_status, style='Small.TLabel').pack(anchor='w')
+
+    def build_qol_card(self, parent):
+        box = self.card(parent, 'Quality of life only', 'No randomization: your game stays as it is, with only the '
+                        'options below, in its own folder (OoT_QoL) next to the seeds.')
+        ttk.Checkbutton(box, text='Skip the introduction cutscene', variable=self.qol_options['intro_skip']).pack(anchor='w')
+        ttk.Checkbutton(box, text='Chests (big and small) without cutscene', variable=self.qol_options['fast_chests']).pack(anchor='w')
+        row = self.buttons(box, pady=(8, 0))
+        self.qol_button = ttk.Button(row, text='Install quality of life only', command=self.install_qol_only)
+        self.qol_button.pack(side='right')
+        ttk.Label(row, text='Close the game first. A randomizer seed in the same folder turns it off.',
+                  style='Muted.TLabel').pack(side='right', padx=(0, 16))
+
+    def install_qol_only(self):
+        try:
+            nup = Path(self.nup.get())
+            if not nup.is_file():
+                raise ValueError('Select the local NUP file.')
+            mods = validate_mod_directory(self.mods.get())
+            options = {name: variable.get() for name, variable in self.qol_options.items()}
+            if not any(options.values()):
+                raise ValueError('Tick at least one quality-of-life option.')
+            self.run_job(lambda progress: install_qol(nup, mods, progress=progress, **options), self.qol_installed)
+        except Exception as error:
+            self.error(error)
+
+    def qol_installed(self, result):
+        self.status.set('Quality of life installed: ' + str(result.folder))
+        warnings = ''.join('\n\n' + warning for warning in result.warnings)
+        messagebox.showinfo('Quality of life installed', 'Installed in:\n' + str(result.folder) + warnings)
 
     def build_home(self):
         parent = self.home_body
@@ -1133,7 +1165,8 @@ class Application:
         self.busy = True
         self.progress.pack(side='right', padx=(12, 0))
         self.progress.start()
-        self.generate_button.state(['disabled'])
+        for button in (self.generate_button, self.qol_button):
+            button.state(['disabled'])
         def worker():
             try:
                 result = function(lambda text: self.events.put(('progress', text)))
@@ -1768,7 +1801,8 @@ class Application:
                     self.busy = False
                     self.progress.stop()
                     self.progress.pack_forget()
-                    self.generate_button.state(['!disabled'])
+                    for button in (self.generate_button, self.qol_button):
+                        button.state(['!disabled'])
                     if kind == 'error':
                         self.error(payload)
                     else:
