@@ -274,7 +274,7 @@ def enemy_counter_locks(path, root):
             continue
         doors = {door['Hash']: door for door in links_of(enemy) + incoming[enemy['Hash']] if is_door(door)}
         if doors:
-            locks[enemy['Hash']].append({'counter': path + '#' + str(enemy['Hash']), 'doors': [
+            locks[enemy['Hash']].append({'counter': path + '#' + str(enemy['Hash']), 'direct': True, 'doors': [
                 {'resource': path, 'index': index_of[h], 'hash': str(h), 'actor': doors[h]['Gyaml'],
                  'presence': doors[h].get('Presence')} for h in sorted(doors)]})
     return locks

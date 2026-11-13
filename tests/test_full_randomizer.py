@@ -154,6 +154,17 @@ class RoomLocks(unittest.TestCase):
         locks = enemy_counter_locks('r', root)
         self.assertEqual(set(locks), {1})
         self.assertEqual([(d['hash'], d['index']) for d in locks[1][0]['doors']], [('2', 1), ('3', 2)])
+        self.assertTrue(locks[1][0]['direct'])
+
+    def test_direct_locks_stay_out_of_the_scan_fingerprint(self):
+        # Earlier Archipelago patches stay valid: the bound enemies and the logic are unchanged.
+        from oot_rando.archipelago.bridge import scan_fingerprint
+        counter = {'counter': 'r#9', 'doors': [{'hash': '2'}]}
+        before = [{'hash': '1', 'locks': [counter]}, {'hash': '3', 'locks': []}]
+        after = [{'hash': '1', 'locks': [counter, {'counter': 'r#1', 'direct': True, 'doors': [{'hash': '2'}]}]},
+                 {'hash': '3', 'locks': [{'counter': 'r#3', 'direct': True, 'doors': [{'hash': '4'}]}]}]
+        self.assertEqual(scan_fingerprint([], after, {}), scan_fingerprint([], before, {}))
+        self.assertNotEqual(scan_fingerprint([], [{'hash': '1', 'locks': []}], {}), scan_fingerprint([], before, {}))
 
 
 @unittest.skipUnless(NUP, 'OOT_NUP absent')

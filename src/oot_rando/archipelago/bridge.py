@@ -35,7 +35,15 @@ def _canonical(value):
 
 
 def scan_fingerprint(groups, enemies, extra):
-    """SHA-256 of the scanned game data the preparation depends on."""
+    """SHA-256 of the scanned game data the preparation depends on.
+
+    Room locks of an enemy linked straight to its shutters (``'direct'``) only add a
+    Presence to those shutters at generation: the soul-bound enemies and the logic are
+    the same, so they stay out of the fingerprint and earlier patches remain valid.
+    """
+    enemies = [dict(enemy, locks=[lock for lock in enemy['locks'] if not lock.get('direct')])
+               if any(lock.get('direct') for lock in enemy.get('locks') or ()) else enemy
+               for enemy in enemies]
     return hashlib.sha256(_canonical({'groups': groups, 'enemies': enemies, 'extra': extra})).hexdigest()
 
 
