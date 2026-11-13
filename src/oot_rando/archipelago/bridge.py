@@ -333,7 +333,25 @@ def load_patch(path):
     return patch
 
 
+MAX_NAME = 512            # item, player and location names of any game
+MAX_ENTRIES = 200_000     # placements, remote items, location ids
+
+
+def _text(value, field, limit=MAX_NAME):
+    """A name shown in game or in the application: bounded, no control character."""
+    if not isinstance(value, str) or len(value) > limit or any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise ValueError(f'Invalid Archipelago patch: {field}.')
+    return value
+
+
+def _optional(patch, key, kind):
+    if key in patch and patch[key] is not None and not isinstance(patch[key], kind):
+        raise ValueError(f'Invalid Archipelago patch: {key}.')
+
+
 def check_patch(patch):
+    """Full shape of an ``.aprmk`` (``PlayerWorld.patch``): a malformed or hostile file is
+    refused here, before any of it reaches the generation, the client or the game texts."""
     if not isinstance(patch, dict) or patch.get('format') != PATCH_FORMAT:
         raise ValueError('Not an OoT Remake Archipelago patch.')
     if patch.get('version') != PATCH_VERSION:
@@ -341,10 +359,46 @@ def check_patch(patch):
     for key in ('seed_key', 'options', 'open_forest', 'placements', 'remote', 'scan', 'world', 'game_build'):
         if key not in patch:
             raise ValueError(f'Archipelago patch incomplete ({key}).')
-    for gid, placement in patch['placements'].items():
-        if not isinstance(placement, dict) or not isinstance(placement.get('item'), str) \
-                or type(placement.get('own')) is not bool:
+    for key in ('seed_key', 'scan', 'world', 'game_build'):
+        _text(patch[key], key)
+    for key in ('seed_name', 'slot_name'):
+        if patch.get(key) is not None:
+            _text(patch[key], key)
+    if 'game' in patch and patch['game'] != GAME:
+        raise ValueError('Archipelago patch of another game.')
+    if type(patch['open_forest']) is not bool or not isinstance(patch['options'], dict):
+        raise ValueError('Invalid Archipelago patch: options.')
+    if 'player' in patch and patch['player'] is not None and type(patch['player']) is not int:
+        raise ValueError('Invalid Archipelago patch: player.')
+    placements, remote = patch['placements'], patch['remote']
+    if not isinstance(placements, dict) or len(placements) > MAX_ENTRIES:
+        raise ValueError('Invalid Archipelago patch: placements.')
+    for gid, placement in placements.items():
+        if not isinstance(gid, str) or len(gid) > MAX_NAME or not isinstance(placement, dict)                 or type(placement.get('own')) is not bool:
+            raise ValueError(f'Invalid placement in the Archipelago patch: {str(gid)[:80]}')
+        _text(placement.get('item'), f'placement {gid}')
+        for key in ('player', 'game'):
+            if placement.get(key) is not None:
+                _text(placement[key], f'placement {gid}')
+        if 'progression' in placement and type(placement['progression']) is not bool:
             raise ValueError(f'Invalid placement in the Archipelago patch: {gid}')
+        if placement.get('sphere') is not None and type(placement['sphere']) is not int:
+            raise ValueError(f'Invalid placement in the Archipelago patch: {gid}')
+    if not isinstance(remote, list) or len(remote) > MAX_ENTRIES:
+        raise ValueError('Invalid Archipelago patch: remote.')
+    for entry in remote:
+        if not isinstance(entry, dict):
+            raise ValueError('Invalid Archipelago patch: remote.')
+        for key in ('item', 'location', 'player'):
+            _text(entry.get(key), 'remote ' + key)
+    _optional(patch, 'precollected', list)
+    for item in patch.get('precollected') or ():
+        _text(item, 'precollected')
+    _optional(patch, 'location_ids', dict)
+    ids = patch.get('location_ids') or {}
+    if len(ids) > MAX_ENTRIES or any(not isinstance(k, str) or type(v) is not int or not 0 < v < 1 << 53
+                                     for k, v in ids.items()):
+        raise ValueError('Invalid Archipelago patch: location_ids.')
     return patch
 
 

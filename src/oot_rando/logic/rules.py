@@ -92,6 +92,41 @@ class State:
         return self.counts.get(item, 0)
 
 
+# The only shapes compile() generates (defense in depth: the settings, items and
+# requirements that reach a rule come from the seed or the player and are quoted
+# with repr()/int(); anything else in the generated source means a bug or an attack).
+_GENERATED_NODES = (ast.Expression, ast.Lambda, ast.arguments, ast.arg, ast.BoolOp, ast.And, ast.Or,
+                    ast.UnaryOp, ast.Not, ast.Compare, ast.Eq, ast.GtE, ast.Name, ast.Load, ast.Constant,
+                    ast.Call, ast.Attribute, ast.Subscript, ast.Tuple, ast.List)
+_GENERATED_ATTRIBUTES = {'s': {'at', 'has_bottle', 'hearts', 'reward_count', 'tod'}, 'c': {'get'}}
+
+
+def check_generated(source):
+    """Refuse generated rule code that is not made only of the expected shapes."""
+    try:
+        tree = ast.parse(source, mode='eval')
+    except SyntaxError as error:
+        raise ValueError('Generated rule does not parse: ' + str(error)) from None
+    for node in ast.walk(tree):
+        if not isinstance(node, _GENERATED_NODES):
+            raise ValueError('Unexpected generated rule code: ' + type(node).__name__)
+        if isinstance(node, ast.Lambda) and ([a.arg for a in node.args.args] != ['s', 'c', 'a']
+                                             or node.args.defaults or node.args.vararg or node.args.kwarg
+                                             or node.args.kwonlyargs or node.args.posonlyargs):
+            raise ValueError('Unexpected generated rule code: lambda')
+        if isinstance(node, ast.Name) and node.id not in ('s', 'c', 'a'):
+            raise ValueError('Unexpected generated rule code: name ' + node.id)
+        if isinstance(node, ast.Attribute) and not (isinstance(node.value, ast.Name)
+                                                    and node.attr in _GENERATED_ATTRIBUTES.get(node.value.id, ())):
+            raise ValueError('Unexpected generated rule code: attribute ' + node.attr)
+        if isinstance(node, ast.Call) and (not isinstance(node.func, ast.Attribute) or node.keywords):
+            raise ValueError('Unexpected generated rule code: call')
+        if isinstance(node, ast.Subscript) and not (isinstance(node.value, ast.Attribute) and node.value.attr == 'tod'):
+            raise ValueError('Unexpected generated rule code: subscript')
+        if isinstance(node, ast.Constant) and type(node.value) not in (str, int, bool):
+            raise ValueError('Unexpected generated rule code: constant')
+
+
 class Logic:
     """Compiled AP world. ``extra_exit_requirements`` gates region entries."""
 
@@ -369,7 +404,9 @@ class Logic:
         if extra_items:
             self.referenced.update(extra_items)
             code = '(' + code + ' and ' + ' and '.join(f'c.get({i!r},0)>=1' for i in sorted(extra_items)) + ')'
-        return eval('lambda s,c,a:' + code, {'__builtins__': {}})
+        source = 'lambda s,c,a:' + code
+        check_generated(source)
+        return eval(source, {'__builtins__': {}})
 
     # ----------------------------------------------------------------- search
     def new_state(self, counts=None):

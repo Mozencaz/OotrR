@@ -2,8 +2,10 @@
 
 * :func:`latest_release` asks the GitHub API for the latest published release
   (drafts and pre-releases excluded) and returns it when it is newer than this build.
-* :func:`install` downloads the archive of this system, checks it against the
-  release's ``SHA256SUMS.txt``, then swaps the executable in place: the running
+* :func:`install` downloads the archive of this system, checks the signature of
+  the release's ``SHA256SUMS.txt`` (``SHA256SUMS.txt.sig``, Ed25519, public key in
+  :mod:`oot_rando.update_key`: a release cannot be replaced without the project's
+  private key), checks the archive against it, then swaps the executable in place: the running
   file is renamed ``<exe>.old`` (Windows allows renaming, not deleting, a running
   executable) and the new one takes its name. ``data/`` is never touched.
 * :func:`restart` starts the new executable; :func:`cleanup` removes the ``.old``
@@ -30,10 +32,15 @@ from oot_rando.paths import FROZEN
 
 REPOSITORY = 'Mozencaz/OotrR'
 LATEST = f'https://api.github.com/repos/{REPOSITORY}/releases/latest'
+# Every download comes from this repository's releases, whatever the API answer says.
+DOWNLOADS = f'https://github.com/{REPOSITORY}/releases/download/'
+SUMS, SIGNATURE = 'SHA256SUMS.txt', 'SHA256SUMS.txt.sig'
+PAGES = f'https://github.com/{REPOSITORY}/releases/'
 USER_AGENT = 'OoT-Randomizer-updater'
 CA_FILES = ('/etc/ssl/certs/ca-certificates.crt', '/etc/pki/tls/certs/ca-bundle.crt',
             '/etc/ssl/ca-bundle.pem', '/etc/ssl/cert.pem')
 MAX_ARCHIVE = 512 << 20
+MAX_EXECUTABLE = 1 << 30      # uncompressed size of the executable inside the archive
 
 
 class UpdateError(Exception):
@@ -48,6 +55,7 @@ class Release:
     asset: str           # archive name for this system
     asset_url: str
     sums_url: str
+    signature_url: str
 
 
 def parse_version(text):
@@ -73,8 +81,18 @@ def executable():
     return Path(sys.executable).resolve()
 
 
+def public_key():
+    """Release signing key of this build (32 bytes), or None."""
+    from oot_rando.update_key import PUBLIC_KEY
+    try:
+        key = bytes.fromhex(PUBLIC_KEY)
+    except ValueError:
+        return None
+    return key if len(key) == 32 else None
+
+
 def can_self_update():
-    return FROZEN and asset_suffix() is not None
+    return FROZEN and asset_suffix() is not None and public_key() is not None
 
 
 def _context():
@@ -110,10 +128,15 @@ def release_from_json(value, current=__version__, platform=sys.platform):
         return None
     assets = {a.get('name'): a.get('browser_download_url') for a in value.get('assets') or [] if isinstance(a, dict)}
     archive = next((name for name in assets if name and name.endswith(suffix)), None)
-    if not archive or not assets.get('SHA256SUMS.txt'):
+    if not archive or not assets.get(SUMS) or not assets.get(SIGNATURE):
         return None
-    return Release(version, str(value.get('html_url') or ''), str(value.get('body') or ''),
-                   archive, assets[archive], assets['SHA256SUMS.txt'])
+    if any(not str(assets[name]).startswith(DOWNLOADS) for name in (archive, SUMS, SIGNATURE)):
+        return None
+    page = str(value.get('html_url') or '')
+    if not page.startswith(PAGES):
+        page = PAGES   # the browser only ever opens this repository's release pages
+    return Release(version, page, str(value.get('body') or ''),
+                   archive, assets[archive], assets[SUMS], assets[SIGNATURE])
 
 
 def latest_release(timeout=8):
@@ -133,17 +156,45 @@ def expected_hash(sums, name):
     raise UpdateError(f'{name} is not listed in SHA256SUMS.txt.')
 
 
+def verify_signature(sums, signature, key=None):
+    """Whether ``signature`` (raw 64 bytes, or base64) signs ``sums`` with the release key."""
+    import base64
+    import binascii
+    from oot_rando.ed25519 import verify
+    key = key if key is not None else public_key()
+    if key is None:
+        return False
+    if len(signature) != 64:
+        try:
+            signature = base64.b64decode(signature.strip(), validate=True)
+        except (binascii.Error, ValueError):
+            return False
+    return verify(key, sums, signature)
+
+
 def extract_executable(archive, name, exe_name):
     """Bytes of the executable inside a release archive (any folder level)."""
+    try:
+        return _extract(archive, name, exe_name)
+    except (zipfile.BadZipFile, tarfile.TarError, EOFError, OSError) as error:
+        raise UpdateError(f'{name} is not a valid archive: {error}') from None
+
+
+def _extract(archive, name, exe_name):
     if name.endswith('.zip'):
         with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
-            member = next((m for m in bundle.namelist() if m.replace('\\', '/').rsplit('/', 1)[-1] == exe_name), None)
+            member = next((m for m in bundle.infolist()
+                           if m.filename.replace('\\', '/').rsplit('/', 1)[-1] == exe_name), None)
             if member:
+                if member.file_size > MAX_EXECUTABLE:
+                    raise UpdateError(f'{exe_name} is unexpectedly large.')
                 return bundle.read(member)
     else:
         with tarfile.open(fileobj=io.BytesIO(archive), mode='r:gz') as bundle:
             member = next((m for m in bundle.getmembers() if m.isfile() and m.name.rsplit('/', 1)[-1] == exe_name), None)
             if member:
+                if member.size > MAX_EXECUTABLE:
+                    raise UpdateError(f'{exe_name} is unexpectedly large.')
                 return bundle.extractfile(member).read()
     raise UpdateError(f'{exe_name} not found in {name}.')
 
@@ -173,9 +224,15 @@ def install(release, progress=None):
     report = progress or (lambda message: None)
     if not can_self_update():
         raise UpdateError('Only the portable application updates itself. From the sources, use git pull.')
+    for url in (release.asset_url, release.sums_url, release.signature_url):
+        if not url.startswith(DOWNLOADS):
+            raise UpdateError("Download outside the project's releases refused.")
     target = executable()
     report(f'Downloading version {release.version}…')
     sums = _get(release.sums_url, 30, limit=1 << 16)
+    signature = _get(release.signature_url, 30, limit=1 << 10)
+    if not verify_signature(sums, signature):
+        raise UpdateError('The release is not signed by the project. Nothing was changed.')
     archive = _get(release.asset_url, 120)
     if hashlib.sha256(archive).hexdigest() != expected_hash(sums, release.asset):
         raise UpdateError('The download is corrupted (checksum mismatch). Nothing was changed.')

@@ -92,3 +92,34 @@ class LogicTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class GeneratedCodeTests(unittest.TestCase):
+    """compile() only ever evaluates the shapes it generates."""
+
+    def test_hostile_code_is_refused(self):
+        from oot_rando.logic.rules import check_generated
+        check_generated("lambda s,c,a:(c.get('Bow',0)>=1 and s.at('Root',lambda s,c,a:(a=='child')))")
+        for source in ("lambda s,c,a:__import__('os').system('x')",
+                       "lambda s,c,a:s.__class__",
+                       "lambda s,c,a:c.get.__globals__",
+                       "lambda s,c,a:open('x')",
+                       "lambda s,c,a,b=print:b",
+                       "lambda s,c,a:[x for x in c]",
+                       "lambda s,c,a:c.get(key=1)",
+                       "lambda s,c,a:c['x']",
+                       "lambda s,c,a:1.5"):
+            with self.subTest(source=source), self.assertRaises(ValueError):
+                check_generated(source)
+
+    def test_seed_values_stay_quoted(self):
+        # A seed's tracking.json gives the tracker its settings and extra requirements.
+        from oot_rando.logic.rando_options import defaults
+        from oot_rando.randomizer.full_randomizer import ap_settings
+        settings = ap_settings(defaults(), True)
+        settings['starting_age'] = "child')+__import__('os').system('echo pwned')#"
+        hostile_item = "Bow',0)>=0 or __import__('os').system('x') or c.get('"
+        logic = Logic(World(), settings, extra_location_requirements={'KF Kokiri Sword Chest': {hostile_item}})
+        rule = logic.compile('True', {hostile_item})
+        self.assertFalse(rule(None, {}, 'child'))      # the hostile name is only an item name
+        self.assertTrue(rule(None, {hostile_item: 1}, 'child'))

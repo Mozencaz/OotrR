@@ -14,6 +14,7 @@ the new file is taken.
 
 ``python -m oot_rando reload-test GAME.nup SEED_FOLDER a|b|off``
 """
+import hashlib
 import json
 from pathlib import Path
 
@@ -46,9 +47,19 @@ def _compress(raw, original, dicts, level=10):
 
 
 def seed_original(seed, name, data):
-    """The seed's own bytes of resource ``name`` while the test is installed (else ``data``)."""
-    backup = Path(seed) / (STATE + '.restbl')
-    if name == RESTBL and (Path(seed) / STATE).is_file() and backup.is_file():
+    """The seed's own bytes of resource ``name`` while the test is installed (else ``data``).
+
+    Only the very table the test installed (its SHA-256 is in the state file) stands for
+    the backup: any other change of the seed's RESTBL is still reported as a modification.
+    """
+    state_path, backup = Path(seed) / STATE, Path(seed) / (STATE + '.restbl')
+    if name != RESTBL or not state_path.is_file() or not backup.is_file():
+        return data
+    try:
+        installed = json.loads(state_path.read_text(encoding='utf-8')).get('restbl_sha256')
+    except (OSError, ValueError, AttributeError):
+        return data
+    if installed and hashlib.sha256(data).hexdigest() == installed:
         return backup.read_bytes()
     return data
 
@@ -125,6 +136,8 @@ def install(nup_path, seed, variant):
     temporary.write_bytes(encoded)
     temporary.replace(target)   # same size for both variants: only the content changes
     state['variant'] = variant
+    if rest_path.is_file():
+        state['restbl_sha256'] = hashlib.sha256(rest_path.read_bytes()).hexdigest()
     state_path.write_text(json.dumps(state), encoding='utf-8')
     return f'Variant {variant} installed: the board now changes the Deku Nuts by {VARIANTS[variant]:+d}.'
 

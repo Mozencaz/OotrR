@@ -86,6 +86,25 @@ class Units(unittest.TestCase):
         with self.assertRaises(ValueError):
             bridge.check_patch(broken)
 
+    def test_patch_shape_is_checked_in_full(self):
+        good = {'item': 'Sword', 'location': 'Somewhere', 'player': 'Ami'}
+        bridge.check_patch(sample_patch(remote=[good], precollected=['Bow'], location_ids={'A#1': 5}, player=2))
+        hostile = (
+            sample_patch(open_forest='yes'), sample_patch(options=[]), sample_patch(player='2'),
+            sample_patch(game='Other Game'), sample_patch(seed_key=7),
+            sample_patch(placements={'A#1': {'item': 'Bow\x0e\x00', 'own': True}}),     # control codes
+            sample_patch(placements={'A#1': {'item': 'B' * 5000, 'own': True}}),         # oversized name
+            sample_patch(placements={'A#1': {'item': 'Bow', 'own': True, 'sphere': '2'}}),
+            sample_patch(placements={'A#1': {'item': 'Bow', 'own': False, 'player': ['x']}}),
+            sample_patch(remote={'item': 'Sword'}), sample_patch(remote=[dict(good, location=None)]),
+            sample_patch(remote=[dict(good, player='Ami\nRoot')]),
+            sample_patch(precollected='Bow'), sample_patch(precollected=[1]),
+            sample_patch(location_ids={'A#1': '5'}), sample_patch(location_ids={'A#1': -1}),
+            sample_patch(slot_name='x' * 1000))
+        for patch in hostile:
+            with self.subTest(patch={k: v for k, v in patch.items() if k != 'options'}), self.assertRaises(ValueError):
+                bridge.check_patch(patch)
+
     def test_settings_must_match_patch(self):
         from oot_rando.randomizer.randomizer_core import Settings
         settings = bridge.settings_from_patch(sample_patch())
@@ -295,6 +314,67 @@ class WithGame(unittest.TestCase):
                                   timeout=300, cwd=folder)
             self.assertEqual(done.returncode, 0, done.stderr)
             self.assertEqual(int(done.stdout.strip()), len(self.player('k').names))
+
+
+    def test_apworld_module_loads_in_archipelago_and_refuses_another_copy(self):
+        """Its __init__ imported as Archipelago does, with stand-ins for Archipelago's modules."""
+        from oot_rando.archipelago.apworld_build import write_apworld
+        stubs = {
+            'BaseClasses.py': (
+                'class Item:\n    def __init__(self, *a): pass\n'
+                'class Location:\n    def __init__(self, *a): pass\n'
+                'class Region:\n    def __init__(self, *a): pass\n'
+                'class ItemClassification:\n    progression = useful = filler = 0\n'
+                'class LocationProgressType:\n    EXCLUDED = 0\n'),
+            'Options.py': (
+                'class Toggle: pass\nclass DefaultOnToggle(Toggle): pass\nclass Choice: pass\n'
+                'class OptionError(Exception): pass\nclass StartInventoryPool: pass\n'
+                'class PerGameCommonOptions: pass\n'),
+            'worlds/__init__.py': '',
+            'worlds/AutoWorld.py': 'class World: pass\n',
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            path = write_apworld(self.catalog, Path(folder) / 'oot_remake.apworld')
+            for name, text in stubs.items():
+                target = Path(folder) / 'ap' / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(text)
+            other = Path(folder) / 'other' / 'oot_rando'
+            other.mkdir(parents=True)
+            (other / '__init__.py').write_text('')
+            vendor = str(path).replace('\\', '/') + '/oot_remake/vendor/'
+            script = (
+                'import sys\n'
+                f"sys.path[:0] = [{str(Path(folder) / 'ap')!r}, {str(path)!r}] + sys.argv[1:]\n"
+                'import oot_remake, oot_rando\n'
+                f"assert oot_rando.__file__.replace(chr(92), '/').startswith({vendor!r}), oot_rando.__file__\n"
+                'print(len(oot_remake.OoTRemakeWorld.location_name_to_id))\n')
+            done = subprocess.run([sys.executable, '-I', '-c', script], capture_output=True, text=True,
+                                  timeout=300, cwd=folder)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertGreater(int(done.stdout.strip()), 0)
+            # Another oot_rando earlier on the path: the world refuses to load.
+            done = subprocess.run([sys.executable, '-I', '-c', script, str(Path(folder) / 'other')],
+                                  capture_output=True, text=True, timeout=300, cwd=folder)
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn('another copy of oot_rando', done.stderr)
+
+class ReloadTestIntegrity(unittest.TestCase):
+    def test_backup_stands_only_for_the_table_the_test_installed(self):
+        import hashlib
+        import tempfile
+        from pathlib import Path
+        from oot_rando.archipelago.reload_test import RESTBL, STATE, seed_original
+        with tempfile.TemporaryDirectory() as folder:
+            seed = Path(folder)
+            installed = b'table written by the test'
+            (seed / (STATE + '.restbl')).write_bytes(b'seed table')
+            (seed / STATE).write_text(json.dumps({'restbl_sha256': hashlib.sha256(installed).hexdigest()}))
+            self.assertEqual(seed_original(seed, RESTBL, installed), b'seed table')
+            self.assertEqual(seed_original(seed, RESTBL, b'anything else'), b'anything else')
+            self.assertEqual(seed_original(seed, 'other/file', installed), installed)
+            (seed / STATE).write_text(json.dumps({'variant': 'a'}))      # older state: no hash
+            self.assertEqual(seed_original(seed, RESTBL, installed), installed)
 
 
 if __name__ == '__main__':

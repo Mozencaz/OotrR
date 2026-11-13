@@ -18,7 +18,13 @@ from dataclasses import make_dataclass
 
 _VENDOR = os.path.join(os.path.dirname(__file__), 'vendor')
 if _VENDOR not in sys.path:
-    sys.path.insert(0, _VENDOR)
+    sys.path.append(_VENDOR)      # after Archipelago's own modules: it shadows none of them
+import oot_rando as _vendored  # noqa: E402
+if os.path.normcase(os.path.abspath(os.path.dirname(os.path.dirname(_vendored.__file__))))         != os.path.normcase(os.path.abspath(_VENDOR)):
+    # Another copy of the application (another apworld version, an installed package)
+    # was imported first: refuse rather than run its logic with this catalog.
+    raise ImportError('OoT Remake: another copy of oot_rando is loaded (' + str(_vendored.__file__)
+                      + '). Keep a single oot_remake.apworld in custom_worlds.')
 
 from BaseClasses import Item, ItemClassification, Location, LocationProgressType, Region  # noqa: E402
 from Options import (Choice, DefaultOnToggle, OptionError, PerGameCommonOptions, StartInventoryPool,  # noqa: E402
