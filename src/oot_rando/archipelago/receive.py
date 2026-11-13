@@ -113,7 +113,8 @@ class LiveDelivery:
     def __init__(self, manifest, live=None, clock=time.monotonic):
         from oot_rando.patching.soul_adapter import murmur3
         self.records = ((manifest.get('skips') or {}).get('ap_mailbox') or {}).get('items', [])
-        self.marker = murmur3('RandoSeed.' + str(manifest.get('seed_id', '')))
+        from oot_rando.randomizer.randomizer_core import save_marker
+        self.marker = murmur3(save_marker(manifest))
         self.deliverer = Deliverer(self.records, murmur3)
         self.live, self.clock = live, clock
         self.status, self.waiting = '', 0

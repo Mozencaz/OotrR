@@ -20,7 +20,7 @@ def sarc(data):
 
 
 def dictionaries(nup):
-    return sarc(zstd.ZstdDecompressor().decompress(nup.read('1/romfs/Pack/ZsDic.pack.zs')))
+    return sarc(zstd.ZstdDecompressor().decompress(nup.read(nup.latest('romfs/Pack/ZsDic.pack.zs'))))
 
 
 def decompress(data, dictionaries):

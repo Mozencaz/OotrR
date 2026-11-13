@@ -9,11 +9,11 @@ MAIN = b'NSO0' + bytes(0x3c) + bytes.fromhex(BUILD)
 
 
 class FakeNup:
-    def __init__(self, packages, main=MAIN):
-        self.packages, self.main = packages, main
+    def __init__(self, packages, main=MAIN, main_path='1/exefs/main'):
+        self.packages, self.main, self.main_path = packages, main, main_path
 
     def read(self, path):
-        if path != '1/exefs/main' or self.main is None:
+        if path != self.main_path or self.main is None:
             raise KeyError(path)
         return self.main
 
@@ -26,6 +26,14 @@ class NupCheckTest(unittest.TestCase):
         # Update first, other directory indices, an extra (DLC-like) package.
         check_supported_game(FakeNup([(UPDATE, 0, 1, 2, UPDATE_VERSION), (BASE + 0x1001, 7, 8, 9, 0),
                                       (BASE, 3, 4, 5, 0)]))
+
+    def test_update_merged_into_base(self):
+        check_supported_game(FakeNup([(BASE, 0, 1, 2, UPDATE_VERSION)], main_path='0/exefs/main'))
+
+    def test_merged_other_build(self):
+        with self.assertRaisesRegex(ValueError, 'Unsupported game build'):
+            check_supported_game(FakeNup([(BASE, 0, 1, 2, UPDATE_VERSION)], main=b'NSO0' + bytes(0x5c),
+                                         main_path='0/exefs/main'))
 
     def test_missing_update(self):
         with self.assertRaisesRegex(ValueError, 'update is missing'):

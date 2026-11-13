@@ -128,6 +128,24 @@ def _move_to_archive(directory, archive, suffix):
     return target
 
 
+def continued_save(title_directory, settings):
+    """Seed id that saves of the same Archipelago slot are bound to, from a seed installed
+    in ``title_directory``, or None.
+
+    A newer version of the application gives the same patch a new seed id. The placements
+    come from the patch, so the new seed keeps the old binding and those saves go on."""
+    if settings.archipelago is None or not Path(title_directory).is_dir():
+        return None
+    patch = settings.to_dict()['archipelago']
+    for other in sorted(Path(title_directory).iterdir()):
+        if not is_randomizer_seed(other):
+            continue
+        manifest = json.loads((other / 'manifest.json').read_text(encoding='utf-8'))
+        if manifest.get('settings', {}).get('archipelago') == patch:
+            return manifest.get('save_seed_id') or manifest['seed_id']
+    return None
+
+
 def generate_in_mods(nup, title_directory, settings, progress=None, archive=None, generate=None):
     """Generate a seed straight into the mods folder (no separate output folder).
 
@@ -136,7 +154,8 @@ def generate_in_mods(nup, title_directory, settings, progress=None, archive=None
     already there may come from an older version of the application, so it is moved
     to ``archive`` first (never deleted). Earlier seeds of this application are then
     archived too. A seed sharing resources with another mod is moved to the archive
-    and installation stops. Returns the seed folder.
+    and installation stops. An Archipelago seed keeps the saves of the seed of the same
+    slot it replaces (:func:`continued_save`). Returns the seed folder.
     """
     if generate is None:
         from oot_rando.randomizer.randomizer_core import generate
@@ -144,13 +163,18 @@ def generate_in_mods(nup, title_directory, settings, progress=None, archive=None
     title_directory = validate_mod_directory(title_directory)
     name = 'OoT_Randomizer_' + settings_identity(settings)[:16]
     destination = title_directory / name
+    save_seed_id = continued_save(title_directory, settings)
     if destination.exists():
         if archive is None or not is_randomizer_seed(destination):
             raise ValueError('Folder ' + name + ' already exists in the mods.')
         report('Same seed already installed: old copy archived, generating again…')
         _move_to_archive(destination, Path(archive), '-replaced')
     title_directory.mkdir(parents=True, exist_ok=True)
-    generate(nup, destination, settings, report)
+    if save_seed_id:
+        report('Same Archipelago slot already installed: its saves carry over.')
+        generate(nup, destination, settings, report, save_seed_id=save_seed_id)
+    else:
+        generate(nup, destination, settings, report)
     manifest, _ = read_artifact(destination)
     conflicts = _conflicting_mods(title_directory, manifest, name)
     if conflicts:

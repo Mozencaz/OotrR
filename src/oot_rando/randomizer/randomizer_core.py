@@ -52,6 +52,12 @@ def starting_pouch_items(full):
 # before the transition to Dm_Ending_0000.
 GOAL_FLOW, GOAL_EVENT = 'Event/EventFlow/Defeat_Ganon.bfevfl.zs', 'Event37'
 GOAL_MARKER_PREFIX = 'RandoGoal.'
+SEED_MARKER_PREFIX = 'RandoSeed.'
+
+
+def save_marker(manifest):
+    """Name of the saved flag that binds a save to this seed (set by the new-game opening)."""
+    return SEED_MARKER_PREFIX + str(manifest.get('save_seed_id') or manifest.get('seed_id', ''))
 CHECKS = [{'id': str(ident), 'region': 'Kokiri Forest',
            'name': f'Four-chest house — slot {i + 1}'}
           for i, ident in enumerate(sorted(CHESTS))]
@@ -198,8 +204,11 @@ def placements_for(settings):
     return result
 
 
-def generate(nup_path, output, settings, progress=None):
-    """Publish a complete new mod directory, never install or modify a game/save."""
+def generate(nup_path, output, settings, progress=None, save_seed_id=None):
+    """Publish a complete new mod directory, never install or modify a game/save.
+
+    ``save_seed_id``: an earlier seed of the same Archipelago slot whose saves this one
+    continues (its save marker is kept); by default the seed binds its own saves."""
     settings.validate_supported()
     output = Path(output)
     if output.exists():
@@ -252,7 +261,7 @@ def generate(nup_path, output, settings, progress=None):
             if active:
                 report('Composing chest rewards…')
                 for reward in sorted(set(placements.values())):
-                    pack = sarc(decompress(nup.read(f'1/romfs/Pack/Actor/{reward}.pack.zs'), d))
+                    pack = sarc(decompress(nup.read(nup.latest(f'romfs/Pack/Actor/{reward}.pack.zs')), d))
                     Byml(pack[f'Actor/{reward}.engine__actor__ActorParam.bgyml'])
                 raw, chests = patch_map(raw, placements)
                 # One logical check must have the same reward in both native ages.
@@ -270,7 +279,7 @@ def generate(nup_path, output, settings, progress=None):
             raw_maps[MAP] = raw
         from oot_rando.game.tracking_metadata import GAMEDATA, add_saved_flags, build_tracking, reward_label
         from oot_rando.patching.soul_adapter import murmur3
-        marker_name = 'RandoSeed.' + settings_identity(settings)
+        marker_name = SEED_MARKER_PREFIX + (save_seed_id or settings_identity(settings))
         if settings.full is not None:
             report('Opening the full Kokiri shop…')
             opened = 0
@@ -492,6 +501,8 @@ def generate(nup_path, output, settings, progress=None):
                     'coverage': world['coverage'], 'skips': skips, 'progression_randomized': full is not None,
                     'complete_randomizer': False,
                     'validation': 'Static checks done; this composed seed is still to be tested in game.'}
+        if save_seed_id:
+            manifest['save_seed_id'] = save_seed_id
         if full is not None:
             families = sorted({p['source'] for p in full['placements']})
             manifest['scope'] = ('Full glitchless randomizer: sources shuffled together ('
