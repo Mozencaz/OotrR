@@ -101,18 +101,24 @@ def parse_bools(table, entries, count):
 
 
 def parse_bool64(records, count):
-    """{key: True} of the set Bool64bitKey flags, or None when ``records`` is not the sorted
-    table that knows :data:`BOOL64_PROBE` (pure: tested without a game)."""
-    keys, flags = [], {}
+    """{key: True} of the set Bool64bitKey flags, or None when ``records`` is not the table
+    whose sorted part knows :data:`BOOL64_PROBE` (pure: tested without a game).
+
+    The game's own keys come first, sorted. A seed's GameData adds keys of its own
+    (chest opening flags, repeatable pickups...): the game appends their records
+    after the sorted ones (11657 sorted + 303 appended in a full seed, Hookshot).
+    """
+    keys, flags, sorted_end = [], {}, None
     for index in range(count):
         key, value = struct.unpack_from('<Q4xB', records, index * BOOL64_RECORD)
-        if keys and key <= keys[-1]:
-            return None
+        if sorted_end is None and keys and key <= keys[-1]:
+            sorted_end = index
         keys.append(key)
         if value == 1:
             flags[key] = True
-    position = bisect.bisect_left(keys, BOOL64_PROBE)
-    return flags if position < len(keys) and keys[position] == BOOL64_PROBE else None
+    head = keys[:sorted_end]
+    position = bisect.bisect_left(head, BOOL64_PROBE)
+    return flags if position < len(head) and head[position] == BOOL64_PROBE else None
 
 
 def valid_slot(read, slot):

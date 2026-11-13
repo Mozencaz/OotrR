@@ -79,6 +79,13 @@ class LiveGameDataTests(unittest.TestCase):
         self.assertTrue(snapshot['bool64_complete'])
         self.assertEqual(snapshot['bool64'], {5: True, BOOL64_PROBE: True, BOOL64_PROBE + 7: True})
 
+    def test_seed_keys_appended_after_the_sorted_ones(self):
+        # A seed's GameData adds Bool64bitKey entries: the game appends them, unsorted.
+        bool64 = {5: 0, BOOL64_PROBE: 0, BOOL64_PROBE + 9: 1, 7: 1, 3: 0, 6: 1}
+        snapshot = LiveGameData(FakeMemory(gamedata_image({SEQUENCE_IS_CHILDHOOD: True}, bool64=bool64))).snapshot()
+        self.assertTrue(snapshot['bool64_complete'])
+        self.assertEqual(snapshot['bool64'], {BOOL64_PROBE + 9: True, 7: True, 6: True})
+
     def test_finds_bool64_flags_moved_in_the_manager(self):
         regions = gamedata_image({SEQUENCE_IS_CHILDHOOD: True}, bool64={BOOL64_PROBE: 0, BOOL64_PROBE + 1: 1},
                                  bool64_at=BOOL64_TYPE + 0x30)
@@ -86,7 +93,8 @@ class LiveGameDataTests(unittest.TestCase):
         self.assertEqual(snapshot['bool64'], {BOOL64_PROBE + 1: True})
 
     def test_bool64_falls_back_to_the_save(self):
-        cases = {'unreadable': None, 'no probe key': {1: 1, 2: 1}, 'not sorted': {BOOL64_PROBE: 1, 3: 1}}
+        cases = {'unreadable': None, 'no probe key': {1: 1, 2: 1},
+                 'probe outside the sorted part': {5: 1, 2: 1, BOOL64_PROBE: 1}}
         for name, bool64 in cases.items():
             with self.subTest(name):
                 snapshot = LiveGameData(FakeMemory(gamedata_image({SEQUENCE_IS_CHILDHOOD: True},
