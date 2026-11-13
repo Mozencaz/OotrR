@@ -11,14 +11,32 @@ from oot_rando.tracker.save_reader import load_snapshot
 from oot_rando.paths import state_dir
 
 
-def save_roots(hookshot_root=None):
-    """Save folders of Hookshot and of the Eden emulator (NAND user saves)."""
+NAND_SAVE = ('nand', 'user', 'save')
+
+
+def emulator_save_root(path):
+    """NAND save folder of a portable emulator whose mods folder holds ``path``, or None.
+
+    Portable yuzu-family emulators (Ryuchii, Eden...) keep ``load/<title>`` (mods) and
+    ``nand/user/save`` side by side in their ``user`` folder."""
+    for folder in (Path(path), *Path(path).parents):
+        if folder.name.lower() == 'load' and (folder.parent / 'nand').is_dir():
+            return folder.parent.joinpath(*NAND_SAVE)
+    return None
+
+
+def save_roots(hookshot_root=None, mods=None):
+    """Save folders of Hookshot, of a portable emulator holding ``mods`` (its mods folder or
+    a seed in it), and of the Eden emulator in %APPDATA% (NAND user saves)."""
     roots = []
     if hookshot_root:
         root = Path(hookshot_root)
         if root.name.lower() == 'mods':
             root = root.parent
         roots.append(root / 'user' / 'save')
+    portable = emulator_save_root(mods) if mods else None
+    if portable:
+        roots.append(portable)
     appdata = os.environ.get('APPDATA')
     if appdata:
         roots.append(Path(appdata) / 'eden' / 'nand' / 'user' / 'save')
@@ -29,27 +47,27 @@ def save_roots(hookshot_root=None):
     return unique
 
 
-def find_save_slots(hookshot_root=None, title=None):
+def find_save_slots(hookshot_root=None, title=None, mods=None):
     """Every slot_*/progress.sav below the known save folders (any depth)."""
-    found = set()
-    for save in save_roots(hookshot_root):
+    found = {}
+    for save in save_roots(hookshot_root, mods):
         if not save.is_dir():
             continue
+        # The emulator NAND holds every game: keep this title's folders only.
+        emulator = tuple(part.lower() for part in save.parts[-3:]) == NAND_SAVE
         for path in save.rglob('progress.sav'):
             if not path.parent.name.startswith('slot_'):
                 continue
-            # The emulator NAND holds every game: keep this title's folders only.
-            emulator = 'eden' in (part.lower() for part in save.parts)
             if emulator and title and title.upper() not in (part.upper() for part in path.parts):
                 continue
-            found.add(path)
-    return sorted(found)
+            found.setdefault(path.resolve(), path)   # one entry when two roots reach the same save
+    return sorted(found.values())
 
 
-def newest_save(hookshot_root=None, title=None):
+def newest_save(hookshot_root=None, title=None, mods=None):
     """The progress.sav written most recently across every save and slot."""
     best, best_time = None, None
-    for path in find_save_slots(hookshot_root, title):
+    for path in find_save_slots(hookshot_root, title, mods):
         try:
             written = path.stat().st_mtime
         except OSError:

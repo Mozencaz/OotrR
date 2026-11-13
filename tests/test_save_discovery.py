@@ -28,6 +28,23 @@ class SaveDiscoveryTests(unittest.TestCase):
             os.utime(paths[2], (now + 5, now + 5))
             self.assertEqual(newest_save(root / 'mods'), paths[2])
 
+    def test_portable_emulator_saves_next_to_its_mods(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            user = Path(temporary) / 'Ryuchii' / 'user'
+            seed = user / 'load' / '0400486024DEC000' / 'OoT_Randomizer_0123456789abcdef'
+            seed.mkdir(parents=True)
+            title_save = user / 'nand' / 'user' / 'save' / '0' / 'PROFILE' / '0400486024DEC000'
+            ours = title_save / 'slot_00' / 'progress.sav'
+            other = user / 'nand' / 'user' / 'save' / '0' / 'PROFILE' / '0100000000010000' / 'slot_00' / 'progress.sav'
+            for path in (ours, other):
+                path.parent.mkdir(parents=True)
+                path.write_bytes(b'x')
+            for mods in (seed, seed.parent):
+                with self.subTest(mods=mods.name):
+                    self.assertIn(ours, find_save_slots(title='0400486024DEC000', mods=mods))
+                    self.assertNotIn(other, find_save_slots(title='0400486024DEC000', mods=mods))
+            self.assertNotIn(ours, find_save_slots(title='0400486024DEC000', mods=Path(temporary) / 'elsewhere'))
+
     def test_files_outside_slots_are_ignored(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / 'Hookshot'

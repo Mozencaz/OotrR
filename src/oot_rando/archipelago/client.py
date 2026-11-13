@@ -425,7 +425,7 @@ def main(argv=None):
     try:
         while not client.fatal:
             if not args.save:
-                path = newest_save(hookshot, TITLE)
+                path = newest_save(hookshot, TITLE, args.mod)
                 tracker.save_path = str(path) if path else ''
             tracker.refresh()
             client.update(tracker.completed, tracker.goal_reached)
