@@ -18,10 +18,16 @@ same; only two addresses differ, and change at every boot:
 possible guest addresses of each, keeping the one where the slot leads to a GameData table
 holding a known key.
 
-Only the Bool type is documented there. Bool64bitKey (most chest collection flags) keeps
-coming from progress.sav. The only write is ``LiveGameData.set_bool`` (the Archipelago
+Bool64bitKey flags (keyed by a placed actor's u64 instance hash: Gold Skulltulas, heart
+containers, free-standing items...) are not in Hookshot's menu. Their layout comes from the
+sloperina practice menu (PracticeROM/sloperina, docs/FINDINGS.md "Bool64bitKey", update
+v131072): a u32 count at GameDataMgr+0xC58 and, at the pointer in +0xC60, records sorted by
+key, 16 bytes each (u64 key, u32 reset type, u8 value at +0xC). The game binary-searches them
+for its Gold Skulltula count. When they cannot be read they keep coming from progress.sav.
+The only write is ``LiveGameData.set_bool`` (the Archipelago
 client's reception signal, ``patching.ap_mailbox``): one value byte, as the cheat menu does.
 """
+import bisect
 import ctypes
 import hashlib
 import struct
@@ -32,6 +38,10 @@ HOST_BASE = 0x100000000000
 GAMEDATA_SLOT = 0x84C9E180
 SEQUENCE_IS_CHILDHOOD = 0xCEA220D3   # murmur3('Sequence_IsChildhood'), always present
 MAX_TABLE, MAX_BOOLS = 1 << 20, 1 << 20
+BOOL64_TYPE = 0xC58                       # GameDataMgr offset of the Bool64bitKey entry (v131072)
+BOOL64_SCAN = range(0xC08, 0xD08, 8)      # other offsets tried if the game's layout moved
+BOOL64_RECORD = 16
+BOOL64_PROBE = 0xECDC46B409ED7D38         # the game's first Gold Skulltula: every save knows it
 GAME_EXE = 'hookshot.exe'
 EMULATOR_EXES = {'lichii.exe', 'ryuchii.exe', 'eden.exe', 'yuzu.exe', 'suyu.exe', 'citron.exe', 'sudachi.exe'}
 EXTRA_EMULATORS_KEY = 'extra_emulators'   # gui_state.json: executables the player added (Setup page)
@@ -88,6 +98,21 @@ def parse_bools(table, entries, count):
         if key and index < count:
             result[key] = bool(entries[index * 24 + 22] & 1)
     return result
+
+
+def parse_bool64(records, count):
+    """{key: True} of the set Bool64bitKey flags, or None when ``records`` is not the sorted
+    table that knows :data:`BOOL64_PROBE` (pure: tested without a game)."""
+    keys, flags = [], {}
+    for index in range(count):
+        key, value = struct.unpack_from('<Q4xB', records, index * BOOL64_RECORD)
+        if keys and key <= keys[-1]:
+            return None
+        keys.append(key)
+        if value == 1:
+            flags[key] = True
+    position = bisect.bisect_left(keys, BOOL64_PROBE)
+    return flags if position < len(keys) and keys[position] == BOOL64_PROBE else None
 
 
 def valid_slot(read, slot):
@@ -295,8 +320,34 @@ class LiveGameData:
         bools = parse_bools(raw_table, raw_entries, count)
         if SEQUENCE_IS_CHILDHOOD not in bools:
             raise LiveUnavailable('GameData table not recognised')
-        digest = hashlib.sha256(raw_entries).hexdigest()
-        return {'bool': bools, 'sha256': digest}
+        digest = hashlib.sha256(raw_entries)
+        snapshot = {'bool': bools, 'bool64_complete': False}
+        try:
+            snapshot['bool64'], raw_records = self._bool64(manager)
+            snapshot['bool64_complete'] = True
+            digest.update(raw_records)
+        except LiveUnavailable as error:
+            snapshot['bool64_status'] = str(error)
+        snapshot['sha256'] = digest.hexdigest()
+        return snapshot
+
+    def _bool64(self, manager):
+        """({key: True} of the set Bool64bitKey flags, raw records), or LiveUnavailable."""
+        offsets = [self._bool64_offset] if getattr(self, '_bool64_offset', None) else []
+        for offset in offsets + [BOOL64_TYPE] + [o for o in BOOL64_SCAN if o != BOOL64_TYPE]:
+            try:
+                count, records = self.u32(manager + offset), self.u64(manager + offset + 8)
+                if not (0 < count <= MAX_BOOLS and records and not records & 7):
+                    continue
+                raw = self.memory.read(records, count * BOOL64_RECORD)
+            except LiveUnavailable:
+                continue
+            flags = parse_bool64(raw, count)
+            if flags is not None:
+                self._bool64_offset = offset
+                return flags, raw
+        self._bool64_offset = None
+        raise LiveUnavailable('Bool64bitKey flags not found (game version?)')
 
 
 def bool_slot(table, size, key):
