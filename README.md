@@ -77,6 +77,26 @@ be added by its executable name in **Setup → Other emulator executables**.
 The **in-game overlay** (Windows, Hookshot) shows the item grid plus the soul and
 check counts over the game window; toggle it with **Ctrl + Shift + O**.
 
+## In-game tracker
+
+On an emulator or a Switch, every seed carries a small module that draws a tracker inside the game, in
+the game's own style: press **R + right stick up** to open it and again (or **B**) to close it. While it is
+open the game does not see R, the right stick or B. It shows the items (with their levels), the dungeons'
+small keys and boss keys, the checks found per region and in total, the enemy souls, and a warning when the
+loaded save is not from this seed. It only reads the game's save data; it never changes the game or the save.
+
+The seed folder gets `romfs/RandoTracker/seed.trk` (the flags to watch, no item placements; the format is in
+[docs/ingame-tracker-format.md](docs/ingame-tracker-format.md)) and `exefs/subsdk7`, the module. Both are
+listed in the seed's `manifest.json` and verified with the rest, and the module is only active while the seed
+is enabled in the game's add-ons. It is a **GPL-3** program, not covered by this project's MIT licence: its
+licence and source link are in `src/oot_rando/resources/ingame_tracker/` (`LICENSE`, `SOURCE.md`), and its
+source is at <https://github.com/waze3174/ootr-ingame-tracker>. It does not apply to a PC port (Hookshot,
+Longshot), which keeps its own overlay.
+
+To leave it out, untick **In-game tracker** in Settings > Customize settings > Quality of life, or add
+`--no-ingame-tracker` to `ap-install`. Seeds generated before this feature have no tracker data: generate
+them again.
+
 ## Skippable cutscenes and quality of life
 
 Code: [qol_patches.py](src/oot_rando/patching/qol_patches.py).
