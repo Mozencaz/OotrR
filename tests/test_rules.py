@@ -35,6 +35,22 @@ class LogicTests(unittest.TestCase):
         self.assertNotIn('Links Pocket', self.reachable({'Links Pocket': 'Ocarina'}))
         self.assertIn('Links Pocket', self.reachable({'Links Pocket': None}, {'Time Travel': 1}))
 
+    def test_night_tokens_need_suns_song_when_asked(self):
+        class Night:
+            tod = {'adult': True, 'child': True}
+        hookshot = {'Progressive Hookshot': 1}
+        song = dict(hookshot, **{'Ocarina': 1, 'Suns Song': 1})
+        relaxed = dict(self.logic.location_rules)['SFM GS'][0][1]
+        self.assertTrue(relaxed(Night, hookshot, 'adult'))
+        strict = Logic(self.data, {'open_forest': 'closed_deku',
+                                   'logic_no_night_tokens_without_suns_song': True})
+        rule = dict(strict.location_rules)['SFM GS'][0][1]
+        self.assertFalse(rule(Night, hookshot, 'adult'))
+        self.assertTrue(rule(Night, song, 'adult'))
+        # Other night locations keep waiting for the night.
+        self.assertIs(dict(strict.location_rules)['Kak Anju as Adult'][0][1](Night, {}, 'adult'),
+                      dict(self.logic.location_rules)['Kak Anju as Adult'][0][1](Night, {}, 'adult'))
+
     def test_saria_gift_waits_for_deku_tree(self):
         self.assertNotIn('LW Gift from Saria', self.reachable({'LW Gift from Saria': None}))
         self.assertIn('LW Gift from Saria', self.reachable({'LW Gift from Saria': None}, {'Deku Tree Clear': 1}))

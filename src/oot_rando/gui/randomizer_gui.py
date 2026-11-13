@@ -31,7 +31,8 @@ LABELS = dict(zip(POOL, ('Green Rupee', 'Blue Rupee', 'Red Rupee', 'Purple Rupee
                         'Arrows: medium bundle', 'Arrows: large bundle', 'Deku Shield', 'Hylian Shield')))
 GAME_OPTIONS = [('randomize_chests', 'Randomize the four Kokiri chests (child and adult)'),
                 ('avoid_vanilla', 'Avoid vanilla rewards when the pool allows it'),
-                ('open_forest', 'Open the way from Kokiri Forest to Hyrule Field')]
+                ('open_forest', 'Open the way from Kokiri Forest to Hyrule Field'),
+                ('skulltulas_always_present', 'Night-only gold skulltulas present day and night')]
 SKIP_OPTIONS = [('skip_locked_cutscenes', 'Skippable cutscenes: intro, title screen demo, end credits and area presentations'),
                 ('skip_auto_dialogues', 'Automatic dialogues skippable with + (minigames, Navi: 12 sequences)'),
                 ('skip_chest_cutscenes', 'Chests (big and small) without cutscene: the lid opens and the item is obtained')]
@@ -71,7 +72,27 @@ OPTION_COPY = {
     'shuffle_bushes': ('Bushes and grass', 'Shuffles the first reward of supported sources, then restores their vanilla loot.'),
     'shuffle_rocks': ('Rocks and stones', 'The first reward is shuffled. Then the rock goes back to its vanilla behaviour, even if it gave no item.'),
     'shuffle_enemy_spawns': ('Enemy souls', 'Find souls to make the matching enemies appear. A new game is required.'),
+    'start_inventory_from_pool': ('Starting inventory', 'Items held from the start, separated by commas, '
+                                  'with a count if needed: "Hover Boots, Progressive Hookshot x2, Heart Container x3". '
+                                  'Songs and tunics are not available yet.'),
+    'item_pool_value': ('Item pool', 'Plentiful: an extra copy of the major items. Scarce: at most 3 bottles '
+                        'and half the hearts. Minimal: one bottle and no extra hearts.'),
+    'logic_no_night_tokens_without_suns_song': ("Night skulltulas need Sun's Song",
+                                                 'Waiting for the night is not expected by the logic.'),
 }
+
+
+class ItemsVar:
+    """Text field holding a starting inventory (``"Hover Boots, Bow x2"``) as a dict."""
+
+    def __init__(self):
+        self.text = tk.StringVar(value='')
+
+    def get(self):
+        return rando_options.parse_items(self.text.get())
+
+    def set(self, value):
+        self.text.set(rando_options.format_items(value or {}))
 
 
 
@@ -100,6 +121,7 @@ class Application:
         self.nup, self.mods = tk.StringVar(), tk.StringVar()
         self.options = {name: tk.BooleanVar(value=True) for name, _ in OPTIONS}
         self.options['randomize_chests'].set(False)
+        self.options['skulltulas_always_present'].set(False)
         self.pool = {name: tk.BooleanVar(value=name.startswith('TBox_Rupee_')) for name in POOL}
         self.categories = {name: tk.BooleanVar(value=False) for name in CATEGORIES}
         self.excluded = {check['id']: tk.BooleanVar(value=False) for check in CHECKS}
@@ -491,7 +513,9 @@ class Application:
         ttk.Label(details, textvariable=self.full_reason, style='Page.TLabel', wraplength=780, justify='left').pack(anchor='w', padx=4, pady=(0, 10))
         grouped = {}
         for option in rando_options.OPTIONS:
-            if option.kind == 'bool':
+            if option.kind == 'items':
+                supported = [None, None]  # free text: always shown
+            elif option.kind == 'bool':
                 supported = [v for v in (False, True) if option.supported(v)]
             elif option.kind == 'int':
                 supported = list(option.supported_ints)
@@ -517,6 +541,8 @@ class Application:
         rows.pack(fill='x')
         rows.columnconfigure(0, weight=1)
         self.switch_row(rows, 0, 'Open the way from Kokiri Forest to Hyrule Field', self.options['open_forest'])
+        self.switch_row(rows, 1, 'Night-only gold skulltulas present day and night (the logic does not change)',
+                        self.options['skulltulas_always_present'])
         box = self.card(details, 'Share these settings')
         row = self.buttons(box)
         ttk.Button(row, text='Import…', command=self.import_settings).pack(side='left')
@@ -570,7 +596,10 @@ class Application:
         """Complete mode: each checkbox shows the state of its solver options."""
         if not self.full_enabled.get() or len(self.full_vars) != len(rando_options.OPTIONS):
             return
-        values = self.full_values()
+        try:
+            values = self.full_values()
+        except ValueError:
+            return  # starting inventory being typed
         for name, variable in self.categories.items():
             checked = name in rando_options.CATEGORY_OPTIONS and rando_options.category_checked(values, name)
             if variable.get() != checked:
@@ -596,11 +625,15 @@ class Application:
         ttk.Button(bar, text='Pop-out window', style='Page.Link.TButton', command=self.toggle_overlay).pack(side='right')
         ttk.Button(bar, text='In-game overlay', style='Page.Link.TButton', command=self.toggle_hud).pack(side='right', padx=14)
         box = self.card(parent, fill='both', expand=True)
+        self.tracker_box = box
         top = self.buttons(box, pady=(0, 12))
         self.counters = {}
-        for key, label in [('available', 'Available'), ('blocked', 'Not yet'), ('done', 'Done'), ('all', 'All')]:
-            frame = ttk.Frame(top, padding=(14, 7, 14, 8), cursor='hand2')
-            frame.pack(side='left', padx=(0, 8))
+        # Location filters, then two views of their own (shown when the seed has them):
+        # dungeon keys and enemy souls, each replacing the location list.
+        for key, label in [('available', 'Available'), ('blocked', 'Not yet'), ('done', 'Done'), ('all', 'All'),
+                           ('keys', 'Keys'), ('souls', 'Souls')]:
+            frame = ttk.Frame(top, padding=(12, 7, 12, 8), cursor='hand2')
+            frame.pack(side='left', padx=(0, 6))
             count = ttk.Label(frame, text='–', width=5)
             count.pack(anchor='w')
             name = ttk.Label(frame, text=label)
@@ -608,10 +641,14 @@ class Application:
             for widget in (frame, count, name):
                 widget.bind('<Button-1>', lambda event, k=key: self.set_tracker_filter(k))
             self.counters[key] = (frame, count, name)
-        ttk.Entry(top, textvariable=self.tracker_search, width=22).pack(side='right')
+        ttk.Entry(top, textvariable=self.tracker_search, width=18).pack(side='right')
         ttk.Label(top, text='Search', style='Small.TLabel').pack(side='right', padx=(0, 8))
         self.tracker_rows = ttk.Frame(box)
         self.tracker_rows.pack(fill='both', expand=True)
+        self.keys_rows = ttk.Frame(box)
+        self.souls_rows = ttk.Frame(box)
+        self.keys_tree, self.keys_shown = None, None
+        self.souls_tree, self.souls_open, self.souls_shown = None, {}, None
         footer = ttk.Frame(box)
         footer.pack(side='bottom', fill='x', before=self.tracker_rows)
         row = ttk.Frame(footer)
@@ -625,13 +662,19 @@ class Application:
         self.set_tracker_filter('all')
 
     def set_tracker_filter(self, key):
-        """The four counters above the list are also its filter."""
+        """The counters above the list are also its filter; Keys and Souls show their own view."""
         self.tracker_filter = key
         for name, (frame, count, label) in self.counters.items():
             prefix = 'TabOn' if name == key else 'Tab'
             frame.configure(style=prefix + '.TFrame')
             count.configure(style=prefix + 'Count.TLabel')
             label.configure(style=prefix + '.TLabel')
+        shown = {'keys': self.keys_rows, 'souls': self.souls_rows}.get(key, self.tracker_rows)
+        for view in (self.tracker_rows, self.keys_rows, self.souls_rows):
+            if view is not shown and view.winfo_manager():
+                view.pack_forget()
+        if not shown.winfo_manager():
+            shown.pack(fill='both', expand=True)
         self.render_tracker()
 
     def build_multiworld(self):
@@ -882,7 +925,12 @@ class Application:
         def describe():
             self.full_reason.set(label + ' — ' + (help_text or 'Choose the value that suits your game.'))
             self.update_presets()
-        if option.kind == 'bool':
+        if option.kind == 'items':
+            variable = ItemsVar()
+            widget = ttk.Entry(parent, textvariable=variable.text, width=40) if parent else None
+            if widget:
+                widget.bind('<FocusOut>', lambda event: describe(), add='+')
+        elif option.kind == 'bool':
             variable = tk.BooleanVar(value=option.default)
             widget = self.switch_row(parent, index, label, variable, command=describe) if parent else None
         elif option.kind == 'int':
@@ -1014,7 +1062,8 @@ class Application:
             name = filedialog.askopenfilename(filetypes=[('Archipelago patch', '*' + bridge.PATCH_SUFFIX)])
             if not name:
                 return
-            settings = bridge.settings_from_patch(bridge.load_patch(name)).validate_supported()
+            settings = bridge.settings_from_patch(
+                bridge.load_patch(name), self.options['skulltulas_always_present'].get()).validate_supported()
             nup = Path(self.nup.get())
             if not nup.is_file():
                 raise ValueError('Select the local NUP file.')
@@ -1442,14 +1491,113 @@ class Application:
             self.tracker_counts = {'done': count_done, 'total': total, 'available': count_access}
             for key, value in [('available', count_access), ('blocked', total - count_done - count_access), ('done', count_done), ('all', total)]:
                 self.counters[key][1].configure(text=str(value))
-            self.tracker_summary.set(f'Double-click a location to mark it by hand.   {count_partial} in a partial zone · {count_unknown} unknown')
+            self.tracker_summary.set({
+                'keys': 'Small keys: found / total, updated when the game saves. Boss key: real time.',
+                'souls': 'A family soul is listed in every zone where its enemies appear.',
+            }.get(self.tracker_filter, f'Double-click a location to mark it by hand.   {count_partial} in a partial zone · {count_unknown} unknown'))
         else:
             self.tracker_counts = None
             for frame, count, label in self.counters.values():
                 count.configure(text='–')
+        self.render_keys()
+        self.render_souls()
+        self.place_view_tabs()
         self.render_home_list(states)
         self.update_home()
         self.update_hud(states)
+
+    def render_souls(self):
+        """The enemy souls card: one row per zone (owned / total), each soul found or missing."""
+        if not hasattr(self, 'souls_rows'):
+            return
+        zones = self.tracker.souls() if self.tracker else []
+        owned = {name for _, entries in zones for name, has in entries if has}
+        names = {name for _, entries in zones for name, _ in entries}
+        self.counters['souls'][1].configure(text=f'{len(owned)}/{len(names)}' if names else '–')
+        if not zones:
+            self.souls_shown = None
+            return
+        if zones == self.souls_shown and self.souls_tree and self.souls_tree.winfo_exists():
+            return   # refreshed every second: rebuild only on a change
+        self.souls_shown = zones
+        old, scroll = self.souls_tree, 0.0
+        if old and old.winfo_exists():
+            scroll = old.yview()[0]
+            for item in old.get_children(''):
+                self.souls_open[item] = old.item(item, 'open')
+        for child in self.souls_rows.winfo_children():
+            child.destroy()
+        tree = ttk.Treeview(self.souls_rows, columns=('state',), show='tree headings', selectmode='browse', height=9)
+        tree.heading('#0', text='Zone / soul', anchor='w')
+        tree.heading('state', text='State', anchor='w')
+        self.souls_tree = tree
+        tree.column('#0', width=350, minwidth=200, stretch=True)
+        tree.column('state', width=160, minwidth=80, stretch=False)
+        tree.tag_configure('owned', foreground=theme.STATE_COLORS['available'])
+        tree.tag_configure('missing', foreground=theme.STATE_COLORS['blocked'])
+        tree.tag_configure('zone', font=self.fonts.strong)
+        scrollbar = ttk.Scrollbar(self.souls_rows, orient='vertical', command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side='right', fill='y')
+        tree.pack(side='left', fill='both', expand=True)
+        for zone, entries in zones:
+            iid = 'souls::' + zone
+            count = sum(has for _, has in entries)
+            tree.insert('', 'end', iid=iid, text=zone, open=self.souls_open.get(iid, False),
+                        values=(f'{count} / {len(entries)}',), tags=('zone',))
+            for position, (name, has) in enumerate(entries):
+                tree.insert(iid, 'end', iid=f'{iid}::{position}', text=name,
+                            values=('Found' if has else 'Missing',), tags=('owned' if has else 'missing',))
+        tree.update_idletasks()
+        tree.yview_moveto(scroll)
+
+    def place_view_tabs(self):
+        """The Keys and Souls tabs exist only when the seed has keys / souls to show."""
+        has = {'keys': bool(self.keys_shown), 'souls': bool(self.souls_shown)}
+        previous = self.counters['all'][0]
+        for key in ('keys', 'souls'):
+            frame = self.counters[key][0]
+            if has[key] and not frame.winfo_manager():
+                frame.pack(side='left', padx=(0, 6), after=previous)
+            elif not has[key] and frame.winfo_manager():
+                frame.pack_forget()
+            if has[key]:
+                previous = frame
+        if self.tracker_filter in has and not has[self.tracker_filter]:
+            self.set_tracker_filter('all')
+
+    def render_keys(self):
+        """The dungeon keys card: small keys found / total and the boss key, per dungeon."""
+        if not hasattr(self, 'keys_rows'):
+            return
+        rows = self.tracker.keys() if self.tracker else []
+        small = [s for _, s, _ in rows if s]
+        found, total = sum(s[0] for s in small), sum(s[1] for s in small)
+        self.counters['keys'][1].configure(text=f'{found}/{total}' if small else '–')
+        if not rows:
+            self.keys_shown = None
+            return
+        if rows == self.keys_shown and self.keys_tree and self.keys_tree.winfo_exists():
+            return   # refreshed every second: rebuild only on a change
+        self.keys_shown = rows
+        for child in self.keys_rows.winfo_children():
+            child.destroy()
+        tree = ttk.Treeview(self.keys_rows, columns=('small', 'boss'), show='tree headings', selectmode='none',
+                            height=9)
+        self.keys_tree = tree
+        tree.heading('#0', text='Dungeon', anchor='w')
+        tree.heading('small', text='Small keys', anchor='w')
+        tree.heading('boss', text='Boss key', anchor='w')
+        tree.column('#0', width=350, minwidth=200, stretch=True)
+        tree.column('small', width=160, minwidth=80, stretch=False)
+        tree.column('boss', width=160, minwidth=80, stretch=False)
+        tree.tag_configure('done', foreground=theme.STATE_COLORS['available'])
+        tree.pack(fill='both', expand=True)
+        for dungeon, small, boss in rows:
+            complete = (small is None or small[0] >= small[1]) and boss is not False
+            tree.insert('', 'end', text=dungeon, tags=('done',) if complete else (),
+                        values=(f'{small[0]} / {small[1]}' if small else '',
+                                '' if boss is None else 'Yes' if boss else 'No'))
 
     def update_hud(self, states=None):
         if not self.hud:
@@ -1460,7 +1608,8 @@ class Application:
         if states is None:
             states = {check['id']: self.tracker.check_state(check['id']) for check in self.current_checks}
         inventory, readable, tracked = self.tracker.inventory()
-        self.hud.update(game_overlay.overlay_model(inventory, readable, tracked, self.current_checks, states))
+        self.hud.update(game_overlay.overlay_model(inventory, readable, tracked, self.current_checks, states,
+                                                   self.tracker.keys()))
 
     def toggle_hud(self):
         if os.name != 'nt':
@@ -1494,6 +1643,13 @@ class Application:
             self.zone_open[item[len('zone::'):]] = value
 
     def set_all_zones(self, value):
+        if self.tracker_filter == 'souls':
+            for zone, _ in (self.tracker.souls() if self.tracker else []):
+                self.souls_open['souls::' + zone] = value
+            if self.souls_tree and self.souls_tree.winfo_exists():
+                for item in self.souls_tree.get_children(''):
+                    self.souls_tree.item(item, open=value)
+            return
         for check in self.current_checks:
             self.zone_open[check.get('region') or 'Other'] = value
         self.render_tracker()

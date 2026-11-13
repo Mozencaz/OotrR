@@ -35,7 +35,15 @@ def _canonical(value):
 
 
 def scan_fingerprint(groups, enemies, extra):
-    """SHA-256 of the scanned game data the preparation depends on."""
+    """SHA-256 of the scanned game data the preparation depends on.
+
+    Room locks of an enemy linked straight to its shutters (``'direct'``) only add a
+    Presence to those shutters at generation: the soul-bound enemies and the logic are
+    the same, so they stay out of the fingerprint and earlier patches remain valid.
+    """
+    enemies = [dict(enemy, locks=[lock for lock in enemy['locks'] if not lock.get('direct')])
+               if any(lock.get('direct') for lock in enemy.get('locks') or ()) else enemy
+               for enemy in enemies]
     return hashlib.sha256(_canonical({'groups': groups, 'enemies': enemies, 'extra': extra})).hexdigest()
 
 
@@ -61,6 +69,8 @@ def ap_option_specs():
     specs = [{'name': 'open_forest', 'kind': 'bool', 'label': 'Open the way (Kokiri Forest exit)',
               'default': True, 'values': [False, True], 'help': 'Mido no longer blocks the forest exit.'}]
     for option in rando_options.OPTIONS:
+        if option.kind == 'items':
+            continue  # starting items: the apworld's own start_inventory_from_pool
         values = [v for v in option.allowed() if option.supported(v)]
         if option.name in AP_SKIPPED or len(values) < 2:
             continue
@@ -95,6 +105,9 @@ def player_yaml(values, open_forest, name='Player'):
         text = ('true' if value else 'false') if spec['kind'] == 'bool' else f"'{ap_value_name(value)}'"
         lines.append(f'  {spec["name"]}: {text}')
     lines.append(f'  accessibility: {"full" if values["accessibility"] == "full" else "minimal"}')
+    if values['start_inventory_from_pool']:
+        import json
+        lines.append('  start_inventory_from_pool: ' + json.dumps(values['start_inventory_from_pool'], ensure_ascii=False))
     return '\n'.join(lines) + '\n'
 
 
@@ -335,15 +348,19 @@ def check_patch(patch):
     return patch
 
 
-def settings_from_patch(patch):
-    """Application settings that build the mod of this patch (full randomizer only, skips on)."""
+def settings_from_patch(patch, skulltulas_always_present=False):
+    """Application settings that build the mod of this patch (full randomizer only, skips on).
+
+    ``skulltulas_always_present`` only changes this game (no placement): a local choice.
+    """
     from oot_rando.randomizer.randomizer_core import SKIP_OPTIONS, Settings
     from oot_rando.game.randomizer_categories import CATEGORIES
     check_patch(patch)
     seed = f'AP {patch.get("seed_name", "")} {patch.get("slot_name", "")}'.strip()[:256]
     return Settings(seed=seed, randomize_chests=False, open_forest=bool(patch['open_forest']),
                     categories=dict.fromkeys(CATEGORIES, False), full=dict(patch['options']),
-                    archipelago=patch, **dict.fromkeys(SKIP_OPTIONS, True)).validate()
+                    archipelago=patch, skulltulas_always_present=bool(skulltulas_always_present),
+                    **dict.fromkeys(SKIP_OPTIONS, True)).validate()
 
 
 def _label(placement):

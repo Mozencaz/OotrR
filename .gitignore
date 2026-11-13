@@ -39,3 +39,6 @@ desktop.ini
 .impeccable/
 .cqr-memory.md
 .cqr-archive/
+
+# Local feature tracking
+FEATURES_TODO.md

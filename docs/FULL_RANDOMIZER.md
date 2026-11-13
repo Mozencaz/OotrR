@@ -25,6 +25,34 @@ child trade (egg, letter, masks), cows, the Gerudo card, beans, the lake Fire
 Arrows. Repeatable sources (pots, crates, beehives, bushes, rocks) give their
 shuffled reward only once (`repeatable_adapter.py`), then go back to their vanilla loot.
 
+## Starting inventory, item pool, removed keys
+
+* **Starting inventory** (`start_inventory_from_pool`, AP name): items held from the
+  start, given silently at the end of the opening (`event_patch.add_pouch_items`). A
+  copy found in the item pool is replaced by rupees; progressive copies take the
+  lowest tiers of their family. Songs, tunics and trade items have no pouch actor
+  yet. In a multiworld, the apworld's own `start_inventory_from_pool` is used.
+* **Item pool** (`item_pool_value`): plentiful (one extra copy of each major
+  non-progressive item, replacing filler), scarce (at most 3 bottles, half the
+  hearts), minimal (one bottle, no hearts, double defense or capacity upgrades). The
+  number of shuffled locations never changes.
+* **Maps and compasses "Start with", small keys / boss keys "Removed"**: the saved
+  `DungeonInfo.<folder>` values are written at the end of the opening
+  (`event_patch.add_start_values`, `key_adapter.start_dungeon_values`):
+  `IsGetMap`/`IsGetCompass`, `SmallKeyNum` = the AP key count, `IsGetBossKey` of the
+  five temples. Their chests hold rupees; the logic holds the keys from the start.
+  **Not validated in game.**
+* **Night skulltulas without Sun's Song** (AP logic option
+  `logic_no_night_tokens_without_suns_song`): `at_night` of the GS Token locations
+  needs the Ocarina and Sun's Song. Logic only: the game is not changed.
+* **Night skulltulas present day and night** (application setting
+  `skulltulas_always_present`, off by default, also available for an Archipelago
+  patch since no placement changes): `Enemy_Skulltula_Gold_Nocturnal` is set to
+  false on the 30 night-only gold skulltulas (18 maps,
+  `qol_patches.NOCTURNAL_SKULLTULA_MAPS`). The logic is unchanged (it still expects
+  the night or Sun's Song), so the game is only more permissive. **Not validated in game.**
+* **Fast chests** (`fast_chests`): same patch as the "chests without cutscene" skip.
+
 ## Item forms and derived actors (`item_forms.py`)
 
 The remake gives an item through three kinds of actors: `Item_*` (chest, event),

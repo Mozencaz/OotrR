@@ -26,7 +26,8 @@ from oot_rando.formats.inspect_resources import Byml, decompress, dictionaries, 
 from oot_rando.game.world_maps import effective_members
 from oot_rando.randomizer.randomizer_services import read_artifact
 from oot_rando.patching.randomize_kokiri import RESTBL, MAP
-from oot_rando.patching.qol_patches import STATIC, KOKIRI_SHOP_MAPS, KOKIRI_SHOP_FLAG, _shop_actor
+from oot_rando.patching.qol_patches import (STATIC, KOKIRI_SHOP_MAPS, KOKIRI_SHOP_FLAG, _shop_actor,
+                                            NOCTURNAL_FIELD, is_nocturnal_skulltula)
 from oot_rando.formats import byml_codec
 from oot_rando.patching.soul_adapter import murmur3, RSDB_FILES, GAMEDATA, FLAG_PREFIX
 from oot_rando.game.remake_world import PROGRESSIVE, item_actor
@@ -99,6 +100,7 @@ def verify(nup_path, seed_dir):
                 repeat_first[variant['resource']][variant['index']] = record
                 repeat_fallback[variant['resource']].append((record, variant))
     report = {'maps': 0, 'rewards': 0, 'presence': 0, 'events': 0}
+    always_skulltulas = bool((manifest.get('settings') or {}).get('skulltulas_always_present'))
     # Per-chest opening flags: each shuffled chest's own event (chest_flags), rebuilt
     # from the spoiler's chests and the original maps.
     chest_records = manifest.get('skips', {}).get('chest_flags', {}).get('records', [])
@@ -124,7 +126,6 @@ def verify(nup_path, seed_dir):
         # Archipelago reception: the global sequence's watcher and its event row.
         from oot_rando.patching import ap_mailbox
         # Records rebuilt from the patch alone (the remote items of this world).
-        from oot_rando.formats import byml_codec
         expected = ap_mailbox.records((manifest.get('archipelago') or {}).get('remote', []))
         if expected != mailbox['items']:
             raise ValueError('Archipelago reception differs from the patch.')
@@ -245,12 +246,19 @@ def verify(nup_path, seed_dir):
                 # Seed bag and quiver given silently at the end of the opening.
                 from oot_rando.randomizer.randomizer_core import starting_pouch_items
                 from oot_rando.patching.event_patch import starting_item_events
-                given = starting_pouch_items({'archipelago': manifest.get('archipelago')})
+                given = starting_pouch_items({'archipelago': manifest.get('archipelago'),
+                                              'starting': manifest.get('starting')})
                 for item, name in zip(given, starting_item_events(given)):
                     before[name] = {'Num': 1, 'IsEquipDIrect': False,
                                                         'IsSetMessageTargetActorName': False,
                                                         'Actor': item, 'IsGetEvent': False}
                     report['starting_items'] = report.get('starting_items', 0) + 1
+                from oot_rando.patching.event_patch import start_value_events
+                from oot_rando.patching.key_adapter import start_dungeon_values
+                values = start_dungeon_values((manifest.get('settings') or {}).get('full') or {})
+                for (key, value), name in zip(sorted(values.items()), start_value_events(values)):
+                    before[name] = {'GameDataName': key, 'Value': value, 'Index': -1}
+                    report['start_values'] = report.get('start_values', 0) + 1
             if before != after:
                 raise ValueError('Event modified outside the spoiler: ' + path)
             continue
@@ -299,6 +307,9 @@ def verify(nup_path, seed_dir):
                 else:
                     del a2['Presence']
                 report['kokiri_shop'] = report.get('kokiri_shop', 0) + 1
+            if always_skulltulas and is_nocturnal_skulltula(a2):
+                a2['Dynamic'][NOCTURNAL_FIELD] = False
+                report['skulltulas_always_present'] = report.get('skulltulas_always_present', 0) + 1
             if index in repeat_first.get(path, {}):
                 record = repeat_first[path][index]
                 a2['Presence'] = {'FlagName': record['flag'], 'IsNegation': True, 'IsCheckLazy': False}

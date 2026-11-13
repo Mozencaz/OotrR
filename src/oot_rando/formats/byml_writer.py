@@ -14,7 +14,8 @@ from oot_rando.formats.inspect_resources import Byml
 def patch_strings(raw, changes):
     """Apply ``{path: tuple, before: str|None, after: str|bool}`` records.
 
-    A boolean ``after`` is allowed only for a new leaf (``before=None``).
+    A boolean ``after`` is allowed for a new leaf (``before=None``) or to replace
+    an existing boolean leaf of a dictionary (``before`` is that boolean).
 
     ``before=None`` means the leaf must be absent, not a BYML null. Missing
     dictionary ancestors may then be created. Array sizes never change.
@@ -30,8 +31,9 @@ def patch_strings(raw, changes):
         path, before, after = tuple(change['path']), change['before'], change['after']
         if (not path or any(type(key) not in (str, int) for key in path)
                 or not isinstance(after, (str, bool)) or (isinstance(after, str) and '\0' in after)
-                or (isinstance(after, bool) and before is not None)
-                or (before is not None and not isinstance(before, str))):
+                or (isinstance(after, bool) and before is not None and not isinstance(before, bool))
+                or (isinstance(before, bool) and not isinstance(after, bool))
+                or (before is not None and not isinstance(before, (str, bool)))):
             raise ValueError('Invalid string edit.')
         if path in paths or any(path[:len(other)] == other or other[:len(path)] == path for other in paths):
             raise ValueError('Duplicate or overlapping string edits.')
@@ -45,8 +47,8 @@ def patch_strings(raw, changes):
                 if last:
                     if (before is None and key in cursor) or (before is not None and cursor.get(key) != before):
                         raise ValueError('String edit precondition failed.')
-                    if before is not None and not isinstance(cursor[key], str):
-                        raise ValueError('Existing value is not a string.')
+                    if before is not None and type(cursor[key]) is not type(before):
+                        raise ValueError('Existing value is not of the expected type.')
                     cursor[key] = after
                 else:
                     if key not in cursor:

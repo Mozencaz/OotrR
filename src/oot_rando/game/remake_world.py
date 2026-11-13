@@ -267,6 +267,16 @@ def enemy_counter_locks(path, root):
         for target in links_of(counter):
             if target.get('Gyaml', '').startswith('Enemy_'):
                 locks[target['Hash']].append(lock)
+    # Enemy linked straight to its shutters, without a counter (Deku Tree scrubs,
+    # the 2-3-1 scrub brothers, a Forest Temple Stalfos): defeating it opens them.
+    for enemy in actors:
+        if not enemy.get('Gyaml', '').startswith('Enemy_') or type(enemy.get('Hash')) is not int:
+            continue
+        doors = {door['Hash']: door for door in links_of(enemy) + incoming[enemy['Hash']] if is_door(door)}
+        if doors:
+            locks[enemy['Hash']].append({'counter': path + '#' + str(enemy['Hash']), 'direct': True, 'doors': [
+                {'resource': path, 'index': index_of[h], 'hash': str(h), 'actor': doors[h]['Gyaml'],
+                 'presence': doors[h].get('Presence')} for h in sorted(doors)]})
     return locks
 
 

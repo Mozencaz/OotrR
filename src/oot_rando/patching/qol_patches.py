@@ -1655,3 +1655,28 @@ def free_bomb_lift(pack_raw):
     document['root']['LiftGrade'] = byml_codec.U32(FREE_LIFT_GRADE)
     files[BOMB_LIFTABLE] = byml_codec.dump(document)
     return byml_codec.build_sarc(files), 1
+
+
+# Gold skulltulas shown only at night carry ``Enemy_Skulltula_Gold_Nocturnal: true``
+# on their map instance (30 skulltulas in 18 maps, v131072). Setting it to false makes
+# them behave like the other skulltulas: present day and night.
+NOCTURNAL_FIELD = 'Enemy_Skulltula_Gold_Nocturnal'
+NOCTURNAL_SKULLTULA_MAPS = tuple(f'Banc/{folder}/{folder}_{variant}_Static.bcett.byml.zs' for folder, variant in (
+    ('DesertColossus', 'Adult'), ('DesertColossus', 'Child'), ('GerudoFortress', 'Adult'),
+    ('GerudoValley', 'Adult'), ('GerudoValley', 'Child'), ('Graveyard', 'Adult'), ('Graveyard', 'Child'),
+    ('HyruleField', 'Adult'), ('HyruleField', 'Child'), ('KakarikoVillage', 'Adult_Alternative'),
+    ('KakarikoVillage', 'Adult'), ('KakarikoVillage', 'Child'), ('KokiriForest', 'Adult'),
+    ('KokiriForest', 'Child'), ('ZoraFountain', 'Adult'), ('ZoraFountain', 'Child'),
+    ('ZoraRiver', 'Adult'), ('ZoraRiver', 'Child')))
+
+
+def is_nocturnal_skulltula(actor):
+    dynamic = actor.get('Dynamic')
+    return (actor.get('Gyaml') == 'Enemy_Skulltula_Gold' and isinstance(dynamic, dict)
+            and dynamic.get(NOCTURNAL_FIELD) is True)
+
+
+def nocturnal_skulltula_edits(root):
+    """``patch_strings`` edits making every night-only gold skulltula of a map always present."""
+    return [{'path': ('Actors', index, 'Dynamic', NOCTURNAL_FIELD), 'before': True, 'after': False}
+            for index, actor in enumerate(root.get('Actors', [])) if is_nocturnal_skulltula(actor)]

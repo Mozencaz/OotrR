@@ -201,3 +201,81 @@ def add_pouch_items(raw, after, actors):
     if written.params is None or not set(POUCH_ACTOR_PARAMS) <= set(written.params.data):
         raise ValueError('PouchSystemActor actor without native parameters.')
     return result
+
+
+def start_value_events(values):
+    """Event name of each GameData value written at the start (sorted by name)."""
+    return ['RandoStartValue_' + name for name in sorted(values)]
+
+
+def add_start_values(raw, after, values):
+    """Write GameData values after event ``after`` (native GameDataActor actions).
+
+    ``values`` maps GameData names to a bool (``EventTriggerSetGameDataBool``) or
+    an int (``EventTriggerSetGameDataInt``), written in name order. The original
+    continuation of ``after`` is preserved. Returns new bytes.
+    """
+    from evfl.actor import Actor
+    from evfl.common import ActorIdentifier, StringHolder
+    from evfl.container import Container
+    from evfl.event import Event, ActionEvent
+    from evfl.util import make_index, make_rindex
+    if not values:
+        return raw
+    flow = _flow(raw)
+    chart = flow.flowchart
+    events = {e.name: e for e in chart.events}
+    expected = _snapshot(flow)
+    anchor = events.get(after)
+    if anchor is None or not hasattr(anchor.data, 'nxt'):
+        raise ValueError('Anchor event without continuation: ' + after)
+    actor = next((a for a in chart.actors if str(a.identifier) == 'GameDataActor'), None)
+    if actor is None:
+        actor = Actor()
+        actor.identifier = ActorIdentifier('GameDataActor')
+        actor.concurrent_clips = 1
+        actor.params = Container()
+        actor.params.data = dict(GAMEDATA_ACTOR_PARAMS)
+        chart.actors.append(actor)
+
+    def action(name):
+        found = next((a for a in actor.actions if a.v == name), None)
+        if found is None:
+            found = StringHolder(name)
+            actor.actions.append(found)
+        return found
+
+    previous, names = anchor, start_value_events(values)
+    for (key, value), name in zip(sorted(values.items()), names):
+        if type(value) not in (bool, int):
+            raise ValueError(f'Unsupported start value for {key}: {value!r}')
+        if name in events:
+            raise ValueError('Duplicate start value: ' + key)
+        event = Event()
+        event.name, event.data = name, ActionEvent()
+        kind = 'EventTriggerSetGameDataBool' if type(value) is bool else 'EventTriggerSetGameDataInt'
+        event.data.actor, event.data.actor_action = make_rindex(actor), make_rindex(action(kind))
+        event.data.params = Container()
+        event.data.params.data = {'GameDataName': key, 'Value': value, 'Index': -1}
+        event.data.nxt = previous.data.nxt
+        previous.data.nxt = make_index(event)
+        chart.events.append(event)
+        events[name] = event
+        expected[name] = dict(event.data.params.data)
+        previous = event
+    stream = io.BytesIO()
+    flow.write(stream)
+    result = stream.getvalue()
+    checked = _flow(result)
+    if _snapshot(checked) != expected:
+        raise ValueError('Writing start values changed other parameters.')
+    actual = {e.name: e for e in checked.flowchart.events}
+    chain = actual[after]
+    for name in names:
+        if chain.data.nxt.v is not actual[name]:
+            raise ValueError('Invalid start value chain.')
+        chain = actual[name]
+    written = next(a for a in checked.flowchart.actors if str(a.identifier) == 'GameDataActor')
+    if written.params is None or not set(GAMEDATA_ACTOR_PARAMS) <= set(written.params.data):
+        raise ValueError('GameDataActor actor without native parameters.')
+    return result
