@@ -11,7 +11,8 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 
 from oot_rando.randomizer.randomizer_core import Settings, CHECKS, GENERATOR_VERSION, generate
-from oot_rando.randomizer.randomizer_services import read_artifact, generate_in_mods, validate_mod_directory
+from oot_rando.randomizer.randomizer_services import (read_artifact, generate_in_mods, qol_seed_warning,
+                                                      validate_mod_directory)
 from oot_rando.randomizer.qol_install import install_qol
 from oot_rando.tracker.auto_tracker import TrackerSession, newest_save
 from oot_rando.tracker import game_overlay
@@ -1195,8 +1196,10 @@ class Application:
         self.use_artifact(directory)
         self.show_page('tracker')
         self.status.set('Seed generated and installed: ' + str(installed))
+        warning = qol_seed_warning(Path(installed).parent)
         messagebox.showinfo('Seed ready', 'Seed installed in:\n' + str(installed)
-                            + '\n\nStart a new game to enable automatic tracking and first collections.')
+                            + '\n\nStart a new game to enable automatic tracking and first collections.'
+                            + ('\n\n' + warning if warning else ''))
 
     def use_artifact(self, directory):
         manifest, _ = read_artifact(directory)

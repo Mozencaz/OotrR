@@ -204,7 +204,21 @@ def generate_in_mods(nup, title_directory, settings, progress=None, archive=None
                          + '. Move these mods out of the title folder, then generate again.')
     if archive is not None:
         archive_previous_seeds(title_directory, Path(archive), keep=name)
+    warning = qol_seed_warning(title_directory)
+    if warning:
+        report('Warning: ' + warning)
     return destination
+
+
+def qol_seed_warning(title_directory):
+    """Text to show after a seed install while ``OoT_QoL`` sits beside it, else None.
+
+    The QoL folder sorts first and carries its own resource table and chest flows, which
+    would hide the seed's larger ones."""
+    if is_qol_install(Path(title_directory) / QOL_FOLDER):
+        return (QOL_FOLDER + " is installed in this mods folder. Turn it off in your emulator's add-ons "
+                'while playing this seed (Ryuchii does this automatically from its next version).')
+    return None
 
 
 class ManualTracker:

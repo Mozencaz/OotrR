@@ -12,7 +12,8 @@ from oot_rando.patching.qol_patches import INTRO
 from oot_rando.patching.randomize_kokiri import BUILD, TITLE
 from oot_rando.randomizer import qol_install
 from oot_rando.randomizer.randomizer_services import (QOL_FOLDER, archive_previous_seeds, conflicting_mods,
-                                                      is_qol_install, is_randomizer_seed, read_artifact)
+                                                      generate_in_mods, is_qol_install, is_randomizer_seed,
+                                                      qol_seed_warning, read_artifact)
 
 NUP = os.environ.get('OOT_NUP')
 SEED_ID = 'a' * 64
@@ -65,6 +66,39 @@ class FolderRecognitionTests(unittest.TestCase):
         foreign = write_manifest(self.mods / 'Foreign', files={})
         (foreign / 'romfs' / 'shared.bin').write_bytes(b'y')
         self.assertEqual(conflicting_mods(self.mods, {'files': {'shared.bin': {}}}, 'new'), ['Foreign'])
+
+
+class SeedInstallWarningTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.mods = Path(self.temporary.name) / TITLE
+        self.mods.mkdir()
+
+    def test_no_warning_without_the_qol_folder(self):
+        self.assertIsNone(qol_seed_warning(self.mods))
+
+    def test_warning_names_the_folder_and_what_to_do(self):
+        write_manifest(self.mods / QOL_FOLDER, kind='qol', files={})
+        warning = qol_seed_warning(self.mods)
+        self.assertIn(QOL_FOLDER + ' is installed in this mods folder', warning)
+        self.assertIn('Turn it off', warning)
+
+    def test_a_seed_install_goes_ahead_and_warns(self):
+        from unittest import mock
+        from oot_rando.randomizer.randomizer_core import Settings
+
+        def fake_generate(nup, destination, settings, report, **options):
+            (destination / 'romfs').mkdir(parents=True)
+        qol = write_manifest(self.mods / QOL_FOLDER, kind='qol', files={})
+        (qol / 'romfs' / 'shared.bin').write_bytes(b'x')
+        messages = []
+        manifest = {'files': {'shared.bin': {}}}
+        with mock.patch('oot_rando.randomizer.randomizer_services.read_artifact', return_value=(manifest, {})):
+            folder = generate_in_mods('game.nup', self.mods, Settings('warn'), messages.append,
+                                      generate=fake_generate)
+        self.assertTrue(folder.is_dir() and qol.is_dir())
+        self.assertIn('Warning: ' + qol_seed_warning(self.mods), messages)
 
 
 class InstallWarningTests(unittest.TestCase):
