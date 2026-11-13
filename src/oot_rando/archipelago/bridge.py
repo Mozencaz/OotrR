@@ -340,15 +340,19 @@ def check_patch(patch):
     return patch
 
 
-def settings_from_patch(patch):
-    """Application settings that build the mod of this patch (full randomizer only, skips on)."""
+def settings_from_patch(patch, skulltulas_always_present=False):
+    """Application settings that build the mod of this patch (full randomizer only, skips on).
+
+    ``skulltulas_always_present`` only changes this game (no placement): a local choice.
+    """
     from oot_rando.randomizer.randomizer_core import SKIP_OPTIONS, Settings
     from oot_rando.game.randomizer_categories import CATEGORIES
     check_patch(patch)
     seed = f'AP {patch.get("seed_name", "")} {patch.get("slot_name", "")}'.strip()[:256]
     return Settings(seed=seed, randomize_chests=False, open_forest=bool(patch['open_forest']),
                     categories=dict.fromkeys(CATEGORIES, False), full=dict(patch['options']),
-                    archipelago=patch, **dict.fromkeys(SKIP_OPTIONS, True)).validate()
+                    archipelago=patch, skulltulas_always_present=bool(skulltulas_always_present),
+                    **dict.fromkeys(SKIP_OPTIONS, True)).validate()
 
 
 def _label(placement):

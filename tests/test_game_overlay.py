@@ -37,7 +37,15 @@ class OverlayModelTests(unittest.TestCase):
         self.assertEqual((model['done'], model['total']), (2, 4))
 
     def test_model_holds_only_the_grid_and_the_two_counts(self):
-        self.assertEqual(set(overlay_model({}, set(), set(), [], {})), {'cells', 'souls', 'done', 'total'})
+        self.assertEqual(set(overlay_model({}, set(), set(), [], {})), {'cells', 'keys', 'souls', 'done', 'total'})
+
+    def test_key_cells(self):
+        keys = [('Forest Temple', (3, 5), True), ('Fire Temple', (8, 8), True),
+                ('Bottom of the Well', (3, 3), None), ("Ganon's Castle", (2, 2), False)]
+        cells = overlay_model({}, set(), set(), [], {}, keys)['keys']
+        self.assertEqual([c['abbr'] for c in cells], ['Fo', 'Fi', 'BW', 'GC'])
+        self.assertEqual([c['complete'] for c in cells], [False, True, True, False])
+        self.assertEqual(overlay_model({}, set(), set(), [], {})['keys'], [])
 
 
 class ObservedInventoryTests(unittest.TestCase):

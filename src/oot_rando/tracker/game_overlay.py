@@ -59,6 +59,11 @@ ICONS = {
     'Ice Arrows': ['Item_Arrow_Ice'], 'Light Arrows': ['Item_Arrow_Light'], 'Zeldas Letter': ['Item_ZeldaLetter'],
     'Stone of Agony': ['Item_AgonyStone'],
 }
+# Dungeon keys row: one cell per dungeon (tracker label -> abbreviation).
+KEY_ABBR = {'Forest Temple': 'Fo', 'Fire Temple': 'Fi', 'Water Temple': 'Wa', 'Shadow Temple': 'Sh',
+            'Spirit Temple': 'Sp', 'Bottom of the Well': 'BW', 'Gerudo Training Ground': 'GTG',
+            "Ganon's Castle": 'GC'}
+BOSS_KEY_ICON = 'Item_Dungeon_BossKey'
 SHAPES = {'Kokiri Emerald': 'stone', 'Goron Ruby': 'stone', 'Zora Sapphire': 'stone'}   # others in row 4: medallions
 ICON_SIZE = 128   # cached PNG size; scaled down per cell
 
@@ -71,15 +76,16 @@ def icon_name(item, level):
 
 
 def all_icon_names():
-    return sorted({name for names in ICONS.values() for name in names})
+    return sorted({name for names in ICONS.values() for name in names} | {BOSS_KEY_ICON})
 
 
-def overlay_model(inventory, readable, tracked, checks, states):
+def overlay_model(inventory, readable, tracked, checks, states, keys=()):
     """Everything the HUD draws, from the tracker's observations only.
 
     inventory: {item: level} observed in the save; readable: items whose flag the save holds;
     tracked: items the seed has inventory rules for. An item outside both is 'unknown' (never
-    shown as missing: the save simply does not tell).
+    shown as missing: the save simply does not tell). keys: the tracker's dungeon keys,
+    ``[(dungeon, (found, total) or None, boss key or None)]`` (one cell each).
     """
     cells = []
     for row in GRID:
@@ -100,7 +106,10 @@ def overlay_model(inventory, readable, tracked, checks, states):
     souls = sorted(item for item in tracked if item.startswith('Soul ('))
     soul_count = (sum(1 for item in souls if inventory.get(item)), len(souls)) if souls else None
     done = sum(1 for check in checks if states.get(check['id'], {}).get('completed'))
-    return {'cells': cells, 'souls': soul_count, 'done': done, 'total': len(checks)}
+    key_cells = [{'dungeon': dungeon, 'abbr': KEY_ABBR.get(dungeon, dungeon[:2]), 'small': small, 'boss': boss,
+                  'complete': (small is None or small[0] >= small[1]) and boss is not False}
+                 for dungeon, small, boss in keys or ()]
+    return {'cells': cells, 'keys': key_cells, 'souls': soul_count, 'done': done, 'total': len(checks)}
 
 
 # ---------------------------------------------------------------- Windows window
@@ -412,10 +421,11 @@ class GameHud:
         c.delete('all')
         s = lambda v: max(1, int(round(v * scale)))
         cell, gap, pad, line = s(22), s(2), s(2), s(13)
-        cols = max(len(row) for row in m['cells'])
+        cols = max([len(row) for row in m['cells']] + [len(m.get('keys') or ())])
         width = 2 * pad + cols * cell + (cols - 1) * gap
         text_lines = 1 + bool(m['souls'])   # only the soul and check counts are written
-        height = 2 * pad + len(m['cells']) * (cell + gap) + s(4) + text_lines * line
+        rows = len(m['cells']) + bool(m.get('keys'))
+        height = 2 * pad + rows * (cell + gap) + s(4) + text_lines * line
         abbr_font = ('Segoe UI', -s(9), 'bold')
         level_font = ('Segoe UI', -s(8), 'bold')
         bold = ('Segoe UI', -s(10), 'bold')
@@ -456,6 +466,26 @@ class GameHud:
                         label(x + cell - s(1), y + cell, str(entry['level']), ACCENT, level_font, 'se')
                 x += cell + gap
             y += cell + gap
+        if m.get('keys'):
+            # One cell per dungeon: abbreviation top left, boss key top right (game icon,
+            # greyed while missing), small keys found/total below.
+            small_font = ('Segoe UI', -s(7), 'bold')
+            x = pad
+            for entry in m['keys']:
+                small, boss = entry['small'], entry['boss']
+                if boss is not None:
+                    mark = self.icons.get(BOSS_KEY_ICON, s(12), boss) if self.icons else None
+                    if mark:
+                        c.create_image(x + cell - s(5), y + s(6), image=mark)
+                    else:
+                        c.create_oval(x + cell - s(8), y + s(1), x + cell - s(1), y + s(8),
+                                      fill='#d9b13b' if boss else '', outline='#d9b13b' if boss else MISSING_FG)
+                label(x + s(1), y, entry['abbr'], TEXT if entry['complete'] else MISSING_FG, small_font, 'nw')
+                if small:
+                    fill = ACCENT if small[0] >= small[1] else TEXT if small[0] else MISSING_FG
+                    label(x + cell / 2, y + cell, f'{small[0]}/{small[1]}', fill, level_font, 's')
+                x += cell + gap
+            y += cell + gap
         y += s(4)
 
         def count(name, done, total):
@@ -479,7 +509,10 @@ def demo_model():
     checks = [{'id': str(i), 'region': region} for i, region in enumerate(
         ['Kokiri Forest'] * 6 + ['Hyrule Field'] * 4 + ['Market'] * 3 + ['Kakariko Village'] * 2 + ['Lake Hylia'])]
     states = {str(i): {'completed': i < 3, 'access': 'available' if i % 2 else 'blocked'} for i in range(len(checks))}
-    return overlay_model(owned, tracked, tracked, checks, states)
+    keys = [('Forest Temple', (3, 5), True), ('Fire Temple', (8, 8), True), ('Water Temple', (0, 6), False),
+            ('Shadow Temple', (0, 5), False), ('Spirit Temple', (1, 5), False), ('Bottom of the Well', (1, 3), None),
+            ('Gerudo Training Ground', (0, 9), None), ("Ganon's Castle", (0, 2), False)]
+    return overlay_model(owned, tracked, tracked, checks, states, keys)
 
 
 if __name__ == '__main__':

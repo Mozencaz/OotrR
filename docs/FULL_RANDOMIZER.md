@@ -42,8 +42,15 @@ shuffled reward only once (`repeatable_adapter.py`), then go back to their vanil
   `IsGetMap`/`IsGetCompass`, `SmallKeyNum` = the AP key count, `IsGetBossKey` of the
   five temples. Their chests hold rupees; the logic holds the keys from the start.
   **Not validated in game.**
-* **Night skulltulas without Sun's Song**: `at_night` of the GS Token locations
-  needs the Ocarina and Sun's Song.
+* **Night skulltulas without Sun's Song** (AP logic option
+  `logic_no_night_tokens_without_suns_song`): `at_night` of the GS Token locations
+  needs the Ocarina and Sun's Song. Logic only: the game is not changed.
+* **Night skulltulas present day and night** (application setting
+  `skulltulas_always_present`, off by default, also available for an Archipelago
+  patch since no placement changes): `Enemy_Skulltula_Gold_Nocturnal` is set to
+  false on the 30 night-only gold skulltulas (18 maps,
+  `qol_patches.NOCTURNAL_SKULLTULA_MAPS`). The logic is unchanged (it still expects
+  the night or Sun's Song), so the game is only more permissive. **Not validated in game.**
 * **Fast chests** (`fast_chests`): same patch as the "chests without cutscene" skip.
 
 ## Item forms and derived actors (`item_forms.py`)

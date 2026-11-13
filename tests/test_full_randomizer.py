@@ -143,6 +143,18 @@ class RoomLocks(unittest.TestCase):
         self.assertEqual([c[1] for c in kept], ['Keese'])
         self.assertEqual([d['soul'] for d in doors], ['Keese'])
 
+    def test_enemy_linked_straight_to_its_shutters_is_a_lock(self):
+        # Deku Tree: the scrub links to its shutters itself (no Obj_EnemyCounter).
+        from oot_rando.game.remake_world import enemy_counter_locks
+        root = {'Actors': [
+            {'Gyaml': 'Enemy_Scrub_Deku', 'Hash': 1, 'Links': [{'Dst': 2, 'Name': 'Reference'}]},
+            {'Gyaml': 'Obj_SwitchShutter_A_02', 'Hash': 2},
+            {'Gyaml': 'Obj_SwitchShutter_A_01', 'Hash': 3, 'Links': [{'Dst': 1, 'Name': 'Reference'}]},
+            {'Gyaml': 'Enemy_Keese', 'Hash': 4}]}
+        locks = enemy_counter_locks('r', root)
+        self.assertEqual(set(locks), {1})
+        self.assertEqual([(d['hash'], d['index']) for d in locks[1][0]['doors']], [('2', 1), ('3', 2)])
+
 
 @unittest.skipUnless(NUP, 'OOT_NUP absent')
 class Integration(unittest.TestCase):

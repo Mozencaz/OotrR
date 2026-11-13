@@ -339,3 +339,57 @@ def add_key_hook(raw, records):
     if records and start.name != f"RandoKeyHeld_{records[0]['actor'][len('Item_'):]}":
         raise ValueError('ActionGuide entry wrongly attached to the keys.')
     return result, list(reversed(report))
+
+
+# Tracker: Ganon's Castle boss key (Ganon's Tower) is shown with the temples' ones.
+TRACKED_BOSS_KEYS = BOSS_KEY_DUNGEONS + ('InsideGanonCastle',)
+
+
+def key_tracking(options, saved_keys):
+    """Tracker rows of the dungeon keys: GameData hashes to read, per dungeon.
+
+    ``saved_keys``: {'Int': hashes, 'Bool': hashes} of the saved GameData entries.
+    Small keys found = max(``SmallKeyTotalNum``, ``SmallKeyNum`` held), or every key
+    once the key ring is applied (``RandoKeyRing.<folder>``) or with keys "Removed".
+    """
+    from oot_rando.game.remake_world import ZONE_LABELS
+    from oot_rando.patching.soul_adapter import murmur3
+    options = options or {}
+    removed_small = options.get('shuffle_smallkeys') == 'remove'
+    removed_boss = options.get('shuffle_bosskeys') == 'remove'
+    rows = []
+    for folder in dict.fromkeys(list(RING_DUNGEONS) + list(TRACKED_BOSS_KEYS)):
+        base = f'DungeonInfo.{folder}.'
+        row = {'folder': folder, 'dungeon': ZONE_LABELS.get(folder, folder), 'small': None, 'boss': None}
+        if folder in RING_DUNGEONS:
+            found, held = murmur3(base + 'SmallKeyTotalNum'), murmur3(base + 'SmallKeyNum')
+            if {found, held} <= saved_keys.get('Int', set()):
+                ring = murmur3(APPLIED_PREFIX + folder)
+                row['small'] = {'total': RING_DUNGEONS[folder], 'found': str(found), 'held': str(held),
+                                'ring': str(ring) if ring in saved_keys.get('Bool', set()) else None,
+                                'all': removed_small}
+        if folder in TRACKED_BOSS_KEYS:
+            boss = murmur3(base + 'IsGetBossKey')
+            if boss in saved_keys.get('Bool', set()):
+                row['boss'] = {'hash': str(boss), 'all': removed_boss and folder in BOSS_KEY_DUNGEONS}
+        if row['small'] or row['boss']:
+            rows.append(row)
+    return rows
+
+
+def dungeon_keys(rows, snapshot):
+    """``[(dungeon, (found, total) or None, has boss key or None)]`` from a save snapshot."""
+    ints, bools = (snapshot or {}).get('int', {}), (snapshot or {}).get('bool', {})
+    result = []
+    for row in rows or ():
+        small = row.get('small')
+        if small:
+            found = max(int(ints.get(int(small['found']), 0) or 0), int(ints.get(int(small['held']), 0) or 0))
+            if small['all'] or (small['ring'] and bools.get(int(small['ring']))):
+                found = max(found, small['total'])
+            small = (found, max(small['total'], found))
+        boss = row.get('boss')
+        if boss:
+            boss = bool(boss['all'] or bools.get(int(boss['hash'])))
+        result.append((row['dungeon'], small, boss))
+    return result

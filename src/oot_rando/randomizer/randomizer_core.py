@@ -24,7 +24,8 @@ from oot_rando.patching.qol_patches import (STATIC, STATIC_SOURCE_SHA256, DYNAMI
                          KOKIRI_SHOP_MAPS, KOKIRI_SHOP_PACKS, open_kokiri_shop,
                          release_kokiri_shop_goods, BOMB_LIFT_PACKS, free_bomb_lift,
                          ACTION_GUIDE_FLOW, ocarina_guide_on_get,
-                         SWORD_CHEST_FLOW, skip_kokiri_sword_cutscene)
+                         SWORD_CHEST_FLOW, skip_kokiri_sword_cutscene,
+                         NOCTURNAL_SKULLTULA_MAPS, nocturnal_skulltula_edits)
 from oot_rando.game.randomizer_categories import CATEGORIES
 from oot_rando.game.world_maps import SAFE_CATEGORIES, build_world, effective_members
 from oot_rando.game.resource_allocations import allocation, grow_resources, add_resources
@@ -62,8 +63,9 @@ CHECKS = [{'id': str(ident), 'region': 'Kokiri Forest',
            'name': f'Four-chest house — slot {i + 1}'}
           for i, ident in enumerate(sorted(CHESTS))]
 PRUDENT_POOL = [name for name in POOL if name.startswith('TBox_Rupee_')]
-OPTIONAL_SKIPS = ('skip_locked_cutscenes', 'skip_auto_dialogues', 'skip_chest_cutscenes')
-SKIP_OPTIONS = OPTIONAL_SKIPS
+SKIP_OPTIONS = ('skip_locked_cutscenes', 'skip_auto_dialogues', 'skip_chest_cutscenes')
+# Omitted from ``to_dict`` while False (earlier seeds keep their identity).
+OPTIONAL_SKIPS = SKIP_OPTIONS + ('skulltulas_always_present',)
 # Removed options (≤ 0.7): their patches are part of the broader skips.
 LEGACY_SKIPS = {'skip_intro': 'skip_locked_cutscenes'}
 # Removed without replacement: NPC dialogue skips crashed in game (turbo A instead).
@@ -84,6 +86,8 @@ class Settings:
     skip_auto_dialogues: bool = False
     # Big chests: lid animation, Link holds the item up, no chest performance.
     skip_chest_cutscenes: bool = False
+    # Night-only gold skulltulas present day and night (the logic stays unchanged).
+    skulltulas_always_present: bool = False
     categories: dict[str, bool] = field(default_factory=lambda: dict.fromkeys(CATEGORIES, False))
     full: dict | None = None
     # Archipelago patch (``.aprmk`` content): the placements come from a multiworld.
@@ -92,7 +96,7 @@ class Settings:
     def validate(self):
         if not isinstance(self.seed, str) or not self.seed.strip() or len(self.seed) > 256:
             raise ValueError('The seed must be a non-empty text of at most 256 characters.')
-        for name in ('randomize_chests', 'avoid_vanilla', 'open_forest') + SKIP_OPTIONS:
+        for name in ('randomize_chests', 'avoid_vanilla', 'open_forest') + OPTIONAL_SKIPS:
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f'{name} must be a boolean.')
         for name, allowed in [('pool', set(POOL)), ('excluded_checks', {str(h) for h in CHESTS})]:
@@ -127,7 +131,7 @@ class Settings:
                 if str(ident) not in self.excluded_checks and not [v for v in self.pool if not self.avoid_vanilla or v != original]:
                     raise ValueError('The pool cannot fill every active chest.')
         if not (self.full is not None or any(self.categories.values()) or self.open_forest
-                or any(getattr(self, name) for name in SKIP_OPTIONS)
+                or any(getattr(self, name) for name in OPTIONAL_SKIPS)
                 or (self.randomize_chests and len(self.excluded_checks) < len(CHESTS))):
             raise ValueError('Enable at least one option or chest to randomize to generate a mod.')
         return self
@@ -274,6 +278,16 @@ def generate(nup_path, output, settings, progress=None):
                 physics, _ = patch_baked_wall(decompress(physics_source, d))
                 compress(PHYSICS, physics, physics_source)
             raw_maps[MAP] = raw
+        if settings.skulltulas_always_present:
+            report('Night skulltulas present day and night…')
+            nocturnal = 0
+            for path in NOCTURNAL_SKULLTULA_MAPS:
+                current = raw_maps[path] if path in raw_maps else decompress(read(path), d)
+                edits = nocturnal_skulltula_edits(Byml(current).root)
+                if edits:
+                    raw_maps[path], nocturnal = patch_strings(current, edits), nocturnal + len(edits)
+            if not nocturnal:
+                raise ValueError('Night skulltulas not found in the maps.')
         from oot_rando.game.tracking_metadata import GAMEDATA, add_saved_flags, build_tracking, reward_label
         from oot_rando.patching.soul_adapter import murmur3
         marker_name = 'RandoSeed.' + settings_identity(settings)
@@ -443,7 +457,6 @@ def generate(nup_path, output, settings, progress=None):
             # Last of the event patches: the copied rows inherit every completed list.
             report('Opening flags of the chests…')
             from oot_rando.patching import chest_flags
-            from oot_rando.formats.byml_writer import patch_strings
             current_raw = lambda path: extra_raw[path] if path in extra_raw else decompress(read(path), d)
             map_root = lambda path: Byml(raw_maps[path] if path in raw_maps else decompress(read(path), d)).root
             settings_raw = current_raw(chest_flags.EVENT_SETTINGS)

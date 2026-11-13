@@ -3,7 +3,7 @@ from pathlib import PurePosixPath
 
 from oot_rando.formats.inspect_resources import Byml, sarc
 from oot_rando.game.remake_world import ACTOR_ITEMS, PROGRESSIVE
-from oot_rando.patching.soul_adapter import murmur3, soul_actor, soul_label
+from oot_rando.patching.soul_adapter import murmur3, soul_actor, soul_item, soul_label
 from oot_rando.game.item_forms import resolve_components, _pack_path
 from oot_rando.formats import byml_codec
 import copy
@@ -170,7 +170,14 @@ def build_tracking(seed_id, checks, full, read_raw):
             key = murmur3('IsGet.' + candidate)
             if key in keys.get('Bool', set()):
                 inventory.append({'item': item, 'hash': str(key), 'count': level})
-    return {'schema_version': 1, 'seed_id': seed_id, 'checks': rows, 'inventory': inventory,
+    # Zones (map folders) where the enemies of each soul appear, for the tracker.
+    families = (full or {}).get('souls', {}).get('families', {})
+    souls = [{'item': soul_item(key), 'zones': list(folders)} for key, folders in sorted(families.items())]
+    # Dungeon keys (small keys found / total, boss key), read from DungeonInfo.<folder>.
+    from oot_rando.patching.key_adapter import key_tracking
+    dungeon_keys = key_tracking(full.get('options'), keys) if full else []
+    return {'schema_version': 1, 'seed_id': seed_id, 'checks': rows, 'inventory': inventory, 'souls': souls,
+            'keys': dungeon_keys,
             'logic': (full or {}).get('tracking_logic'),
             'event_markers': (full or {}).get('collection_markers', {}),
             'repeatables': (full or {}).get('repeatables', []),

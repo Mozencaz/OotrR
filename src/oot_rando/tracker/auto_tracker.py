@@ -59,6 +59,28 @@ def newest_save(hookshot_root=None, title=None):
     return best
 
 
+def soul_zones(metadata, counts):
+    """Souls of a seed by zone: ``[(zone label, [(soul name, owned)])]``, in map order.
+
+    A family soul is listed in every zone where its enemies appear. Seeds tracked
+    before the zones were recorded show their souls under a single group.
+    """
+    from oot_rando.game.remake_world import ZONE_LABELS
+    from oot_rando.patching.soul_adapter import soul_name
+    metadata = metadata or {}
+    souls = metadata.get('souls')
+    if souls is None:
+        tracked = sorted({rule['item'] for rule in metadata.get('inventory', []) if rule['item'].startswith('Soul (')})
+        souls = [{'item': item, 'zones': ['All zones']} for item in tracked]
+    order = list(ZONE_LABELS)
+    zones = {}
+    for soul in souls:
+        for zone in soul['zones'] or ['Other']:
+            zones.setdefault(zone, []).append((soul_name(soul['item'], False), bool(counts.get(soul['item']))))
+    return [(ZONE_LABELS.get(zone, zone), sorted(entries))
+            for zone, entries in sorted(zones.items(), key=lambda z: (order.index(z[0]) if z[0] in order else -1, z[0]))]
+
+
 class TrackerSession:
     """A session observes one selected save; rollbacks replace its automatic state."""
     def __init__(self, directory, slot, save_path='', live=None):
@@ -77,6 +99,8 @@ class TrackerSession:
         self._lock = threading.RLock()
         self._automatic, self._access = set(), {}
         self._inventory = (Counter(), set())
+        from oot_rando.patching.key_adapter import dungeon_keys
+        self._keys = dungeon_keys((self.metadata or {}).get('keys'), None)   # 0 found until a save is read
         self._fingerprint = None
         self._logic, self._logic_error = None, ''
         self._observed, self._goal = False, False
@@ -138,6 +162,16 @@ class TrackerSession:
             counts, known = self._inventory
             tracked = {rule['item'] for rule in (self.metadata or {}).get('inventory', [])}
             return dict(counts), set(known), tracked
+
+    def keys(self):
+        """``[(dungeon, (found, total) or None, boss key or None)]`` at the latest read."""
+        with self._lock:
+            return list(self._keys)
+
+    def souls(self):
+        """Souls of the seed by zone, with whether each one is owned (see :func:`soul_zones`)."""
+        counts, _, _ = self.inventory()
+        return soul_zones(self.metadata, counts)
 
     @staticmethod
     def observed_inventory(snapshot, metadata):
@@ -255,6 +289,8 @@ class TrackerSession:
             goal = bool(goal_key) and snapshot['bool'].get(int(goal_key)) is True
             access = self._availability(snapshot, self.metadata)
             inventory = self.observed_inventory(snapshot, self.metadata)
+            from oot_rando.patching.key_adapter import dungeon_keys
+            keys = dungeon_keys(self.metadata.get('keys'), snapshot)
             stamp = datetime.fromtimestamp(snapshot['mtime_ns'] / 1e9).strftime('%H:%M:%S')
             status = 'Synced with the latest save'
             if live_digest:
@@ -270,6 +306,7 @@ class TrackerSession:
                 self._automatic, self._access = automatic, access
                 self._goal = self._goal or goal
                 self._inventory = inventory
+                self._keys = keys
                 self._fingerprint, self._observed, self._source_path = token, True, path
                 self._summary = {'status': status, 'updated_at': stamp, 'automatic': len(automatic),
                                  'available': sum(v == 'available' for v in access.values()),
