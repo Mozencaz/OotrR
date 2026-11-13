@@ -799,7 +799,7 @@ class Application:
 
     def newest_save(self):
         """progress.sav most recently written, across every save and slot folder."""
-        return newest_save(self.hookshot_root(), TITLE)
+        return newest_save(self.hookshot_root(), TITLE, self.mods.get() or None)
 
     def follow_newest_save(self):
         newest = self.newest_save()
