@@ -42,6 +42,8 @@ import threading
 import time
 from pathlib import Path
 
+from oot_rando.pc_port import is_port_folder, is_port_process, options_ini, port_exe
+
 # Hookshot's pad codes (gpu/vk/vk_api.h HOS_PAD_*) -> XInput wButtons masks.
 # Triggers are axes (bLeftTrigger / bRightTrigger > 64 in Hookshot).
 PAD_LTRIGGER, PAD_RTRIGGER = 15, 16
@@ -320,11 +322,11 @@ class TurboA:
         from oot_rando.paths import data_dir
         self.log_path = Path(log_path) if log_path else data_dir() / 'turbo.log'
         self.state_path = Path(state_path) if state_path else data_dir() / 'app' / 'turbo_binds.json'
-        self.game_running = game_running   # () -> bool; default: a hookshot.exe process
+        self.game_running = game_running   # () -> bool; default: a PC port process (Hookshot, Longshot...)
 
     @property
     def ini(self):
-        return self.root / 'hookshot_options.ini'
+        return options_ini(self.root)
 
     def _log(self, line):
         self.last_hold = line
@@ -358,7 +360,7 @@ class TurboA:
             if new != text:
                 self.ini.write_text(new, encoding='utf-8')
         except OSError as error:
-            self.status = 'Turbo A: cannot write hookshot_options.ini (' + str(error) + ')'
+            self.status = 'Turbo A: cannot write ' + self.ini.name + ' (' + str(error) + ')'
             return None
         self.remapped = True
         return parse_binds('\n'.join(f'{k}={v}' for k, v in player.items()))
@@ -382,12 +384,14 @@ class TurboA:
         if os.name != 'nt':
             return False
         import subprocess
+        exe = port_exe(self.root) if self.root.is_dir() else None
+        name = exe.name if exe else 'hookshot.exe'
         try:
-            out = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq hookshot.exe', '/NH'], capture_output=True,
+            out = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq ' + name, '/NH'], capture_output=True,
                                  text=True, timeout=5, creationflags=0x08000000).stdout
         except (OSError, subprocess.SubprocessError):
             return False
-        return 'hookshot.exe' in out.lower()
+        return name.lower() in out.lower()
 
     # ---------------------------------------------------------- windows
     def _setup(self):
@@ -457,7 +461,7 @@ class TurboA:
 
     def _game_in_front(self):
         hwnd = self.user32.GetForegroundWindow()
-        return bool(hwnd) and self.win.exe(self.win.pid(hwnd)) == 'hookshot.exe'
+        return bool(hwnd) and is_port_process(self.win.exe(self.win.pid(hwnd)))
 
     def _send(self, vk, down):
         event = self.INPUT(type=1)   # INPUT_KEYBOARD
@@ -473,8 +477,8 @@ class TurboA:
             return False
         if self.running:
             return True
-        if not (self.root / 'hookshot.exe').exists() and not self.ini.exists():
-            self.status = 'Turbo A: Hookshot folder not found'
+        if not is_port_folder(self.root) and not self.ini.exists():
+            self.status = 'Turbo A: game folder not found (Hookshot / Longshot)'
             return False
         running_before = self.game_is_running()
         player = self.remap()
@@ -554,7 +558,7 @@ class TurboA:
 
 def read_binds(hookshot_root):
     try:
-        text = (Path(hookshot_root) / 'hookshot_options.ini').read_text(encoding='utf-8', errors='replace')
+        text = options_ini(hookshot_root).read_text(encoding='utf-8', errors='replace')
     except OSError:
         text = ''
     return parse_binds(text)

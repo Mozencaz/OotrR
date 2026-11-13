@@ -6,6 +6,7 @@ from pathlib import Path, PurePosixPath
 
 from oot_rando.randomizer.randomizer_core import Settings, settings_identity
 from oot_rando.patching.randomize_kokiri import TITLE, BUILD
+from oot_rando.pc_port import is_port_folder
 
 
 def read_artifact(directory):
@@ -98,18 +99,18 @@ def archive_previous_seeds(title_directory, archive, keep=None):
 
 
 def validate_mod_directory(directory):
-    """Accept an emulator title folder or the mods folder of a built Hookshot game."""
+    """Accept an emulator title folder or the mods folder of a built PC port (Hookshot, Longshot...)."""
     directory = Path(directory).resolve()
     if directory.exists() and not directory.is_dir():
         raise ValueError('The selected mods folder is a file.')
     if directory.name.upper() == TITLE:
         return directory
     game = directory.parent
-    if (directory.name.lower() == 'mods' and (game / 'hookshot.exe').is_file()
-            and (game / 'image.bin').is_file() and (game / 'romfs').is_dir()):
+    if directory.name.lower() == 'mods' and is_port_folder(game):
         return directory
     raise ValueError('Choose the mods folder of title ' + TITLE
-                     + ' (emulator), or the mods folder next to hookshot.exe (Hookshot).')
+                     + ' (emulator), or the mods folder of a PC port (next to image.bin and romfs:'
+                     + ' Hookshot, Longshot...).')
 
 
 def _conflicting_mods(title_directory, manifest, skip):

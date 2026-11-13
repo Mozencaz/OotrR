@@ -34,6 +34,8 @@ import struct
 import time
 from pathlib import Path
 
+from oot_rando.pc_port import is_port_process
+
 HOST_BASE = 0x100000000000
 GAMEDATA_SLOT = 0x84C9E180
 SEQUENCE_IS_CHILDHOOD = 0xCEA220D3   # murmur3('Sequence_IsChildhood'), always present
@@ -42,7 +44,6 @@ BOOL64_TYPE = 0xC58                       # GameDataMgr offset of the Bool64bitK
 BOOL64_SCAN = range(0xC08, 0xD08, 8)      # other offsets tried if the game's layout moved
 BOOL64_RECORD = 16
 BOOL64_PROBE = 0xECDC46B409ED7D38         # the game's first Gold Skulltula: every save knows it
-GAME_EXE = 'hookshot.exe'
 EMULATOR_EXES = {'lichii.exe', 'ryuchii.exe', 'eden.exe', 'yuzu.exe', 'suyu.exe', 'citron.exe', 'sudachi.exe'}
 EXTRA_EMULATORS_KEY = 'extra_emulators'   # gui_state.json: executables the player added (Setup page)
 
@@ -213,7 +214,7 @@ class ProcessMemory:
         size = self.wt.DWORD(520)
         buffer = ctypes.create_unicode_buffer(size.value)
         if self.k32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
-            return Path(buffer.value).name.lower()
+            return buffer.value
         return ''
 
     def attach(self):
@@ -231,9 +232,10 @@ class ProcessMemory:
             handle = self.k32.OpenProcess(0x0010 | 0x0400, False, pid)   # VM_READ | QUERY_INFORMATION
             if not handle:
                 continue
-            name = self._exe(handle)
+            image = self._exe(handle)
+            name = Path(image).name.lower()
             layout = None
-            if name == GAME_EXE and self._probe(handle):
+            if name not in emulators and is_port_process(image) and self._probe(handle):
                 layout = HOST_BASE, GAMEDATA_SLOT
             elif name in emulators:
                 layout = emulator_layout(self._regions(handle), lambda host, size: self._read(handle, host, size))
@@ -260,7 +262,7 @@ class ProcessMemory:
         return buffer.raw
 
     def _probe(self, handle):
-        """The launcher is also hookshot.exe: keep the process whose guest window is mapped."""
+        """The launcher is also the port's exe: keep the process whose guest window is mapped."""
         buffer, done = ctypes.create_string_buffer(8), ctypes.c_size_t()
         return bool(self.k32.ReadProcessMemory(handle, ctypes.c_void_p(HOST_BASE + GAMEDATA_SLOT), buffer, 8,
                                                ctypes.byref(done)))
