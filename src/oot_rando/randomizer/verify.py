@@ -32,6 +32,7 @@ from oot_rando.patching.soul_adapter import murmur3, RSDB_FILES, GAMEDATA, FLAG_
 from oot_rando.game.remake_world import PROGRESSIVE, item_actor
 from oot_rando.game.item_forms import is_derived, canonical_of
 from oot_rando.patching.key_adapter import is_key_actor
+from oot_rando.randomizer.randomizer_core import save_marker
 
 QOL_MAPS = {MAP, STATIC}
 
@@ -294,7 +295,7 @@ def verify(nup_path, seed_dir):
             if path in KOKIRI_SHOP_MAPS and shop_presence.get('FlagName') == KOKIRI_SHOP_FLAG                     and _shop_actor(a2.get('Gyaml', '')):
                 # Kokiri shop opened from the start: full stock always, short stock hidden.
                 if shop_presence.get('IsNegation'):
-                    shop_presence['FlagName'] = 'RandoSeed.' + manifest['seed_id']
+                    shop_presence['FlagName'] = save_marker(manifest)
                 else:
                     del a2['Presence']
                 report['kokiri_shop'] = report.get('kokiri_shop', 0) + 1

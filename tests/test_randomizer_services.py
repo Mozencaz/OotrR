@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from oot_rando.randomizer.randomizer_core import Settings, CHECKS, settings_identity, GENERATOR_VERSION, ADAPTER_VERSION
-from oot_rando.randomizer.randomizer_services import (ManualTracker, generate_in_mods,
+from oot_rando.randomizer.randomizer_services import (ManualTracker, continued_save, generate_in_mods,
                                                         read_artifact, validate_mod_directory)
 from oot_rando.patching.randomize_kokiri import TITLE, BUILD
 
@@ -72,6 +72,39 @@ class ServiceTests(unittest.TestCase):
             read_artifact(archive / (second.name + '-replaced'))
             self.assertEqual(sorted(p.name for p in mods.iterdir()), [second.name])
             self.assertEqual(original.read_bytes(), b'original')
+
+    def test_archipelago_reinstall_keeps_the_save_binding(self):
+        class ApSettings:
+            def __init__(self, patch):
+                self.archipelago = patch
+
+            def to_dict(self):
+                return {'archipelago': self.archipelago}
+
+        def install(title, seed, patch, save_seed_id=None):
+            folder = self.make_artifact(title / ('OoT_Randomizer_' + settings_identity(Settings(seed))[:16]), seed)
+            manifest = json.loads((folder / 'manifest.json').read_text(encoding='utf-8'))
+            manifest['settings']['archipelago'] = patch
+            if save_seed_id:
+                manifest['save_seed_id'] = save_seed_id
+            (folder / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+            return manifest['seed_id']
+
+        slot, other = {'seed_name': 'S1', 'slot_name': 'P3'}, {'seed_name': 'S2', 'slot_name': 'P3'}
+        with tempfile.TemporaryDirectory() as directory:
+            title = Path(directory) / TITLE
+            title.mkdir()
+            self.assertIsNone(continued_save(title, ApSettings(slot)))
+            install(title, 'other slot', other)
+            self.assertIsNone(continued_save(title, ApSettings(slot)))
+            old = install(title, 'old version', slot)
+            self.assertEqual(continued_save(title, ApSettings(slot)), old)
+            self.assertIsNone(continued_save(title, Settings('not archipelago')))
+        with tempfile.TemporaryDirectory() as directory:
+            title = Path(directory) / TITLE
+            title.mkdir()
+            install(title, 'reinstalled once', slot, save_seed_id='first-seed')
+            self.assertEqual(continued_save(title, ApSettings(slot)), 'first-seed')
 
     def test_generate_in_mods_conflict_archives_the_new_seed(self):
         with tempfile.TemporaryDirectory() as directory:
