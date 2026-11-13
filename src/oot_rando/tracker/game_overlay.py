@@ -127,7 +127,7 @@ POSITION_FILE = state_dir() / 'overlay_position.json'
 SW_HIDE, SW_SHOWNOACTIVATE = 0, 4
 SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 0x1, 0x2, 0x10
 HWND_TOPMOST = -1
-GAME_EXE = 'hookshot.exe'
+from oot_rando.pc_port import is_port_process
 
 
 class _Win32:
@@ -158,7 +158,7 @@ class _Win32:
             size = self.wt.DWORD(520)
             buffer = ctypes.create_unicode_buffer(size.value)
             if self.kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
-                return Path(buffer.value).name.lower()
+                return buffer.value
             return ''
         finally:
             self.kernel32.CloseHandle(handle)
@@ -171,15 +171,15 @@ class _Win32:
         return origin.x, origin.y, rect.right - rect.left, rect.bottom - rect.top
 
     def find_game(self):
-        """The largest visible top-level window of a hookshot.exe process."""
+        """The largest visible top-level window of a PC port process (Hookshot, Longshot...)."""
         found, names = [], {}
 
         def visit(hwnd, _):
             if self.user32.IsWindowVisible(hwnd):
                 pid = self.pid(hwnd)
                 if pid not in names:
-                    names[pid] = self.exe(pid)
-                if names[pid] == GAME_EXE:
+                    names[pid] = is_port_process(self.exe(pid))
+                if names[pid]:
                     rect = self.client_rect(hwnd)
                     if rect and rect[2] > 0 and rect[3] > 0:
                         found.append((rect[2] * rect[3], hwnd, pid))
@@ -369,12 +369,12 @@ class GameHud:
         if not self.game:
             self.rescan -= 1
             if self.rescan > 0:
-                self.status = 'Overlay: game not found (hookshot.exe)'
+                self.status = 'Overlay: game not found (Hookshot / Longshot)'
                 return None
             self.rescan = 8   # ~2 s between window scans
             self.game, self.game_pid = self.win.find_game()
             if not self.game:
-                self.status = 'Overlay: game not found (hookshot.exe)'
+                self.status = 'Overlay: game not found (Hookshot / Longshot)'
                 return None
         if u.IsIconic(self.game):
             self.status = 'Overlay: game minimised'

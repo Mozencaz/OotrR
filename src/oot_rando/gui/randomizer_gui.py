@@ -256,7 +256,7 @@ class Application:
         parent = self.scrollable(self.help_tab)
         sections = [
             ('Prepare a game', 'In Setup, choose your .nup file and the mods folder. In New seed, pick an adventure, then click Generate and install: the seed is written straight into the mods folder. Close the game during installation.'),
-            ('Play on Hookshot', 'Choose the mods folder next to hookshot.exe. Each seed is installed in its own sub-folder. Only one seed of this application stays active at a time; the previous one is archived.'),
+            ('Play on a PC port (Hookshot, Longshot...)', 'Choose the mods folder next to the game exe (hookshot.exe, longshot.exe...). Each seed is installed in its own sub-folder. Only one seed of this application stays active at a time; the previous one is archived.'),
             ('Track the exploration', 'The tracker follows the most recent save by itself. Locations are updated after the game saves. Rewards of completed checks appear next to their name.'),
             ('Understand the states', 'Available: the logic estimates you can get the reward with your inventory. Blocked: a known condition is missing. Unknown: the data does not allow a conclusion. These locations stay visible by default.'),
             ('Keep the right save', 'Generate a new seed, start a new game, then save after the intro. The tracker picks the newest save; choose another in Setup. An old save cannot be linked automatically. The tracker never changes its files.'),
@@ -312,15 +312,15 @@ class Application:
         parent = self.setup_body
         box = self.card(parent, 'Game files', 'Seeds are generated straight into the mods folder. The original files stay in place.')
         self.path_row(box, 'GAME FILE (.NUP)', self.nup, 'file')
-        self.path_row(box, 'MODS FOLDER — HOOKSHOT / MODS OR THE EMULATOR TITLE FOLDER', self.mods, 'directory')
-        ttk.Label(box, text='Hookshot: choose the mods folder next to hookshot.exe.', style='Small.TLabel').pack(anchor='w')
+        self.path_row(box, 'MODS FOLDER — PC PORT (HOOKSHOT, LONGSHOT...) / MODS OR THE EMULATOR TITLE FOLDER', self.mods, 'directory')
+        ttk.Label(box, text='PC port (Hookshot, Longshot...): choose the mods folder next to the game exe.', style='Small.TLabel').pack(anchor='w')
         ttk.Label(box, text='OTHER EMULATOR EXECUTABLES (OPTIONAL)', style='Field.TLabel').pack(anchor='w', pady=(12, 0))
         row = self.buttons(box, pady=(5, 4))
         entry = ttk.Entry(row, textvariable=self.extra_emulators)
         entry.pack(side='left', fill='x', expand=True)
         for event in ('<FocusOut>', '<Return>'):
             entry.bind(event, lambda e: self.save_extra_emulators())
-        ttk.Label(box, text='Live tracking finds Hookshot, Lichii, Ryuchii, Eden, yuzu, suyu, citron and sudachi. '
+        ttk.Label(box, text='Live tracking finds Hookshot, Longshot, Lichii, Ryuchii, Eden, yuzu, suyu, citron and sudachi. '
                   'Another yuzu-based emulator? Add its .exe name here (comma-separated).',
                   style='Small.TLabel', wraplength=780).pack(anchor='w')
         box = self.card(parent, 'Save', 'The tracker reads your progress.sav. It is found automatically; pick it by hand only if needed.')
@@ -422,7 +422,7 @@ class Application:
         else:
             self.set_tile('game', 'warn', 'Missing', setup)
         if self.mods.get() and Path(self.mods.get()).is_dir():
-            self.set_tile('mods', 'ok', 'Hookshot' if self.hookshot_root() else 'Emulator')
+            self.set_tile('mods', 'ok', 'PC port' if self.hookshot_root() else 'Emulator')
         else:
             self.set_tile('mods', 'warn', 'Missing', setup)
         linked = bool(self.save_path.get()) and Path(self.save_path.get()).is_file()

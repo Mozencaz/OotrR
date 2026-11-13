@@ -47,8 +47,9 @@ the sources, it only points to the release page (use `git pull`).
 The game file must hold the base game **and** update v131072 in one `.nup`; the
 order of the packages inside it does not matter.
 
-For **Hookshot on Windows**, keep the NUP as the source and choose the `mods`
-folder next to `hookshot.exe`, `image.bin` and `romfs` (create it if needed). The
+For a **PC port on Windows** (Hookshot, its successor Longshot, or any fork with the
+same layout), keep the NUP as the source and choose the `mods` folder next to the
+game exe, `image.bin` and `romfs` (create it if needed). The
 seed is installed in its own sub-folder, without replacing the original resources.
 
 ## Tracking

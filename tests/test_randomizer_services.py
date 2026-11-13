@@ -40,6 +40,12 @@ class ServiceTests(unittest.TestCase):
             mods = self.make_hookshot(base / 'Hookshot')
             self.assertEqual(validate_mod_directory(mods), mods.resolve())
             self.assertEqual(validate_mod_directory(base / TITLE), (base / TITLE).resolve())
+            longshot = base / 'Longshot'
+            longshot.mkdir()
+            (longshot / 'longshot.exe').touch()
+            (longshot / 'image.bin').touch()
+            (longshot / 'romfs').mkdir()
+            self.assertEqual(validate_mod_directory(longshot / 'mods'), (longshot / 'mods').resolve())
             for invalid in (mods.parent, mods.parent / 'romfs', base / 'mods'):
                 with self.subTest(path=invalid), self.assertRaises(ValueError):
                     validate_mod_directory(invalid)
