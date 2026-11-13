@@ -216,8 +216,8 @@ def qol_seed_warning(title_directory):
     The QoL folder sorts first and carries its own resource table and chest flows, which
     would hide the seed's larger ones."""
     if is_qol_install(Path(title_directory) / QOL_FOLDER):
-        return (QOL_FOLDER + " is installed in this mods folder. Turn it off in your emulator's add-ons "
-                'while playing this seed (Ryuchii does this automatically from its next version).')
+        return (QOL_FOLDER + " is installed in this mods folder. Turn it off in your emulator's add-ons, "
+                'or move it out of the mods folder, while playing this seed.')
     return None
 
 
