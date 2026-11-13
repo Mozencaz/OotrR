@@ -252,7 +252,7 @@ def generate(nup_path, output, settings, progress=None):
             if active:
                 report('Composing chest rewards…')
                 for reward in sorted(set(placements.values())):
-                    pack = sarc(decompress(nup.read(f'1/romfs/Pack/Actor/{reward}.pack.zs'), d))
+                    pack = sarc(decompress(nup.read(nup.latest(f'romfs/Pack/Actor/{reward}.pack.zs')), d))
                     Byml(pack[f'Actor/{reward}.engine__actor__ActorParam.bgyml'])
                 raw, chests = patch_map(raw, placements)
                 # One logical check must have the same reward in both native ages.

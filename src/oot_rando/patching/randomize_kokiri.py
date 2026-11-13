@@ -13,21 +13,24 @@ def check_supported_game(nup):
     """Raise a clear ValueError unless the NUP holds the supported base game + update.
 
     Only the title ids, the update version and the main NSO build id matter; the
-    package order and directory indices depend on the tool that made the dump."""
+    package order and directory indices depend on the tool that made the dump. A
+    dump with the update merged in is one base package at the update's version."""
     base, update = int(TITLE, 16), int(TITLE, 16) + 0x800
     found = {p[0]: p[4] for p in nup.packages}
     if base not in found:
         ids = ', '.join(f'{t:016X}' for t in found) or 'none'
         raise ValueError(f'Unsupported NUP structure: this is not Ocarina of Time ({TITLE}). '
                          f'Title ids found: {ids}.')
-    if update not in found:
+    merged = update not in found and len(found) == 1 and found[base] == UPDATE_VERSION
+    if update not in found and not merged:
         raise ValueError(f'Unsupported NUP structure: the game update is missing. Dump the game '
                          f'together with update v{UPDATE_VERSION} into one .nup.')
-    if found[update] != UPDATE_VERSION:
-        raise ValueError(f'Unsupported game update v{found[update]}: this randomizer supports '
+    version = found[base] if merged else found[update]
+    if version != UPDATE_VERSION:
+        raise ValueError(f'Unsupported game update v{version}: this randomizer supports '
                          f'update v{UPDATE_VERSION} only.')
     try:
-        main = nup.read('1/exefs/main')
+        main = nup.read('0/exefs/main' if merged else '1/exefs/main')
     except KeyError:
         raise ValueError('Unsupported NUP structure: the update has no exefs/main.') from None
     if main[:4] != b'NSO0' or main[0x40:0x60].hex() != BUILD:

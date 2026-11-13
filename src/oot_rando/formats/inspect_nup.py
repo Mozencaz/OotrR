@@ -45,6 +45,14 @@ class Nup:
         for i, p in enumerate(sorted(self.packages, key=lambda p: p[0])):
             walk(p[1], f'{i}/')
 
+    def latest(self, path):
+        """Member of ``path`` (``romfs/...``, ``exefs/...``) as the game runs it: the update's
+        copy when there is one, else the base's (a dump with the update merged in has only ``0/``)."""
+        for prefix in ('1/', '0/'):
+            if prefix + path in self.entries:
+                return prefix + path
+        raise KeyError(path)
+
     def read(self, path):
         _, _, size, offset, extent, digest, codec = self.entries[path]
         self.stream.seek(offset)

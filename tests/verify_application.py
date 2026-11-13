@@ -21,7 +21,7 @@ def verify(nup_path):
     nup = Nup(nup_path)
     try:
         dic = dictionaries(nup)
-        original = Byml(decompress(nup.read('1/romfs/' + MAP), dic)).root
+        original = Byml(decompress(nup.read(nup.latest('romfs/' + MAP)), dic)).root
     finally:
         nup.stream.close()
     with tempfile.TemporaryDirectory(prefix='oot-verification-') as temporary:
