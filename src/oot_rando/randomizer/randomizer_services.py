@@ -7,6 +7,17 @@ from pathlib import Path, PurePosixPath
 from oot_rando.randomizer.randomizer_core import Settings, settings_identity
 from oot_rando.patching.randomize_kokiri import TITLE, BUILD
 from oot_rando.pc_port import is_port_folder
+from oot_rando.tracker.ingame_bundle import MODULE_FILE
+
+
+def _verify_exefs(directory, manifest):
+    """Check the code modules the seed ships (``exefs/<name>``) against the manifest."""
+    for name, info in (manifest.get('exefs') or {}).items():
+        if name != MODULE_FILE:
+            raise ValueError('Unknown code module: ' + name)
+        data = (directory / 'exefs' / name).read_bytes()
+        if len(data) != info['size'] or hashlib.sha256(data).hexdigest() != info['sha256']:
+            raise ValueError('Modified or incomplete code module: ' + name)
 
 
 def read_artifact(directory):
@@ -50,6 +61,7 @@ def read_artifact(directory):
         data = seed_original(directory, name, data)
         if len(data) != info['size'] or hashlib.sha256(data).hexdigest() != info['sha256']:
             raise ValueError('Modified or incomplete resource: ' + name)
+    _verify_exefs(directory, manifest)
     checks = json.loads((directory / 'checks.json').read_text(encoding='utf-8'))
     if checks.get('seed_id') != manifest['seed_id']:
         raise ValueError('The check catalogue belongs to another seed.')
@@ -147,7 +159,8 @@ def continued_save(title_directory, settings):
     return None
 
 
-def generate_in_mods(nup, title_directory, settings, progress=None, archive=None, generate=None):
+def generate_in_mods(nup, title_directory, settings, progress=None, archive=None, generate=None,
+                     ingame_tracker=True):
     """Generate a seed straight into the mods folder (no separate output folder).
 
     The seed folder ``OoT_Randomizer_<id>`` is written in ``title_directory``. It is
@@ -156,7 +169,8 @@ def generate_in_mods(nup, title_directory, settings, progress=None, archive=None
     to ``archive`` first (never deleted). Earlier seeds of this application are then
     archived too. A seed sharing resources with another mod is moved to the archive
     and installation stops. An Archipelago seed keeps the saves of the seed of the same
-    slot it replaces (:func:`continued_save`). Returns the seed folder.
+    slot it replaces (:func:`continued_save`). ``ingame_tracker=False`` leaves the in-game
+    tracker module and its data out of the seed. Returns the seed folder.
     """
     if generate is None:
         from oot_rando.randomizer.randomizer_core import generate
@@ -171,11 +185,11 @@ def generate_in_mods(nup, title_directory, settings, progress=None, archive=None
         report('Same seed already installed: old copy archived, generating again…')
         _move_to_archive(destination, Path(archive), '-replaced')
     title_directory.mkdir(parents=True, exist_ok=True)
+    options = {} if ingame_tracker else {'ingame_tracker': False}
     if save_seed_id:
         report('Same Archipelago slot already installed: its saves carry over.')
-        generate(nup, destination, settings, report, save_seed_id=save_seed_id)
-    else:
-        generate(nup, destination, settings, report)
+        options['save_seed_id'] = save_seed_id
+    generate(nup, destination, settings, report, **options)
     manifest, _ = read_artifact(destination)
     conflicts = _conflicting_mods(title_directory, manifest, name)
     if conflicts:

@@ -134,6 +134,8 @@ class Application:
         self.nup.set(self.app_state.get('game_file') or '')
         self.mods.set(self.app_state.get('mods_dir') or default_mods_dir())
         self.nup.trace_add('write', lambda *args: self.write_app_state(game_file=self.nup.get()))
+        self.ingame_tracker = tk.BooleanVar(value=self.app_state.get('ingame_tracker', True))
+        self.ingame_tracker.trace_add('write', lambda *args: self.write_app_state(ingame_tracker=self.ingame_tracker.get()))
         self.mods.trace_add('write', lambda *args: self.write_app_state(mods_dir=self.mods.get()))
         self.check_updates = tk.BooleanVar(value=self.app_state.get('check_updates', True) is not False)
         self.check_updates.trace_add('write', lambda *args: self.write_app_state(check_updates=self.check_updates.get()))
@@ -543,6 +545,8 @@ class Application:
         self.switch_row(rows, 0, 'Open the way from Kokiri Forest to Hyrule Field', self.options['open_forest'])
         self.switch_row(rows, 1, 'Night-only gold skulltulas present day and night (the logic does not change)',
                         self.options['skulltulas_always_present'])
+        self.switch_row(rows, 2, 'In-game tracker: R + right stick up shows the items and checks found (GPL-3 module, '
+                        'runs only while this seed is enabled)', self.ingame_tracker)
         box = self.card(details, 'Share these settings')
         row = self.buttons(box)
         ttk.Button(row, text='Import…', command=self.import_settings).pack(side='left')
@@ -1068,9 +1072,11 @@ class Application:
             if not nup.is_file():
                 raise ValueError('Select the local NUP file.')
             mods = validate_mod_directory(self.mods.get())
+            ingame_tracker = self.ingame_tracker.get()
 
             def job(progress):
-                installed = generate_in_mods(nup, mods, settings, progress, archive=ARCHIVE, generate=generate)
+                installed = generate_in_mods(nup, mods, settings, progress, archive=ARCHIVE, generate=generate,
+                                             ingame_tracker=ingame_tracker)
                 return installed, installed
             self.run_job(job, self.generated_and_installed)
         except Exception as error:
@@ -1150,8 +1156,10 @@ class Application:
             if not nup.is_file():
                 raise ValueError('Select the local NUP file.')
             mods = validate_mod_directory(self.mods.get())
+            ingame_tracker = self.ingame_tracker.get()
             def job(progress):
-                installed = generate_in_mods(nup, mods, settings, progress, archive=ARCHIVE, generate=generate)
+                installed = generate_in_mods(nup, mods, settings, progress, archive=ARCHIVE, generate=generate,
+                                             ingame_tracker=ingame_tracker)
                 return installed, installed
             self.run_job(job, self.generated_and_installed)
         except Exception as error:

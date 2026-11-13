@@ -11,6 +11,8 @@ PKG = SRC / 'oot_rando'
 
 datas = [
     (str(PKG / 'logic' / 'world'), 'oot_rando/logic/world'),
+    # Prebuilt in-game tracker module (GPL-3, with its licence and source link), copied into each seed.
+    (str(PKG / 'resources' / 'ingame_tracker'), 'oot_rando/resources/ingame_tracker'),
     # Run by the external Python of HookshotBuilder to extract icons (by path).
     (str(PKG / 'tracker' / 'icon_extract.py'), 'oot_rando/tracker'),
     (str(ROOT / 'README.md'), '.'),

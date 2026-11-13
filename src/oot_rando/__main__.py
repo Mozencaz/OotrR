@@ -6,8 +6,8 @@ Without a command, the graphical application starts. Commands:
 * ``verify``  — logic replay of a generated seed (``randomizer.verify``);
 * ``memory``  — read-only diagnostic of the running game memory;
 * ``apworld GAME.nup [OUT.apworld]`` — build the Archipelago world from the game;
-* ``ap-install PATCH.aprmk GAME.nup MODS_FOLDER`` — build and install the mod of an
-  Archipelago patch;
+* ``ap-install PATCH.aprmk GAME.nup MODS_FOLDER [--no-ingame-tracker]`` — build and install
+  the mod of an Archipelago patch (with the in-game tracker module, unless told not to);
 * ``ap-client MOD_FOLDER SERVER [--password P] [--slot NAME]`` — Archipelago client without
   the window: sends the checks and the goal of the running game;
 * ``ap-give SEED_FOLDER [N]`` — test of the Archipelago reception: lists the items other
@@ -16,6 +16,8 @@ Without a command, the graphical application starts. Commands:
   while the game runs read again (Kokiri Forest message board)?
 """
 import sys
+
+NO_INGAME_TRACKER = '--no-ingame-tracker'
 
 
 def main(argv=None):
@@ -115,11 +117,14 @@ def ap_install(argv):
     from oot_rando.archipelago.bridge import load_patch, settings_from_patch
     from oot_rando.paths import data_dir
     from oot_rando.randomizer.randomizer_services import generate_in_mods
+    ingame_tracker = NO_INGAME_TRACKER not in argv
+    argv = [argument for argument in argv if argument != NO_INGAME_TRACKER]
     if len(argv) != 3:
-        print('Usage: ap-install PATCH.aprmk GAME.nup MODS_FOLDER')
+        print(f'Usage: ap-install PATCH.aprmk GAME.nup MODS_FOLDER [{NO_INGAME_TRACKER}]')
         return 2
     settings = settings_from_patch(load_patch(argv[0]))
-    installed = generate_in_mods(argv[1], argv[2], settings, print, archive=data_dir() / 'seeds-uninstalled')
+    installed = generate_in_mods(argv[1], argv[2], settings, print, archive=data_dir() / 'seeds-uninstalled',
+                                 ingame_tracker=ingame_tracker)
     print(f'Installed: {installed}')
     return 0
 

@@ -31,6 +31,7 @@ from oot_rando.game.world_maps import SAFE_CATEGORIES, build_world, effective_me
 from oot_rando.game.resource_allocations import allocation, grow_resources, add_resources
 from oot_rando.formats.byml_writer import patch_strings
 from oot_rando.logic import rando_options
+from oot_rando.tracker import ingame_bundle
 
 GENERATOR_VERSION = '0.8.0'
 ADAPTER_VERSION = 'ap-glitchless-v4'   # v4: short key ring / boss key / regional soul actor names
@@ -214,11 +215,12 @@ def placements_for(settings):
     return result
 
 
-def generate(nup_path, output, settings, progress=None, save_seed_id=None):
+def generate(nup_path, output, settings, progress=None, save_seed_id=None, ingame_tracker=True):
     """Publish a complete new mod directory, never install or modify a game/save.
 
     ``save_seed_id``: an earlier seed of the same Archipelago slot whose saves this one
-    continues (its save marker is kept); by default the seed binds its own saves."""
+    continues (its save marker is kept); by default the seed binds its own saves.
+    ``ingame_tracker``: ship the in-game tracker module and its data file with the seed."""
     settings.validate_supported()
     output = Path(output)
     if output.exists():
@@ -584,6 +586,9 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
                 if row:
                     actor = placement.get('after', '')
                     row['reward'] = reward_label(actor_item(actor, placement.get('folder', '')), actor)
+        exefs = {}
+        if ingame_tracker:
+            ingame_bundle.attach(manifest, files, exefs, checks['checks'], tracking)
         tracking_bytes = json.dumps(tracking, ensure_ascii=False, indent=2).encode('utf-8')
         manifest['tracking'] = {'schema_version': 1, 'sha256': sha256(tracking_bytes),
                                 'new_save_required': True, 'mode': 'save'}
@@ -594,6 +599,10 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
             staging.mkdir()
             for path, data in files.items():
                 destination = staging / 'romfs' / path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(data)
+            for path, data in exefs.items():
+                destination = staging / 'exefs' / path
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes(data)
             for name, data in [('manifest.json', manifest), ('checks.json', checks), ('spoiler.json', spoiler)]:
