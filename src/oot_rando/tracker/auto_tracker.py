@@ -64,6 +64,7 @@ class TrackerSession:
     def __init__(self, directory, slot, save_path='', live=None):
         self.directory = Path(directory)
         self.live, self.live_status = live, ''   # live_memory.LiveGameData, optional
+        self.live_bool64 = False
         self.manifest, catalogue = read_artifact(directory)
         self.seed_id, self.slot = self.manifest['seed_id'], slot
         self.checks = catalogue['checks']
@@ -259,7 +260,7 @@ class TrackerSession:
             status = 'Synced with the latest save'
             if live_digest:
                 stamp = datetime.now().strftime('%H:%M:%S')
-                status = 'Real time (game memory) • chests at the latest save'
+                status = 'Real time (game memory)' + ('' if self.live_bool64 else ' • chests at the latest save')
             elif self.live_status:
                 status += ' • real time unavailable: ' + self.live_status
             if self._logic_error:
@@ -284,8 +285,8 @@ class TrackerSession:
         """Overlay the running game's bools on the save's; None when not usable.
 
         Live bools are used only when the running game also carries this seed's marker
-        (title screen, another seed or a game not started: save only). Bool64 keys (chests)
-        are not in the documented layout and stay from the save.
+        (title screen, another seed or a game not started: save only). The live Bool64bitKey
+        flags replace the save's when they could be read; otherwise they stay from the save.
         """
         from oot_rando.tracker.live_memory import LiveUnavailable
         try:
@@ -297,6 +298,9 @@ class TrackerSession:
             self.live_status = 'the running game is not this seed\'s'
             return None
         snapshot['bool'] = {**snapshot['bool'], **live['bool']}
+        self.live_bool64 = live.get('bool64_complete', False)
+        if self.live_bool64:
+            snapshot['bool64'] = live['bool64']
         return live['sha256']
 
     def _failure(self, message, reset=False):

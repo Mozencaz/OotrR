@@ -8,11 +8,14 @@ from oot_rando.tracker.auto_tracker import TrackerSession
 from oot_rando.tracker.game_overlay import ICONS, icon_name, overlay_model
 from oot_rando.tracker import icon_extract
 from oot_rando.tracker.live_memory import (LiveGameData, LiveUnavailable, parse_bools, GAMEDATA_SLOT,
-                                           SEQUENCE_IS_CHILDHOOD, HOOKSHOT_MAIN, MEM_COMMIT, emulator_layout)
+                                           SEQUENCE_IS_CHILDHOOD, HOOKSHOT_MAIN, MEM_COMMIT, emulator_layout,
+                                           BOOL64_PROBE, BOOL64_TYPE)
 
 
-def gamedata_image(bools, size=16, gamedata_slot=GAMEDATA_SLOT, at=0):
-    """Guest memory as Hookshot lays out GameDataMgr: {guest address: bytes}."""
+def gamedata_image(bools, size=16, gamedata_slot=GAMEDATA_SLOT, at=0, bool64=None, bool64_at=BOOL64_TYPE):
+    """Guest memory as Hookshot lays out GameDataMgr: {guest address: bytes}.
+
+    ``bool64``: {key: value} of Bool64bitKey records, written in the given order at ``bool64_at``."""
     table = bytearray(size * 8)
     entries = bytearray(len(bools) * 24)
     for index, (key, value) in enumerate(bools.items()):
@@ -22,13 +25,19 @@ def gamedata_image(bools, size=16, gamedata_slot=GAMEDATA_SLOT, at=0):
         struct.pack_into('<II', table, slot * 8, key, index)
         entries[index * 24 + 22] = int(value)
     holder, manager, table_at, entries_at = (at + offset for offset in (0x1000, 0x2000, 0x3000, 0x5000))
-    header = bytearray(48)
+    header = bytearray(48 if bool64 is None else 0xD10)
     struct.pack_into('<I', header, 16, len(bools))
     struct.pack_into('<Q', header, 24, entries_at)
     struct.pack_into('<Q', header, 32, table_at)
     struct.pack_into('<I', header, 44, size)
-    return {gamedata_slot: struct.pack('<Q', holder), holder: struct.pack('<Q', manager),
-            manager: bytes(header), table_at: bytes(table), entries_at: bytes(entries)}
+    image = {gamedata_slot: struct.pack('<Q', holder), holder: struct.pack('<Q', manager),
+             manager: bytes(header), table_at: bytes(table), entries_at: bytes(entries)}
+    if bool64 is not None:
+        records_at = at + 0x8000
+        records = b''.join(struct.pack('<QIB3x', key, 0, value) for key, value in bool64.items())
+        struct.pack_into('<IIQ', header, bool64_at, len(bool64), 0, records_at)
+        image[manager], image[records_at] = bytes(header), records
+    return image
 
 
 class FakeMemory:
@@ -63,6 +72,29 @@ class LiveGameDataTests(unittest.TestCase):
         regions[0x1000] = struct.pack('<Q', 0)
         with self.assertRaises(LiveUnavailable):
             LiveGameData(FakeMemory(regions)).snapshot()
+
+    def test_reads_bool64_flags(self):
+        bool64 = {5: 1, BOOL64_PROBE - 1: 0, BOOL64_PROBE: 1, BOOL64_PROBE + 7: 1}
+        snapshot = LiveGameData(FakeMemory(gamedata_image({SEQUENCE_IS_CHILDHOOD: True}, bool64=bool64))).snapshot()
+        self.assertTrue(snapshot['bool64_complete'])
+        self.assertEqual(snapshot['bool64'], {5: True, BOOL64_PROBE: True, BOOL64_PROBE + 7: True})
+
+    def test_finds_bool64_flags_moved_in_the_manager(self):
+        regions = gamedata_image({SEQUENCE_IS_CHILDHOOD: True}, bool64={BOOL64_PROBE: 0, BOOL64_PROBE + 1: 1},
+                                 bool64_at=BOOL64_TYPE + 0x30)
+        snapshot = LiveGameData(FakeMemory(regions)).snapshot()
+        self.assertEqual(snapshot['bool64'], {BOOL64_PROBE + 1: True})
+
+    def test_bool64_falls_back_to_the_save(self):
+        cases = {'unreadable': None, 'no probe key': {1: 1, 2: 1}, 'not sorted': {BOOL64_PROBE: 1, 3: 1}}
+        for name, bool64 in cases.items():
+            with self.subTest(name):
+                snapshot = LiveGameData(FakeMemory(gamedata_image({SEQUENCE_IS_CHILDHOOD: True},
+                                                                  bool64=bool64))).snapshot()
+                self.assertTrue(snapshot['bool'][SEQUENCE_IS_CHILDHOOD])
+                self.assertFalse(snapshot['bool64_complete'])
+                self.assertNotIn('bool64', snapshot)
+                self.assertIn('Bool64bitKey', snapshot['bool64_status'])
 
     def test_parse_skips_out_of_range_indices(self):
         table = struct.pack('<IIII', 7, 0, 9, 5)
@@ -100,13 +132,15 @@ class EmulatorLayoutTests(unittest.TestCase):
 
 
 class FakeLive:
-    def __init__(self, bools=None, error=None):
-        self.bools, self.error = bools, error
+    def __init__(self, bools=None, error=None, bool64=None):
+        self.bools, self.error, self.bool64 = bools, error, bool64
 
     def snapshot(self):
         if self.error:
             raise LiveUnavailable(self.error)
-        return {'bool': self.bools, 'sha256': 'x'}
+        if self.bool64 is None:
+            return {'bool': self.bools, 'bool64_complete': False, 'sha256': 'x'}
+        return {'bool': self.bools, 'bool64': self.bool64, 'bool64_complete': True, 'sha256': 'x'}
 
 
 class MergeLiveTests(unittest.TestCase):
@@ -119,6 +153,20 @@ class MergeLiveTests(unittest.TestCase):
         snapshot = {'bool': {1: False, 2: True}}
         self.assertEqual(self.session(FakeLive({99: True, 1: True}))._merge_live(snapshot, 99), 'x')
         self.assertEqual(snapshot['bool'], {1: True, 2: True, 99: True})
+
+    def test_live_bool64_replaces_the_save_s(self):
+        snapshot = {'bool': {}, 'bool64': {7: True}, 'bool64_complete': True}
+        session = self.session(FakeLive({99: True}, bool64={8: True}))
+        session._merge_live(snapshot, 99)
+        self.assertEqual(snapshot['bool64'], {8: True})
+        self.assertTrue(session.live_bool64)
+
+    def test_unreadable_bool64_keeps_the_save_s(self):
+        snapshot = {'bool': {}, 'bool64': {7: True}, 'bool64_complete': True}
+        session = self.session(FakeLive({99: True}))
+        session._merge_live(snapshot, 99)
+        self.assertEqual(snapshot['bool64'], {7: True})
+        self.assertFalse(session.live_bool64)
 
     def test_other_game_keeps_the_save(self):
         session = self.session(FakeLive({99: False, 1: True}))
