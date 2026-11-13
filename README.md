@@ -201,3 +201,8 @@ docs/              design notes
 
 Generated resources come from your local game: keep them local and do not
 distribute them.
+
+## License
+
+[MIT](LICENSE). The logic data derived from the Archipelago OoT world keeps its own
+MIT licence (`src/oot_rando/logic/world/LICENSE-archipelago-oot.txt`).
