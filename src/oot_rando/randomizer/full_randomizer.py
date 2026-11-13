@@ -546,9 +546,9 @@ def plan_assigned(data, options, groups, enemies, seed_key, assigned, open_fores
         rank = ((lambda g: order.get(g) if order.get(g) is not None else 10 ** 6) if order is not None
                 else (lambda g: sphere_of.get(vname(g), 10 ** 6)))
         sources = sorted((g for g, item in placed.items() if item == family), key=lambda g: (rank(g), g))
-        if not sources and not start_counts[family]:
-            continue
         layout = c.family_tiers.get(family)
+        if not sources and (not start_counts[family] or is_dynamic_layout(layout)):
+            continue   # every copy handed over by the client (dynamic tiers) or none
         if layout is None or len(layout) != len(sources) + start_counts[family]:
             raise FillError(f'Unexpected number of {family}: every copy must stay in this world.')
         tiers.update(zip(sources, layout[start_counts[family]:]))
@@ -569,6 +569,15 @@ def _dungeon_name(folder):
 
 def _sweep_with_requirements(logic, placements, state):
     return logic.sweep(placements, state)
+
+
+def is_dynamic_layout(layout):
+    """Whether shuffled copies of a family take its tiers from the lowest one up (0, 1, 2...).
+
+    Such a family is *dynamic* under Archipelago: the client hands every copy over
+    and the game gives the tier above the one Link holds (``patching.ap_mailbox``).
+    """
+    return bool(layout) and list(layout) == list(range(len(layout)))
 
 
 def tier_layout(matches, shuffled, pool):

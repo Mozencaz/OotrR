@@ -15,6 +15,11 @@ import time
 from oot_rando.patching.ap_mailbox import record_key
 
 RETRY_SECONDS = 8.0
+# One item that never arrives must not hold back the ones after it: after this many
+# signals without Got (the game dropped the event: cutscene, loading...), it goes
+# behind the others and is tried again after a pause, its count reset.
+MAX_SIGNALS = 5
+ASIDE_SECONDS = 60.0
 
 
 class Deliverer:
@@ -25,6 +30,9 @@ class Deliverer:
         self.recv = {key: hash_of(r['recv']) for key, r in self.records.items()}
         self.got = {key: hash_of(r['got']) for key, r in self.records.items()}
         self.in_flight, self.sent_at = None, 0.0
+        self.signals = {}
+        self.aside = {}              # key -> time it may be signalled again
+        self.newly_stuck = []
 
     def pending(self, keys, bools):
         """Keys received from the server that the game does not hold yet (server order)."""
@@ -35,30 +43,65 @@ class Deliverer:
                 result.append(key)
         return result
 
+    @property
+    def stuck(self):
+        """Keys set aside (they go behind the others, retried later)."""
+        return list(self.aside)
+
+    def _set_aside(self, key, now):
+        self.aside[key] = now + ASIDE_SECONDS
+        self.signals[key] = 0
+        self.newly_stuck.append(key)
+        if self.in_flight == key:
+            self.in_flight = None
+
     def step(self, keys, bools, now):
         """Key to signal now, or None. ``bools``: the game's {hash: value}."""
         pending = self.pending(keys, bools)
+        for key in [k for k in self.aside if k not in pending]:
+            del self.aside[key]      # handed over after all
         if self.in_flight not in pending:
             self.in_flight = None
         if not pending:
             return None
         if self.in_flight is not None and now - self.sent_at < RETRY_SECONDS:
             return None
-        if bools.get(self.recv[pending[0]]) is True:
-            return None   # still waiting for the game's sequence (paused, menu open)
-        self.in_flight, self.sent_at = pending[0], now
-        return pending[0]
+        # One signal at a time: a Recv still set is a sequence the game has not
+        # started (paused, menu open); a second one would race it.
+        if any(bools.get(self.recv[key]) is True for key in pending):
+            return None
+        ready = ([k for k in pending if k not in self.aside]
+                 + [k for k in pending if k in self.aside and now >= self.aside[k]])
+        if not ready:
+            return None
+        head = ready[0]
+        if self.signals.get(head, 0) >= MAX_SIGNALS:
+            self._set_aside(head, now)
+            return self.step(keys, bools, now)
+        self.aside.pop(head, None)
+        self.signals[head] = self.signals.get(head, 0) + 1
+        self.in_flight, self.sent_at = head, now
+        return head
+
+    def take_stuck(self):
+        """Records set aside since the last call (to report once)."""
+        taken, self.newly_stuck = self.newly_stuck, []
+        return [self.records[key] for key in taken]
 
 
 def received_keys(entries, slot, player_name, location_name):
-    """Record keys of received items found in other worlds, in server order.
+    """Record keys of received items found at a location, in server order.
 
-    ``entries``: NetworkItem dicts; ``player_name(slot)``, ``location_name(location, slot)``.
+    Items found in this world count too: the copies of a dynamic progressive family
+    are handed over by the client wherever they are (the other ones of this world
+    have no record and are ignored by :class:`Deliverer`). ``slot``: unused, kept
+    for the callers. ``entries``: NetworkItem dicts; ``player_name(slot)``,
+    ``location_name(location, slot)``.
     """
     keys = []
     for entry in entries:
         finder = entry.get('player')
-        if finder == slot or entry.get('location', -1) < 0:
+        if entry.get('location', -1) < 0:
             continue
         keys.append(record_key(player_name(finder), location_name(entry['location'], finder)))
     return keys
@@ -94,6 +137,8 @@ class LiveDelivery:
         self.waiting = len(self.deliverer.pending(keys, bools))
         key = self.deliverer.step(keys, bools, self.clock())
         self.status = f'{self.waiting} item(s) to hand over' if self.waiting else 'every received item is in game'
+        if self.deliverer.aside:
+            self.status += f' ({len(self.deliverer.aside)} set aside: not taken yet, retried later)'
         if key is None:
             return None
         try:

@@ -138,7 +138,11 @@ class Flow(unittest.TestCase):
         self.assertEqual(self.client.received_rows()[1][3], False)    # found in this game
         self.assertEqual(self.client.summary()['from_other_worlds'], 1)
         from oot_rando.patching.ap_mailbox import record_key
-        self.assertEqual(self.client.received_keys(), [record_key('Ami', 'Chest')])
+        # Items found in this world have keys too (dynamic progressive copies).
+        own = self.client.received_keys()[1]
+        self.assertEqual(self.client.received_keys()[0], record_key('Ami', 'Chest'))
+        self.assertEqual(len(self.client.received_keys()), 2)
+        self.assertNotEqual(own, record_key('Ami', 'Chest'))
         self.socket.push({'cmd': 'ReceivedItems', 'index': 5, 'items': [{'item': 7, 'location': 1, 'player': 2}]})
         self.assertTrue(wait(lambda: self.socket.commands('Sync')))
         self.assertEqual(len(self.client.received), 2)

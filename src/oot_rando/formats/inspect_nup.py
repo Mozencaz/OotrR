@@ -39,7 +39,10 @@ class Nup:
                 else:
                     f = files[child-dc]
                     self.entries[prefix+name(f[0], f[1])] = f
-        for i, p in enumerate(self.packages):
+        # Members are keyed by the package's rank in title-id order, not its position in
+        # the TOC: the base game ('0/') always sorts before its update ('1/', title + 0x800)
+        # and DLC, whatever order the dumping tool wrote them in.
+        for i, p in enumerate(sorted(self.packages, key=lambda p: p[0])):
             walk(p[1], f'{i}/')
 
     def read(self, path):

@@ -71,20 +71,40 @@ def item_folder(item):
     return DUNGEON_FOLDER[item[item.index('(') + 1:-1]]
 
 
+# Actor names of the long dungeon folders. In-game test 13/11: the item get of a
+# generated actor named Item_KeyRing_GerudoTrainingGround (33 characters) or
+# Item_KeyRing_InsideGanonCastle (30) crashes the game (null read, Link holding
+# nothing), while every generated actor of 25 characters or fewer is handed over
+# (see soul_adapter.MAX_ACTOR_NAME).
+SHORT_FOLDER = {'BottomOfTheWell': 'Well', 'GerudoTrainingGround': 'GTG', 'InsideGanonCastle': 'Ganon'}
+FOLDER_OF_SHORT = {short: folder for folder, short in SHORT_FOLDER.items()}
+
+
 def ring_actor(folder):
-    return RING_PREFIX + folder
+    return RING_PREFIX + SHORT_FOLDER.get(folder, folder)
 
 
 def boss_actor(folder):
-    return BOSS_PREFIX + folder
+    return BOSS_PREFIX + SHORT_FOLDER.get(folder, folder)
+
+
+def actor_folder(actor):
+    """Dungeon folder of a key actor (``Item_KeyRing_GTG`` → ``GerudoTrainingGround``), or None."""
+    for prefix in (RING_PREFIX, BOSS_PREFIX):
+        if actor.startswith(prefix):
+            name = actor[len(prefix):]
+            folder = FOLDER_OF_SHORT.get(name, name)
+            return folder if folder in FOLDER_DUNGEON else None
+    return None
 
 
 def key_actor_item(actor):
     """AP item of a dungeon-specific key actor, or None."""
-    for prefix, kind in ((RING_PREFIX, 'Small Key Ring'), (BOSS_PREFIX, 'Boss Key')):
-        if actor.startswith(prefix) and actor[len(prefix):] in FOLDER_DUNGEON:
-            return f'{kind} ({FOLDER_DUNGEON[actor[len(prefix):]]})'
-    return None
+    folder = actor_folder(actor)
+    if folder is None:
+        return None
+    kind = 'Small Key Ring' if actor.startswith(RING_PREFIX) else 'Boss Key'
+    return f'{kind} ({FOLDER_DUNGEON[folder]})'
 
 
 def is_key_actor(actor):
@@ -92,7 +112,7 @@ def is_key_actor(actor):
 
 
 def key_texts(actor, language):
-    folder = actor[len(RING_PREFIX):] if actor.startswith(RING_PREFIX) else actor[len(BOSS_PREFIX):]
+    folder = actor_folder(actor)
     ring = actor.startswith(RING_PREFIX)
     if language.endswith('fr'):
         name = FRENCH_DUNGEONS[folder]

@@ -21,6 +21,7 @@ VENDORED = ('__init__.py', 'paths.py',
             'game/__init__.py', 'game/remake_world.py', 'game/item_forms.py', 'game/extra_sources.py',
             'game/randomizer_categories.py',
             'patching/__init__.py', 'patching/soul_adapter.py', 'patching/key_adapter.py', 'patching/ap_item.py',
+            'patching/ap_mailbox.py',
             'archipelago/__init__.py', 'archipelago/bridge.py')
 # Becomes ``oot_remake/__init__.py``. Not a ``.py`` here: it imports Archipelago.
 TEMPLATE = 'archipelago/ap_world.py.in'
@@ -40,12 +41,8 @@ def _scan(nup, progress):
     from oot_rando.formats.inspect_resources import dictionaries
     from oot_rando.game.extra_sources import scan_world
     from oot_rando.game.world_maps import effective_members
-    from oot_rando.patching.randomize_kokiri import BUILD, TITLE
-    if nup.packages != [(int(TITLE, 16), 0, 1, 2, 65536), (int(TITLE, 16) + 0x800, 598, 599, 600, 131072)]:
-        raise ValueError('Unsupported NUP structure.')
-    main = nup.read('1/exefs/main')
-    if main[:4] != b'NSO0' or main[0x40:0x60].hex() != BUILD:
-        raise ValueError('Unsupported game build.')
+    from oot_rando.patching.randomize_kokiri import BUILD, check_supported_game
+    check_supported_game(nup)
     _, groups, enemies, extra = scan_world(nup, dictionaries(nup), effective_members(nup), progress)
     return BUILD, groups, enemies, extra
 

@@ -201,6 +201,10 @@ class OoTRemakeWorld(World):
         for gid, name in remake.names.items():
             item = multiworld.get_location(name, self.player).item
             own = item.player == self.player and item.game == GAME
+            # A copy of a dynamic progressive family found here is handed over by the
+            # client too (its tier is chosen in game): an Archipelago item of this world.
+            if own and item.name in remake.dynamic:
+                own = False
             if not remake.can_hold(gid, item.name if own else None):
                 raise Exception(f'{GAME}: {item.name} cannot be given by {name}.')
             placements[gid] = {'item': item.name, 'own': own, 'player': multiworld.get_player_name(item.player),
@@ -209,7 +213,7 @@ class OoTRemakeWorld(World):
         remote = [{'item': loc.item.name, 'location': loc.name, 'player': multiworld.get_player_name(loc.player)}
                   for loc in multiworld.get_locations()
                   if loc.item and loc.address is not None and loc.item.player == self.player
-                  and loc.player != self.player]
+                  and (loc.player != self.player or loc.item.name in remake.dynamic)]
         precollected = [item.name for item in multiworld.precollected_items[self.player]]
         patch = remake.patch(placements, remote, multiworld.seed_name, self.player_name, self.player,
                              CATALOG['game_build'], precollected)

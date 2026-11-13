@@ -162,15 +162,27 @@ class WithGame(unittest.TestCase):
     def test_local_only_items(self):
         world = self.player()
         from oot_rando.game.remake_world import PROGRESSIVE
-        self.assertTrue(set(PROGRESSIVE) & set(world.pool) <= world.local_only)
+        progressive = set(PROGRESSIVE) & set(world.pool)
+        # Every family is either handed over by the client (dynamic tiers) or kept here.
+        self.assertEqual(progressive, (progressive & world.local_only) | world.dynamic)
+        self.assertFalse(world.dynamic & world.local_only)
+        self.assertTrue(world.dynamic, 'no progressive family can go to another world')
         self.assertTrue(world.restricted <= world.local_only)
+        # A dynamic copy found here is an Archipelago item: same locations as one.
+        for family in world.dynamic:
+            self.assertEqual([g for g in world.names if world.can_hold(g, family)],
+                             [g for g in world.names if world.can_hold(g)])
 
     def test_tier_conflict(self):
         world = self.player()
         wallets = [g for g in world.names][:2]
-        items = {wallets[0]: 'Progressive Wallet', wallets[1]: 'Progressive Wallet'}
-        self.assertEqual(world.tier_conflict(items, {wallets[0]: 1, wallets[1]: 1}), 'Progressive Wallet')
-        self.assertIsNone(world.tier_conflict(items, {wallets[0]: 1, wallets[1]: 3}))
+        from oot_rando.game.remake_world import PROGRESSIVE
+        for family in sorted(PROGRESSIVE):
+            items = {wallets[0]: family, wallets[1]: family}
+            shared = world.tier_conflict(items, {wallets[0]: 1, wallets[1]: 1})
+            # Fixed tiers need distinct spheres; dynamic ones are chosen in game.
+            self.assertEqual(shared, None if family in world.dynamic else family)
+            self.assertIsNone(world.tier_conflict(items, {wallets[0]: 1, wallets[1]: 3}))
 
     def test_assigned_plan_with_foreign_items(self):
         """Placements of the built-in fill, a few given to another player, rebuilt as a plan."""
@@ -183,11 +195,12 @@ class WithGame(unittest.TestCase):
         placed = {p['id']: p['item'] for p in reference['placements']}
         self.assertEqual(set(placed), set(world.names))
         foreign = [g for g, item in sorted(placed.items())
-                   if world.classification(item) == 'filler' and world.can_hold(g)][:3]
+                   if world.classification(item) == 'filler' and world.can_hold(g)
+                   and item not in world.local_only][:3]
         placements = {g: {'item': 'Sword' if g in foreign else item, 'own': g not in foreign,
                           'player': 'Ami' if g in foreign else 'Moi', 'sphere': None}
                       for g, item in placed.items()}
-        remote = [{'item': placed[g], 'location': 'Somewhere', 'player': 'Ami'} for g in foreign]
+        remote = [{'item': placed[g], 'location': f'Somewhere {i}', 'player': 'Ami'} for i, g in enumerate(foreign)]
         patch = world.patch(placements, remote, '1', 'Moi', 1, self.build)
         bridge.check_patch(json.loads(json.dumps(patch)))
         result = full_randomizer.plan_assigned(World(), world.options, copy.deepcopy(self.groups),

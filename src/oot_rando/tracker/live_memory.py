@@ -33,7 +33,43 @@ GAMEDATA_SLOT = 0x84C9E180
 SEQUENCE_IS_CHILDHOOD = 0xCEA220D3   # murmur3('Sequence_IsChildhood'), always present
 MAX_TABLE, MAX_BOOLS = 1 << 20, 1 << 20
 GAME_EXE = 'hookshot.exe'
-EMULATOR_EXES = {'lichii.exe', 'eden.exe', 'yuzu.exe', 'suyu.exe', 'citron.exe', 'sudachi.exe'}
+EMULATOR_EXES = {'lichii.exe', 'ryuchii.exe', 'eden.exe', 'yuzu.exe', 'suyu.exe', 'citron.exe', 'sudachi.exe'}
+EXTRA_EMULATORS_KEY = 'extra_emulators'   # gui_state.json: executables the player added (Setup page)
+
+
+def parse_exe_names(text):
+    """Executable names from a free list (commas, semicolons or lines): lower case, '.exe' added."""
+    from pathlib import PureWindowsPath
+    names = set()
+    for part in text.replace(';', ',').replace('\n', ',').split(','):
+        name = PureWindowsPath(part.strip().strip('"')).name.lower()
+        if name:
+            names.add(name if name.endswith('.exe') else name + '.exe')
+    return names
+
+
+_extra_emulators = None   # set by the application; None: read once from its saved state
+
+
+def set_extra_emulators(text):
+    """Executables the player listed (Setup page), used by the next process scan."""
+    global _extra_emulators
+    _extra_emulators = parse_exe_names(text or '')
+
+
+def emulator_exes():
+    """Known yuzu-family executables plus the ones the player listed in the application."""
+    if _extra_emulators is None:
+        import json
+        from oot_rando.paths import state_dir
+        try:
+            extra = json.loads((state_dir() / 'gui_state.json').read_text(encoding='utf-8')).get(EXTRA_EMULATORS_KEY)
+        except (OSError, ValueError, AttributeError):
+            extra = ''
+        set_extra_emulators(extra if isinstance(extra, str) else '')
+    return EMULATOR_EXES | _extra_emulators
+
+
 HOOKSHOT_MAIN = 0x80020000                 # where Hookshot keeps the main module
 MEM_COMMIT = 0x1000
 MAX_MODULE = 0x10000000                              # MOD0 may sit past the first region (main: +0x3c4705c)
@@ -159,6 +195,7 @@ class ProcessMemory:
         if now < self.next_scan:
             raise LiveUnavailable('game not running')
         self.next_scan = now + 5   # scanning every process each second would be wasteful
+        emulators = emulator_exes()
         for pid in self._pids():
             handle = self.k32.OpenProcess(0x0010 | 0x0400, False, pid)   # VM_READ | QUERY_INFORMATION
             if not handle:
@@ -167,7 +204,7 @@ class ProcessMemory:
             layout = None
             if name == GAME_EXE and self._probe(handle):
                 layout = HOST_BASE, GAMEDATA_SLOT
-            elif name in EMULATOR_EXES:
+            elif name in emulators:
                 layout = emulator_layout(self._regions(handle), lambda host, size: self._read(handle, host, size))
             if layout:
                 self.handle, self.pid = handle, pid

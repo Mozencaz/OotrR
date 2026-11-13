@@ -6,6 +6,7 @@ from pathlib import Path
 import queue
 import secrets
 import threading
+import webbrowser
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 
@@ -22,6 +23,7 @@ from oot_rando.game.world_maps import SAFE_CATEGORIES
 from oot_rando.logic import rando_options
 from oot_rando.paths import data_dir, seeds_dir, state_dir
 from oot_rando.gui import theme
+from oot_rando import __version__ as APP_VERSION, updater
 
 STATE = state_dir()
 LABELS = dict(zip(POOL, ('Green Rupee', 'Blue Rupee', 'Red Rupee', 'Purple Rupee',
@@ -111,6 +113,11 @@ class Application:
         self.mods.set(self.app_state.get('mods_dir') or default_mods_dir())
         self.nup.trace_add('write', lambda *args: self.write_app_state(game_file=self.nup.get()))
         self.mods.trace_add('write', lambda *args: self.write_app_state(mods_dir=self.mods.get()))
+        self.check_updates = tk.BooleanVar(value=self.app_state.get('check_updates', True) is not False)
+        self.check_updates.trace_add('write', lambda *args: self.write_app_state(check_updates=self.check_updates.get()))
+        self.updating, self.update_silent = False, True   # False, 'check' or 'install'
+        self.extra_emulators = tk.StringVar(value=self.app_state.get('extra_emulators') or '')
+        live_memory.set_extra_emulators(self.extra_emulators.get())
         if isinstance(self.app_state.get('auto_save'), bool):
             self.auto_save.set(self.app_state['auto_save'])
         if self.app_state.get('save_path') and not self.auto_save.get():
@@ -173,6 +180,9 @@ class Application:
         self.register_hotkey()
         self.tracker_search.trace_add('write', lambda *args: self.render_tracker())
         root.after(100, self.poll)
+        updater.cleanup()
+        if self.check_updates.get():
+            root.after(2500, lambda: self.check_for_updates(silent=True))
         root.after(1800, self.tracker_tick)
         root.after(50, self.restore_last_artifact)
         root.after(60, self.start_turbo)
@@ -239,7 +249,10 @@ class Application:
             ttk.Label(box, text=f'{index + 1:02d}', style='Field.TLabel').pack(anchor='w')
             ttk.Label(box, text=heading, style='Heading.TLabel').pack(anchor='w', pady=(2, 6))
             ttk.Label(box, text=text, style='Muted.TLabel', wraplength=360, justify='left').pack(anchor='w')
-        ttk.Label(parent, text=f'Application version: {GENERATOR_VERSION}', style='Page.TLabel').pack(anchor='w', pady=(4, 8))
+        ttk.Label(parent, text=f'Application version: {APP_VERSION} (generator {GENERATOR_VERSION})', style='Page.TLabel').pack(anchor='w', pady=(4, 8))
+        row = self.buttons(parent, pady=(0, 8))
+        ttk.Button(row, text='Check for updates', command=lambda: self.check_for_updates(silent=False)).pack(side='left')
+        ttk.Checkbutton(row, text='Check at start-up', variable=self.check_updates).pack(side='left', padx=(12, 0))
 
     def tab(self, key, nav, title, subtitle):
         frame = ttk.Frame(self.tabs, style='Page.TFrame')
@@ -279,6 +292,15 @@ class Application:
         self.path_row(box, 'GAME FILE (.NUP)', self.nup, 'file')
         self.path_row(box, 'MODS FOLDER — HOOKSHOT / MODS OR THE EMULATOR TITLE FOLDER', self.mods, 'directory')
         ttk.Label(box, text='Hookshot: choose the mods folder next to hookshot.exe.', style='Small.TLabel').pack(anchor='w')
+        ttk.Label(box, text='OTHER EMULATOR EXECUTABLES (OPTIONAL)', style='Field.TLabel').pack(anchor='w', pady=(12, 0))
+        row = self.buttons(box, pady=(5, 4))
+        entry = ttk.Entry(row, textvariable=self.extra_emulators)
+        entry.pack(side='left', fill='x', expand=True)
+        for event in ('<FocusOut>', '<Return>'):
+            entry.bind(event, lambda e: self.save_extra_emulators())
+        ttk.Label(box, text='Live tracking finds Hookshot, Lichii, Ryuchii, Eden, yuzu, suyu, citron and sudachi. '
+                  'Another yuzu-based emulator? Add its .exe name here (comma-separated).',
+                  style='Small.TLabel', wraplength=780).pack(anchor='w')
         box = self.card(parent, 'Save', 'The tracker reads your progress.sav. It is found automatically; pick it by hand only if needed.')
         ttk.Checkbutton(box, text='Follow the most recent save (every slot)', variable=self.auto_save,
                         command=self.auto_save_toggled).pack(anchor='w', pady=(0, 12))
@@ -1569,6 +1591,15 @@ class Application:
                         self.render_tracker()
                     else:
                         self.update_hud()   # inventory and save time change without check changes
+                elif kind == 'update-found':
+                    self.update_found(*payload)
+                elif kind == 'update-installed':
+                    self.update_installed(payload)
+                elif kind == 'update-error':
+                    silent = payload[1] and self.update_silent
+                    self.updating = False
+                    if not silent:
+                        messagebox.showerror('Update', str(payload[0]))
                 elif kind == 'ap-change':
                     self.render_archipelago()
                 elif kind == 'progress':
@@ -1594,14 +1625,76 @@ class Application:
             pass
         self.root.after(100, self.poll)
 
+    def save_extra_emulators(self):
+        text = self.extra_emulators.get().strip()
+        live_memory.set_extra_emulators(text)
+        if text != (self.app_state.get('extra_emulators') or ''):
+            self.write_app_state(extra_emulators=text)
+
+    # ------------------------------------------------------- updates
+    def check_for_updates(self, silent):
+        if self.updating == 'install':
+            if not silent:
+                messagebox.showinfo('Update', 'The update is being downloaded.')
+            return
+        if self.updating == 'check':
+            self.update_silent = self.update_silent and silent   # a click shows the running check's answer
+            return
+        self.updating, self.update_silent = 'check', silent
+
+        def worker():
+            try:
+                self.events.put(('update-found', (updater.latest_release(), silent)))
+            except updater.UpdateError as error:
+                self.events.put(('update-error', (error, silent)))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def update_found(self, release, silent):
+        silent = silent and self.update_silent
+        self.updating = False
+        if release is None:
+            if not silent:
+                messagebox.showinfo('Update', f'You have the latest version ({APP_VERSION}).')
+            return
+        notes = release.notes.strip()
+        notes = ('\n\n' + (notes[:600] + '…' if len(notes) > 600 else notes)) if notes else ''
+        if not updater.can_self_update():
+            if messagebox.askyesno('Update available', f'Version {release.version} is available (you have '
+                                   f'{APP_VERSION}).{notes}\n\nOpen the release page?'):
+                webbrowser.open(release.page)
+            return
+        if not messagebox.askyesno('Update available', f'Version {release.version} is available (you have '
+                                   f'{APP_VERSION}).{notes}\n\nDownload and install it now? The application '
+                                   'restarts; your seeds and settings are kept.'):
+            return
+        if self.busy:
+            messagebox.showinfo('Operation running', 'Wait for the generation or analysis to finish, then check again.')
+            return
+        self.updating = 'install'
+        self.status.set(f'Downloading version {release.version}…')
+
+        def worker():
+            try:
+                self.events.put(('update-installed', updater.install(release, lambda m: self.events.put(('progress', m)))))
+            except updater.UpdateError as error:
+                self.events.put(('update-error', (error, False)))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def update_installed(self, target):
+        self.updating = False
+        self.status.set('Update installed.')
+        if messagebox.askyesno('Update installed', 'The new version is installed. Restart now?') and self.close():
+            updater.restart(target)   # only once this instance is gone: never two running
+
     def error(self, error):
         self.status.set(str(error))
         messagebox.showerror('Operation failed', str(error))
 
     def close(self):
+        """Close the application; False when the player kept it open."""
         if self.busy:
             messagebox.showinfo('Operation running', 'Wait for the generation or analysis to finish before closing.')
-            return
+            return False
         if self.hotkey_thread_id:
             ctypes.windll.user32.PostThreadMessageW(self.hotkey_thread_id, 0x0012, 0, 0)
             self.hotkey_thread.join(timeout=1)
@@ -1610,12 +1703,14 @@ class Application:
                     'Game running',
                     'Turbo A plays the A button for the game. Closing now leaves A without effect until '
                     'the game is restarted. Close anyway?')):
-                return
+                return False
             self.turbo.stop()
         if self.ap_client:
             self.ap_client.stop()
+        self.save_extra_emulators()
         self.closed = True
         self.root.destroy()
+        return True
 
 
 def main(argv=None):

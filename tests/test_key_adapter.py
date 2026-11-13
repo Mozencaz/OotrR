@@ -16,11 +16,24 @@ class Units(unittest.TestCase):
     def test_key_items_round_trip(self):
         from oot_rando.game.remake_world import actor_item, item_actor
         self.assertEqual(item_actor('Small Key Ring (Forest Temple)', 'HyruleField'), 'Item_KeyRing_ForestTemple')
-        self.assertEqual(actor_item('Item_KeyRing_InsideGanonCastle', ''), 'Small Key Ring (Ganons Castle)')
+        self.assertEqual(actor_item('Item_KeyRing_Ganon', ''), 'Small Key Ring (Ganons Castle)')
         self.assertEqual(actor_item('Item_BossKey_WaterTemple', 'KokiriForest'), 'Boss Key (Water Temple)')
         # Generic remake keys stay credited to the dungeon they are found in.
         self.assertEqual(item_actor('Boss Key (Fire Temple)', 'FireTemple'), 'Item_Dungeon_BossKey')
         self.assertFalse(k.is_key_actor('Item_Dungeon_SmallKey'))
+
+    def test_generated_actor_names_fit_the_game(self):
+        # 13/11 in game: generated actors of 30 and 33 characters crashed their item get.
+        from oot_rando.game.remake_world import FOLDER_DUNGEON, actor_item
+        from oot_rando.patching.key_adapter import RING_DUNGEONS, BOSS_KEY_DUNGEONS, ring_actor, boss_actor
+        from oot_rando.patching.soul_adapter import MAX_ACTOR_NAME, REGION_CODES, soul_actor, soul_item
+        names = [ring_actor(f) for f in RING_DUNGEONS] + [boss_actor(f) for f in BOSS_KEY_DUNGEONS]
+        names += [soul_actor(soul_item('Region:' + folder))
+                  for folder in sorted(set(FOLDER_DUNGEON) | set(REGION_CODES))]
+        self.assertEqual([n for n in names if len(n) > MAX_ACTOR_NAME], [])
+        self.assertEqual(len(set(names)), len(names))
+        for folder in RING_DUNGEONS:
+            self.assertEqual(actor_item(ring_actor(folder), ''), f'Small Key Ring ({FOLDER_DUNGEON[folder]})')
 
     def test_records_name_the_dungeon_struct(self):
         records = k.key_records(['Small Key Ring (Fire Temple)', 'Boss Key (Shadow Temple)'])

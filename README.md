@@ -38,6 +38,15 @@ the quality-of-life options below. Details of the full mode and in-game pilots:
    tracker. It rereads the save about every two seconds; changes show up when the
    game saves.
 
+**Updates:** the portable build checks the latest GitHub release at start-up
+(Help → *Check at start-up*; also a *Check for updates* button). Accepting
+downloads the archive, verifies it against the release's `SHA256SUMS.txt`, swaps
+the executable in place and restarts; `data/` (seeds, settings) is kept. Run from
+the sources, it only points to the release page (use `git pull`).
+
+The game file must hold the base game **and** update v131072 in one `.nup`; the
+order of the packages inside it does not matter.
+
 For **Hookshot on Windows**, keep the NUP as the source and choose the `mods`
 folder next to `hookshot.exe`, `image.bin` and `romfs` (create it if needed). The
 seed is installed in its own sub-folder, without replacing the original resources.
@@ -59,6 +68,10 @@ randomized reward is limited to the first pickup. A private get event sets a
 persistent flag, then the source goes back to its native loot (a rock without
 vanilla loot gives nothing again). A guard forbids a second randomized reward
 coming from an old copy of the same drop.
+
+Live reading of the game memory (Windows) finds Hookshot and the yuzu-family
+emulators Lichii, Ryuchii, Eden, yuzu, suyu, citron and sudachi. Another fork can
+be added by its executable name in **Setup → Other emulator executables**.
 
 The **in-game overlay** (Windows, Hookshot) shows the item grid plus the soul and
 check counts over the game window; toggle it with **Ctrl + Shift + O**.
@@ -107,10 +120,17 @@ world, with the same locations, item pool and glitchless rules as the built-in f
    Checks ticked by hand in the tracker are sent too.
 
 Items of other players show in game as an Archipelago medallion with the item and player
-name. Limits of this stage: items of this game received from other worlds and Archipelago
-starting items are listed by the client but **not given in game** (no proven mechanism yet);
-chest checks reach the server once the game writes its save; dungeon-bound keys and
-progressive items stay in your world.
+name. Items of this game found in other worlds are handed over in game by the client
+while a save of the seed is loaded (Windows, Hookshot or a yuzu-family emulator), one at
+a time in server order: Link holds the item up (consumables arrive as a pickup). An item
+the game does not take after several tries is set aside and reported in the client log,
+so the next ones still arrive. Archipelago starting items are given at the end of the
+opening. Progressive items (hookshot, bow, bomb bag, wallet…) can be in any world:
+every copy, yours included, is handed over by the client, which gives the level above
+the one Link holds (a family whose lowest level stays with an unshuffled source, such as
+Darunia's bracelet, keeps fixed levels in your world). Limits: chest checks reach the
+server once the game writes its save; dungeon-bound keys (other than key rings and
+dungeon boss keys) stay in your world.
 
 ## Development
 

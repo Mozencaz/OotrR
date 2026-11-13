@@ -53,6 +53,11 @@ def verify(nup_path, seed_dir):
     spoiler = json.loads((seed_dir / 'spoiler.json').read_text(encoding='utf-8'))
     if 'full_randomizer' not in manifest:
         raise ValueError('Seed without the full randomizer.')
+    from oot_rando.randomizer.randomizer_core import GENERATOR_VERSION
+    if manifest.get('generator_version') != GENERATOR_VERSION:
+        # The expected files are rebuilt with today's actor names and patches.
+        raise ValueError(f'Only seeds of generator {GENERATOR_VERSION} can be replayed '
+                         f'(this one: {manifest.get("generator_version")}).')
     nup = Nup(nup_path)
     d = dictionaries(nup)
     members = effective_members(nup)
@@ -177,10 +182,15 @@ def verify(nup_path, seed_dir):
             if path == ACTION_GUIDE_FLOW and skips.get('key_items'):
                 # Key rings / dungeon boss keys, rebuilt from the spoiler alone.
                 from oot_rando.patching.key_adapter import add_key_hook, key_records
-                records = key_records(p['ap_item'] for p in full if p['ap_item'].startswith(('Small Key Ring (',))
-                                      or (p['ap_item'].startswith('Boss Key (')
-                                          and p.get('reward_actor', p['actor']).removeprefix('Obj_Rando_').removeprefix('Shop_Rando_')
-                                          .startswith('Item_BossKey_')))
+                from oot_rando.patching.ap_mailbox import key_items as mailbox_key_items
+                # Plus the keys received from other worlds (same actors, same hook).
+                received = set(mailbox_key_items((skips.get('ap_mailbox') or {}).get('items', [])))
+                placed = {p['ap_item'] for p in full
+                          if p['ap_item'].startswith('Small Key Ring (')
+                          or (p['ap_item'].startswith('Boss Key (')
+                              and p.get('reward_actor', p['actor']).removeprefix('Obj_Rando_')
+                              .removeprefix('Shop_Rando_').startswith('Item_BossKey_'))}
+                records = key_records(received | placed)
                 if records != skips['key_items']['records']:
                     raise ValueError('Dungeon keys differ from the spoiler.')
                 original = add_key_hook(original, records)[0]
