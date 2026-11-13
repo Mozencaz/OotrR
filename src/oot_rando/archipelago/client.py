@@ -17,6 +17,9 @@ import uuid
 from oot_rando.archipelago.bridge import GAME
 
 DEFAULT_PORT = 38281
+# Largest packet accepted from the server: data packages of big multiworlds are a few
+# tens of MB; a server must not be able to exhaust the memory.
+MAX_MESSAGE = 128 << 20
 VERSION = {'major': 0, 'minor': 6, 'build': 6, 'class': 'Version'}
 ITEMS_HANDLING = 0b111          # own-world, other-world and starting items: all listed
 CLIENT_GOAL = 30                # ClientStatus.CLIENT_GOAL
@@ -40,7 +43,11 @@ def archipelago_info(manifest):
 
 
 def server_urls(address):
-    """WebSocket URLs to try for an address typed by the player (secure first, like Archipelago's clients)."""
+    """WebSocket URLs to try for an address typed by the player (secure first, like Archipelago's clients).
+
+    The plain ``ws://`` one is only a fallback for a server that does not speak TLS
+    (see :func:`tls_unsupported`), never after a certificate error.
+    """
     address = address.strip()
     if not address:
         raise ClientError('Enter the server address (for example archipelago.gg:38281).')
@@ -52,6 +59,21 @@ def server_urls(address):
     if ':' not in host.rsplit(']', 1)[-1]:
         host = f'{host}:{DEFAULT_PORT}'
     return [f'wss://{host}', f'ws://{host}']
+
+
+def tls_unsupported(error):
+    """Whether a failed ``wss://`` attempt means the server speaks plain WebSocket.
+
+    A certificate that does not verify is an error of its own: falling back to an
+    unencrypted connection then would hand the password to whoever answered.
+    """
+    import ssl
+    if isinstance(error, ssl.SSLCertVerificationError):
+        return False
+    if isinstance(error, ssl.SSLError):
+        return True                       # wrong version number, record layer failure...
+    text = str(error).lower()
+    return isinstance(error, (ConnectionResetError, EOFError)) or 'did not receive a valid http response' in text
 
 
 class LocationReporter:
@@ -101,6 +123,7 @@ class ArchipelagoClient:
         if not self.slot_name:
             raise ClientError('Slot name unknown: enter it.')
         self.urls = server_urls(address)
+        self.encrypted = None           # whether the open connection is encrypted (wss)
         self.password = password or None
         self.reporter = LocationReporter(location_ids)
         self.on_change = on_change or (lambda: None)
@@ -229,14 +252,29 @@ class ArchipelagoClient:
         connect = self._connect
         if connect is None:
             from websockets.sync.client import connect
-        last = None
-        for url in self.urls:
-            try:
-                self._set_status('Connecting to ' + url + '...')
-                return connect(url, max_size=None, open_timeout=10)
-            except Exception as error:  # noqa: BLE001 - try the next scheme
-                last = error
-        raise last
+        secure = self.urls[0].startswith('wss://')
+        try:
+            self._set_status('Connecting to ' + self.urls[0] + '...')
+            socket = connect(self.urls[0], max_size=MAX_MESSAGE, open_timeout=10)
+            self.encrypted = secure
+            return socket
+        except Exception as error:  # noqa: BLE001 - the plain fallback, if any, decides
+            if len(self.urls) < 2 or not tls_unsupported(error):
+                import ssl
+                if isinstance(error, ssl.SSLCertVerificationError):
+                    raise ClientError("The server's certificate is not valid: connection stopped so that "
+                                      'nothing is sent unencrypted. Type ws://address to connect '
+                                      'without encryption anyway.') from error
+                raise
+        if self.password:
+            # A server that does not speak TLS gets the password only when asked explicitly:
+            # an attacker on the network could have broken the secure attempt on purpose.
+            raise ClientError('This server does not support encryption: the password would be sent '
+                              'unencrypted. Type ws://' + self.urls[1][len('ws://'):] + ' to connect anyway.')
+        self._set_status('Connecting to ' + self.urls[1] + ' (not encrypted)...')
+        socket = connect(self.urls[1], max_size=MAX_MESSAGE, open_timeout=10)
+        self.encrypted = False
+        return socket
 
     def _session(self):
         socket = self._open()
@@ -310,7 +348,8 @@ class ArchipelagoClient:
                 self.reporter.reset_connection(packet.get('checked_locations') or [])
                 self.received = []
                 self.connected = True
-            self._set_status(f'Connected as {self.slot_name}', connected=True)
+            self._set_status(f'Connected as {self.slot_name}'
+                             + ('' if self.encrypted else ' (not encrypted)'), connected=True)
         elif cmd == 'ReceivedItems':
             index, items = packet.get('index', 0), packet.get('items') or []
             with self._lock:

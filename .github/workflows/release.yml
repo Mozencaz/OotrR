@@ -33,10 +33,14 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       - name: Resolve version (fails early if the tag exists)
         id: version
         run: bash .github/scripts/resolve_version.sh "${{ inputs.version }}"
+      - name: Check the update signing key (before anything is tagged)
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: bash .github/scripts/update_signature.sh check
 
   build:
     name: Tests and builds
@@ -62,7 +66,8 @@ jobs:
       TAG: ${{ needs.tag.outputs.tag }}
       VERSION: ${{ needs.check.outputs.version }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           path: artifacts
       - name: Package assets
@@ -71,6 +76,10 @@ jobs:
           (cd artifacts/OoT-Randomizer-windows && zip -qr "../../release/OoT-Randomizer-$VERSION-windows-x64.zip" .)
           cp artifacts/OoT-Randomizer-linux/OoT-Randomizer-linux.tar.gz "release/OoT-Randomizer-$VERSION-linux-x64.tar.gz"
           (cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+      - name: Sign the checksums (the application refuses unsigned updates)
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: bash .github/scripts/update_signature.sh sign release/SHA256SUMS.txt
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -85,7 +94,7 @@ jobs:
           | Linux x64 (glibc ≥ 2.35: Ubuntu 22.04+, Debian 12+…) | \`OoT-Randomizer-$VERSION-linux-x64.tar.gz\` → \`tar xzf\`, then run \`OoT-Randomizer\` |
 
           Portable applications, no installation or Python needed. They create a \`data/\` folder next to the executable.
-          Checksums: \`SHA256SUMS.txt\`.
+          Checksums: \`SHA256SUMS.txt\`, signed (Ed25519) in \`SHA256SUMS.txt.sig\`.
           EOF
           flags=()
           [[ "${{ inputs.prerelease }}" == "true" ]] && flags+=(--prerelease)

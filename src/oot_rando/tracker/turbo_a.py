@@ -480,6 +480,12 @@ class TurboA:
         player = self.remap()
         if player is None:
             return False
+        if not getattr(self, '_restore_at_exit', False):
+            # The app ending another way than its window (exception, sys.exit) still gives
+            # the game its A back; a killed process is mended by remap_ini at the next start.
+            import atexit
+            atexit.register(self.restore)
+            self._restore_at_exit = True
         self._setup()
         binds = read_binds(self.root)
         plus = binds['key_plus'][0] or binds['key_plus'][1]

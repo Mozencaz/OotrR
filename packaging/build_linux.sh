@@ -17,7 +17,7 @@ VENV="${OOT_LINUX_VENV:-$HOME/.cache/oot-randomizer/venv-linux}"
 if [[ ! -x "$VENV/bin/python" ]]; then
     python3 -m venv "$VENV"
 fi
-"$VENV/bin/python" -m pip install --disable-pip-version-check -q -r requirements.txt PyYAML "pyinstaller>=6.10,<7"
+"$VENV/bin/python" -m pip install --disable-pip-version-check -q -c packaging/constraints.txt -r requirements.txt PyYAML pyinstaller
 "$VENV/bin/python" -c "import tkinter" || { echo "tkinter manquant : sudo apt install python3-tk"; exit 1; }
 "$VENV/bin/python" -m PyInstaller --noconfirm --clean --distpath "$WORK/dist/OoT-Randomizer-linux" \
     --workpath "$WORK/build/pyinstaller-linux" packaging/oot_rando.spec

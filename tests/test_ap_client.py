@@ -71,6 +71,43 @@ class Units(unittest.TestCase):
         with self.assertRaises(ap.ClientError):
             ap.server_urls('  ')
 
+    def test_plain_fallback_only_for_a_server_without_tls(self):
+        import ssl
+        attempts = []
+
+        def failing(error):
+            def connect(url, **options):
+                attempts.append((url, options.get('max_size')))
+                if url.startswith('wss://'):
+                    raise error
+                return object()
+            return connect
+        # Certificate that does not verify: never retried unencrypted.
+        client = ap.ArchipelagoClient(MANIFEST, 'host:1', connect=failing(ssl.SSLCertVerificationError('bad')))
+        with self.assertRaisesRegex(ap.ClientError, 'certificate'):
+            client._open()
+        self.assertEqual([u for u, _ in attempts], ['wss://host:1'])
+        # Server without TLS: plain WebSocket, marked unencrypted...
+        attempts.clear()
+        client = ap.ArchipelagoClient(MANIFEST, 'host:1', connect=failing(ssl.SSLError('wrong version number')))
+        client._open()
+        self.assertEqual([u for u, _ in attempts], ['wss://host:1', 'ws://host:1'])
+        self.assertIs(client.encrypted, False)
+        self.assertTrue(all(size == ap.MAX_MESSAGE for _, size in attempts))
+        # ...but never with a password unless ws:// was typed.
+        attempts.clear()
+        client = ap.ArchipelagoClient(MANIFEST, 'host:1', 'secret', connect=failing(ssl.SSLError('wrong version')))
+        with self.assertRaisesRegex(ap.ClientError, 'ws://host:1'):
+            client._open()
+        self.assertEqual([u for u, _ in attempts], ['wss://host:1'])
+        client = ap.ArchipelagoClient(MANIFEST, 'ws://host:1', 'secret', connect=failing(AssertionError()))
+        client._open()
+        self.assertIs(client.encrypted, False)
+        # Other failures (refused, timeout) are not a reason to go unencrypted.
+        client = ap.ArchipelagoClient(MANIFEST, 'host:1', connect=failing(TimeoutError('timed out')))
+        with self.assertRaises(TimeoutError):
+            client._open()
+
     def test_reporter_sends_each_new_check_once(self):
         reporter = ap.LocationReporter({'A#1': 11, 'A#2': 12, 'B': 99})
         reporter.reset_connection([11])

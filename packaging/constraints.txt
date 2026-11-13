@@ -1,0 +1,17 @@
+# Exact versions of every package bundled in the portable builds (and used by the CI).
+# Applied with "pip install -c packaging/constraints.txt": a new upstream release only
+# reaches the builds once it is written here (review it, then bump).
+# requirements.txt keeps version ranges for running from the sources.
+zstandard==0.25.0
+evfl==1.3.0
+ainb==0.2.17
+websockets==15.0.1
+PyYAML==6.0.3
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.10
+altgraph==0.17.5
+pefile==2024.8.26
+pywin32-ctypes==0.2.3
+packaging==26.3
+mmh3==5.3.1
+setuptools==84.2.1
