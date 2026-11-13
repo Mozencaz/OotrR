@@ -109,9 +109,23 @@ def soul_item(key):
     return f'Soul ({key})'
 
 
+# Generated actor names stay within the length seen working in game (13/11: 25
+# characters handed over, 30 and 33 crashed the item get): regional souls use a
+# short region code.
+MAX_ACTOR_NAME = 25
+REGION_CODES = {'BottomOfTheWell': 'Well', 'DeathMountainCrater': 'DMCrater', 'DeathMountainTrail': 'DMTrail',
+                'DesertColossus': 'Colossus', 'GerudoFortress': 'GFortress', 'GerudoTrainingGround': 'GTG',
+                'InsideGanonCastle': 'GanonCastle', 'InsideJabuJabuBelly': 'JabuJabu',
+                'InsideTheDekuTree': 'DekuTree', 'SacredForestMeadow': 'SFMeadow',
+                'KakarikoVillage': 'Kakariko', 'HountedWasteland': 'Wasteland'}
+
+
 def soul_actor(item):
     key = item[len('Soul ('):-1]
-    return 'Item_Soul_' + key.replace('Region:', 'Region_')
+    if key.startswith('Region:'):
+        folder = key[len('Region:'):]
+        return 'Item_Soul_R_' + REGION_CODES.get(folder, folder)
+    return 'Item_Soul_' + key
 
 
 def soul_label(item):
@@ -402,6 +416,9 @@ def build_item_files(read_raw, specs, message_archives=()):
     if not specs:
         return {}, {}
     specs = sorted(specs, key=lambda spec: spec['actor'])
+    too_long = [spec['actor'] for spec in specs if len(spec['actor']) > MAX_ACTOR_NAME]
+    if too_long:
+        raise ValueError('Generated actor names too long for the game: ' + ', '.join(too_long))
     from oot_rando.patching.repeatable_adapter import EVENT_MEMBER, EVENT_PACK, instrument_pickup_event
     actors = [spec['actor'] for spec in specs]
     modified, new = {}, {}

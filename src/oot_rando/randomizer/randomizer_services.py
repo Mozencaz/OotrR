@@ -18,9 +18,9 @@ def read_artifact(directory):
     if version not in {('0.1.0', 'kokiri-qol-v1'), ('0.2.0', 'prudent-chests-v2'),
                        ('0.3.0', 'native-environment-v1'), ('0.4.0', 'ap-glitchless-v1'),
                        ('0.5.0', 'ap-glitchless-v2'), ('0.6.0', 'ap-glitchless-v2'),
-                       ('0.7.0', 'ap-glitchless-v3')}:
+                       ('0.7.0', 'ap-glitchless-v3'), ('0.8.0', 'ap-glitchless-v4')}:
         raise ValueError('Unsupported generator version.')
-    if version[0] in {'0.2.0', '0.3.0', '0.4.0', '0.5.0', '0.6.0', '0.7.0'}:
+    if version[0] in {'0.2.0', '0.3.0', '0.4.0', '0.5.0', '0.6.0', '0.7.0', '0.8.0'}:
         settings.validate_supported()
     if version[0] in ('0.1.0', '0.4.0'):
         # Early 0.1 manifests predate the categories field and 0.4 manifests the

@@ -201,9 +201,14 @@ class ArchipelagoClient:
             except Exception as error:  # noqa: BLE001 - never stop the client for the game side
                 self.delivery.status = 'item hand-over failed: ' + str(error)
                 record = None
-            if record is not None:
+            stuck = getattr(getattr(self.delivery, 'deliverer', None), 'take_stuck', lambda: [])()
+            if record is not None or stuck:
                 with self._lock:
-                    self._log(f'Handing over {record["item"]} (from {record["player"]}) in game...')
+                    for item in stuck:
+                        self._log(f'{item["item"]} (from {item["player"]}) was not taken by the game: '
+                                  'set aside, the next items go on; it is tried again in a minute.')
+                    if record is not None:
+                        self._log(f'Handing over {record["item"]} (from {record["player"]}) in game...')
             self.on_change()
 
     # -------------------------------------------------------------- network

@@ -39,6 +39,7 @@ settings) produces byte-identical files on Windows, on Linux and from the source
 | `Tag` (`tag.yml`) | manual (Actions tab → Run workflow, pick the branch) | creates the annotated tag `vX.Y.Z` on the head of the branch |
 | `Release` (`release.yml`) | manual | tests + builds, then tag `vX.Y.Z` and a GitHub release with `OoT-Randomizer-X.Y.Z-windows-x64.zip`, `OoT-Randomizer-X.Y.Z-linux-x64.tar.gz` and `SHA256SUMS.txt` |
 
-An empty version means the one in `pyproject.toml` (keep it equal to
-`oot_rando/__init__.py`). An existing tag makes `Tag` and `Release` fail before
+An empty version means the one in `pyproject.toml`. Any other version must
+equal it, and `pyproject.toml` must equal `oot_rando/__init__.py`: the release
+fails otherwise (the in-app updater compares `__version__` with the tag). An existing tag makes `Tag` and `Release` fail before
 any build. The release Linux binary is built on Ubuntu 22.04 (glibc ≥ 2.35).

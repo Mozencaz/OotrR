@@ -48,7 +48,7 @@ def record_key(player, location):
 def records(remote):
     """One record per item of this game found in another world (the patch's ``remote``)."""
     from oot_rando.game.item_forms import form_actor
-    from oot_rando.game.remake_world import PROGRESSIVE, item_actor
+    from oot_rando.game.remake_world import PROGRESSIVE
     result, seen = [], set()
     for entry in remote:
         key = record_key(entry['player'], entry['location'])
@@ -56,12 +56,79 @@ def records(remote):
             raise ValueError('Two remote items share a key: ' + key)
         seen.add(key)
         if entry['item'] in PROGRESSIVE:
-            raise ValueError('A progressive item cannot come from another world: ' + entry['item'])
-        actor = form_actor(item_actor(entry['item'], None), 'chest')
+            # Tier chosen in game: the one above the highest Link holds (see add_entries).
+            tiers = list(PROGRESSIVE[entry['item']])
+            result.append({'key': key, 'item': entry['item'], 'player': entry['player'],
+                           'location': entry['location'], 'actor': tiers[0], 'tiers': tiers, 'style': 'progressive',
+                           'event': PREFIX + key, 'recv': RECV + key, 'got': GOT + key})
+            continue
+        actor = form_actor(remote_actor(entry['item']), 'chest')
         result.append({'key': key, 'item': entry['item'], 'player': entry['player'], 'location': entry['location'],
                        'actor': actor, 'style': 'pickup' if is_consumable(entry['item']) else 'get',
                        'event': PREFIX + key, 'recv': RECV + key, 'got': GOT + key})
     return result
+
+
+# Actors that cannot be held up by Link's item-get pose: the ocarinas are the
+# accessory Link plays (no Item_EventObject_Base parent, in-game test 13/11: the
+# get showed nothing and crashed, null read). They are handed over as Saria does
+# (Dm_Kokiri_0155 Event68/Event77): added to the pouch, then the get display
+# GetPouchContent/DisplayGetByActorName, without the pose.
+DISPLAY_ONLY = ('Item_Ocarina_Fairy', 'Item_Ocarina_Time')
+DISPLAY_FLOW, DISPLAY_ENTRY = 'GetPouchContent', 'DisplayGetByActorName'
+
+
+def given_actor(event):
+    """(actor, event after the hand-over) of a hand-over written by add_entries, or (None, None)."""
+    params = event.data.params.data if event.data.params else {}
+    if getattr(event.data, 'entry_point_name', None) == GET_ENTRY:
+        return params.get('ActorName'), event.data.nxt.v
+    show = event.data.nxt.v if getattr(event.data, 'nxt', None) is not None else None
+    if (show is not None and getattr(show.data, 'entry_point_name', None) == DISPLAY_ENTRY
+            and show.data.res_flowchart_name == DISPLAY_FLOW
+            and show.data.params.data.get('ActorName') == params.get('Actor')):
+        return params.get('Actor'), show.data.nxt.v
+    return None, None
+
+
+def tier_events(record):
+    """(check event, held tier, given tier) of a progressive record, highest tier first.
+
+    Link holding tier k gets tier k + 1; holding the last one, the last one again
+    (the pool has no copy beyond its tiers: a harmless fallback, never an empty get).
+    Holding none: the first tier (event ``<name>_Give0``).
+    """
+    tiers, name = record['tiers'], record['event']
+    last = len(tiers) - 1
+    return [(name if k == last else f'{name}_Has{k}', k, min(k + 1, last)) for k in range(last, -1, -1)]
+
+
+def remote_actor(item):
+    """Actor handed over for an item received from another world.
+
+    Dungeon keys there are the seed's own key actors (``key_adapter``: built for the
+    received ones too, see :func:`key_items`), never the generic remake keys, which the
+    game credits to the dungeon Link stands in (none outside a dungeon).
+    """
+    from oot_rando.game.remake_world import item_actor
+    from oot_rando.patching.key_adapter import BOSS_KEY_DUNGEONS, DUNGEON_FOLDER, boss_actor
+    if item.startswith('Boss Key ('):
+        folder = DUNGEON_FOLDER.get(item[len('Boss Key ('):-1])
+        if folder in BOSS_KEY_DUNGEONS:
+            return boss_actor(folder)
+    try:
+        actor = item_actor(item, None)
+    except KeyError as error:   # a key ring of a dungeon without one in the remake
+        raise ValueError('No remake actor for: ' + item) from error
+    if actor.startswith('Item_Dungeon_'):
+        raise ValueError('A dungeon item tied to its dungeon cannot come from another world: ' + item)
+    return actor
+
+
+def key_items(items):
+    """AP names of the dungeon-specific keys among reception records (their actors must be built)."""
+    from oot_rando.patching.key_adapter import is_key_actor
+    return sorted({record['item'] for record in items if is_key_actor(record['actor'])})
 
 
 # Consumables arrive as a ground pickup would (user request 12/11): no pose, no message,
@@ -86,7 +153,7 @@ def add_entries(raw, items):
     from evfl.common import ActorIdentifier, StringHolder
     from evfl.container import Container
     from evfl.entry_point import EntryPoint
-    from evfl.event import Event, ActionEvent, SubFlowEvent
+    from evfl.event import Event, ActionEvent, SubFlowEvent, SwitchEvent
     from evfl.util import make_index, make_rindex
     from oot_rando.patching.event_patch import GAMEDATA_ACTOR_PARAMS, _flow, _snapshot
     flow = _flow(raw)
@@ -113,6 +180,39 @@ def add_entries(raw, items):
             owner.actions.append(found)
         return owner, found
 
+    def query_of(identifier, name):
+        owner = next((a for a in chart.actors if str(a.identifier) == identifier), None)
+        if owner is None:
+            raise ValueError(f'{FLOW} has no {identifier}.')
+        found = next((q for q in owner.queries if q.v == name), None)
+        if found is None:
+            found = StringHolder(name)
+            owner.queries.append(found)
+        return owner, found
+
+    def subflow_event(name, flowchart, entry, params):
+        event = Event()
+        event.name, event.data = name, SubFlowEvent()
+        event.data.res_flowchart_name = flowchart
+        event.data.entry_point_name = entry
+        event.data.params = Container()
+        event.data.params.data = params
+        chart.events.append(event)
+        expected[name] = dict(params)
+        return event
+
+    def give_events(name, actor):
+        """(first event, last event, sub-flow events) handing ``actor`` over."""
+        if actor in DISPLAY_ONLY:
+            add = action_event(name, 'PouchSystemActor', 'EventTriggerAddOrRemovePouchContent', {
+                'Num': 1, 'IsEquipDIrect': False, 'IsSetMessageTargetActorName': True, 'Actor': actor,
+                'IsGetEvent': False})
+            show = subflow_event(name + '_Show', DISPLAY_FLOW, DISPLAY_ENTRY, {'ActorName': actor})
+            add.data.nxt = make_index(show)
+            return add, show, [show]
+        event = subflow_event(name, '', GET_ENTRY, {'ActorName': actor, 'IsNpcEventStarter': False})
+        return event, event, [event]
+
     def action_event(name, identifier, action, params):
         event = Event()
         event.name, event.data = name, ActionEvent()
@@ -128,6 +228,32 @@ def add_entries(raw, items):
         name = record['event']
         if name in entries or {name, name + '_Show', name + '_Got'} & events:
             raise ValueError('Reception entry point already present: ' + name)
+        if record['style'] == 'progressive':
+            got = action_event(name + '_Got', 'GameDataActor', 'EventTriggerSetGameDataBool',
+                               {'GameDataName': record['got'], 'Index': -1, 'Value': True})
+            tiers = record['tiers']
+            otherwise, last, gives = give_events(name + '_Give0', tiers[0])
+            last.data.nxt = make_index(got)
+            owner, query = query_of('PouchSystemActor', 'EventQueryIsExistInPouch')
+            # Built from the lowest tier up: each check falls back to the one below it.
+            for check_name, held, given in reversed(tier_events(record)):
+                give, last, subs = give_events(f'{name}_Give{given}_From{held}', tiers[given])
+                last.data.nxt = make_index(got)
+                gives.extend(subs)
+                check = Event()
+                check.name, check.data = check_name, SwitchEvent()
+                check.data.actor, check.data.actor_query = make_rindex(owner), make_rindex(query)
+                check.data.params = Container()
+                check.data.params.data = {'Actor': tiers[held], 'Num': 1}
+                check.data.cases = {0: make_index(give), 1: make_index(otherwise)}   # case 0 = true
+                chart.events.append(check)
+                expected[check_name] = dict(check.data.params.data)
+                otherwise = check
+            entry = EntryPoint(name)
+            entry.main_event = make_index(otherwise)
+            entry._sub_flow_event_indices = [chart.events.index(g) for g in gives]
+            chart.entry_points.append(entry)
+            continue
         if record['style'] == 'pickup':
             first = action_event(name, 'PouchSystemActor', 'EventTriggerAddOrRemovePouchContent', {
                 'Num': 1, 'IsEquipDIrect': False, 'IsSetMessageTargetActorName': False,
@@ -160,6 +286,9 @@ def add_entries(raw, items):
         raise ValueError('The reception entries changed other parameters.')
     written = {e.name: e for e in checked.flowchart.entry_points}
     for record in items:
+        if record['style'] == 'progressive':
+            _check_tiers(written[record['event']], record)
+            continue
         chain, event = [], written[record['event']].main_event.v
         while event is not None:
             chain.append(event.name)
@@ -169,6 +298,24 @@ def add_entries(raw, items):
         if chain != wanted:
             raise ValueError('Reception entry wrongly chained: ' + name)
     return result
+
+
+def _check_tiers(entry, record):
+    """The written chain of a progressive record: each check, the tier it gives, then Got."""
+    name, tiers = record['event'], record['tiers']
+    event = entry.main_event.v
+    for check_name, held, given in tier_events(record):
+        if event is None or event.name != check_name or event.data.params.data.get('Actor') != tiers[held]:
+            raise ValueError('Progressive reception wrongly chained: ' + name)
+        actor, after = given_actor(event.data.cases[0].v)
+        if actor != tiers[given] or after is None or after.name != name + '_Got':
+            raise ValueError('Progressive reception gives the wrong tier: ' + name)
+        event = event.data.cases[1].v
+    if event is None:
+        raise ValueError('Progressive reception without its first tier: ' + name)
+    actor, after = given_actor(event)
+    if event.name != name + '_Give0' or actor != tiers[0] or after is None or after.name != name + '_Got':
+        raise ValueError('Progressive reception without its first tier: ' + name)
 
 
 def add_event_rows(settings_raw, items):
@@ -205,7 +352,7 @@ def add_analyzed_rows(info_raw, items, current):
     by_id = {row['__RowId']: row for row in rows}
     template = copy.deepcopy(by_id[TEMPLATE_ANALYZED])
     plain = copy.deepcopy(template)
-    gets = [record for record in items if record['style'] == 'get']
+    gets = [record for record in items if record['style'] in ('get', 'progressive')]
     if gets:
         call = (FLOW, gets[0]['event'])
         flows = closure({call}, current) - {FLOW}
@@ -219,7 +366,7 @@ def add_analyzed_rows(info_raw, items, current):
     for record in items:
         if record['event'] in by_id:
             raise ValueError('GameAnalyzedEventInfo row already present: ' + record['event'])
-        row = copy.deepcopy(template if record['style'] == 'get' else plain)
+        row = copy.deepcopy(plain if record['style'] == 'pickup' else template)
         row['__RowId'] = record['event']
         rows.append(row)
         by_id[record['event']] = row
@@ -255,6 +402,9 @@ def _input(name, value, output=False):
             'Flags': ['Uses Default', 'Is Output'] if output else ['Uses Default']}
 
 
+# A node lists at most 255 children (u8 count): the watchers hang under groups of
+# this size, each group a child of the root (a seed may receive hundreds of items).
+WATCHER_GROUP = 64
 WATCHER = ['SeqQueryGetNonStructGameDataBool', 'Element_BoolSelector', 'Element_Simultaneous',
            'SeqOneShotRequestEvent', 'SeqOneShotSetNonStructGameDataBool', 'SeqExecuteGenericDummyAction']
 
@@ -280,7 +430,14 @@ def patch_main_update(raw, items):
                 'Flags': list(flags), 'Queries': [], 'Attachments': [], 'Properties': properties or {},
                 'Parameters': {'Inputs': inputs, 'Outputs': outputs or {}}, 'XLink Actions': [], 'Plugs': {}}
 
-    for record in items:
+    groups = []
+    for position, record in enumerate(items):
+        if position % WATCHER_GROUP == 0:
+            group = copy.deepcopy(root)
+            group.update({'Node Index': len(nodes), 'GUID': guid(len(nodes)), 'Flags': [], 'Plugs': {'Child': []}})
+            nodes.append(group)
+            root['Plugs']['Child'].append({'Node Index': group['Node Index'], 'Name': ''})
+            groups.append(group)
         query_i, selector_i, both_i, request_i, clear_i, idle_i = range(len(nodes), len(nodes) + 6)
         query = user(query_i, 'SeqQueryGetNonStructGameDataBool', {
             'Int': [_input('GameDataIndex', -1, True)], 'Bool': [_input('IsDirect', True)],
@@ -306,14 +463,20 @@ def patch_main_update(raw, items):
         idle = copy.deepcopy(dummy)
         idle.update({'Node Index': idle_i, 'GUID': guid(idle_i)})
         nodes.extend([query, selector, both, request, clear, idle])
-        root['Plugs']['Child'].append({'Node Index': selector_i, 'Name': ''})
+        groups[-1]['Plugs']['Child'].append({'Node Index': selector_i, 'Name': ''})
     result = ainb_to_binary(document)
     check = ainb.AINB.from_binary(result).as_dict()['Nodes']
+    group_count = -(-len(items) // WATCHER_GROUP)
+    group_nodes = [c['Node Index'] for c in check[0]['Plugs']['Child'][len(check[0]['Plugs']['Child']) - group_count:]]
     for index, record in enumerate(items):
-        base = first + index * 6
+        group_index, slot = divmod(index, WATCHER_GROUP)
+        group = first + group_index * (1 + WATCHER_GROUP * 6)
+        base = group + 1 + slot * 6
+        if group_nodes[group_index] != group or check[group]['Node Type'] != 'Element_Simultaneous':
+            raise ValueError('MainUpdate watcher group not attached: ' + record['key'])
         if [n['Name'] or n['Node Type'] for n in check[base:base + 6]] != WATCHER:
             raise ValueError('MainUpdate watcher not written as expected: ' + record['key'])
         events = check[base + 3]['Parameters']['Inputs']['String'][0]['Default Value']
-        if events != record['event'] or check[0]['Plugs']['Child'][-len(items) + index]['Node Index'] != base + 1:
+        if events != record['event'] or check[group]['Plugs']['Child'][slot]['Node Index'] != base + 1:
             raise ValueError('MainUpdate watcher not attached: ' + record['key'])
     return result

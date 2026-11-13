@@ -6,6 +6,32 @@ from oot_rando.formats.inspect_resources import Byml
 
 TITLE = '0400486024DEC000'
 BUILD = 'e0f3ccfaf50065ae4ea01eb5aeb13b1a45da3348000000000000000000000000'
+UPDATE_VERSION = 131072
+
+
+def check_supported_game(nup):
+    """Raise a clear ValueError unless the NUP holds the supported base game + update.
+
+    Only the title ids, the update version and the main NSO build id matter; the
+    package order and directory indices depend on the tool that made the dump."""
+    base, update = int(TITLE, 16), int(TITLE, 16) + 0x800
+    found = {p[0]: p[4] for p in nup.packages}
+    if base not in found:
+        ids = ', '.join(f'{t:016X}' for t in found) or 'none'
+        raise ValueError(f'Unsupported NUP structure: this is not Ocarina of Time ({TITLE}). '
+                         f'Title ids found: {ids}.')
+    if update not in found:
+        raise ValueError(f'Unsupported NUP structure: the game update is missing. Dump the game '
+                         f'together with update v{UPDATE_VERSION} into one .nup.')
+    if found[update] != UPDATE_VERSION:
+        raise ValueError(f'Unsupported game update v{found[update]}: this randomizer supports '
+                         f'update v{UPDATE_VERSION} only.')
+    try:
+        main = nup.read('1/exefs/main')
+    except KeyError:
+        raise ValueError('Unsupported NUP structure: the update has no exefs/main.') from None
+    if main[:4] != b'NSO0' or main[0x40:0x60].hex() != BUILD:
+        raise ValueError('Unsupported game build.')
 MAP = 'Banc/KokiriForest/KokiriForest_Child_Dynamic.bcett.byml.zs'
 RESTBL = 'System/Resource/ResourceSizeTable.Product.111.Nin_Ounce_NVN2.rsizetable.zs'
 CHESTS = {10831981390482426294: 'TBox_Rupee_Green', 4555665598794293658: 'TBox_Rupee_Blue',

@@ -202,10 +202,17 @@ class PlayerWorld:
         if unknown:
             raise ValueError('Items missing from the catalog: ' + ', '.join(unknown[:5]))
         self.progression = set(self.c.relevant) & set(self.pool)
-        # Dungeon-bound items and progressive families stay in this world: keys are
-        # generic per dungeon, and progressive tiers are fixed actors in the chests.
+        # Dungeon-bound items stay in this world: keys are generic per dungeon.
         self.restricted = set(self.c.restricted_dungeon) & set(self.pool)
-        self.local_only = self.restricted | (set(PROGRESSIVE) & set(self.pool))
+        # Progressive families whose shuffled copies take the tiers from the lowest
+        # one are *dynamic*: every copy, in this world too, is handed over by the
+        # client (patching.ap_mailbox), which gives the next tier above the one Link
+        # holds, whatever the order the copies are found in. A family with a native
+        # source keeping a low tier (unshuffled chest, Darunia) keeps fixed tiers here.
+        from oot_rando.randomizer.full_randomizer import is_dynamic_layout
+        self.dynamic = {family for family in set(PROGRESSIVE) & set(self.pool)
+                        if is_dynamic_layout(self.c.family_tiers.get(family))}
+        self.local_only = self.restricted | (set(PROGRESSIVE) & set(self.pool)) - self.dynamic
         self._cache = {}
 
     def starting_error(self, extra, from_pool):
@@ -242,8 +249,14 @@ class PlayerWorld:
         return 'useful'
 
     def can_hold(self, gid, item=None):
-        """Whether location ``gid`` can give ``item`` (None: another player's item)."""
+        """Whether location ``gid`` can give ``item`` (None: another player's item).
+
+        A copy of a dynamic progressive family is given there as an Archipelago
+        item (the client hands it over): it needs a location able to give one.
+        """
         from oot_rando.patching.ap_item import ap_item
+        if item in self.dynamic:
+            item = None
         return self.c.allowed(ap_item('?') if item is None else item, gid)
 
     def reach(self, counts):
@@ -271,7 +284,7 @@ class PlayerWorld:
         if not self.options['progressive_order']:
             return None
         from oot_rando.game.remake_world import PROGRESSIVE
-        for family in PROGRESSIVE:
+        for family in set(PROGRESSIVE) - self.dynamic:
             spheres = [sphere_of.get(gid) for gid, item in items.items() if item == family]
             if len(spheres) > 1 and (None in spheres or len(set(spheres)) != len(spheres)):
                 return family
@@ -283,6 +296,10 @@ class PlayerWorld:
         Archipelago starting items (to be given by the client)."""
         if set(placements) != set(self.c.shuffled):
             raise ValueError('Every shuffled location must hold an item.')
+        # Every item found in another world must be one the game can be handed
+        # (patching.ap_mailbox): fail at generation, not with a softlock in game.
+        from oot_rando.patching.ap_mailbox import records
+        records(remote)
         return {'format': PATCH_FORMAT, 'version': PATCH_VERSION, 'game': GAME, 'game_build': game_build,
                 'world': self.catalog['world'], 'scan': self.catalog['scan'],
                 'seed_name': seed_name, 'slot_name': slot_name, 'player': player, 'seed_key': self.seed_key,

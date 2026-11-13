@@ -105,7 +105,7 @@ class Units(unittest.TestCase):
         for excluded in ('Enemy_Skulltula_Gold', 'Enemy_Poe', 'Enemy_Scrub_Business', 'Enemy_Keese_Dictionary',
                          'Enemy_MiddleBoss_IronKnuckle_Nabooru', 'Enemy_DungeonBoss_Ganondorf'):
             self.assertIsNone(family_of(excluded), excluded)
-        self.assertEqual(soul_actor(soul_item('Region:ForestTemple')), 'Item_Soul_Region_ForestTemple')
+        self.assertEqual(soul_actor(soul_item('Region:ForestTemple')), 'Item_Soul_R_ForestTemple')
 
 
 class RoomLocks(unittest.TestCase):

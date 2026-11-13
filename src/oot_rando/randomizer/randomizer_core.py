@@ -16,7 +16,7 @@ import zstandard as zstd
 
 from oot_rando.formats.inspect_nup import Nup
 from oot_rando.formats.inspect_resources import Byml, decompress, dictionaries, sarc
-from oot_rando.patching.randomize_kokiri import BUILD, TITLE, MAP, RESTBL, CHESTS, POOL, patch_map
+from oot_rando.patching.randomize_kokiri import BUILD, TITLE, MAP, RESTBL, CHESTS, POOL, check_supported_game, patch_map
 from oot_rando.patching.qol_patches import (STATIC, STATIC_SOURCE_SHA256, DYNAMIC_SOURCE_SHA256, PHYSICS, EVENT_SETTINGS,
                          patch_forest, patch_baked_wall, sha256, cutscene_files, patch_dialogues,
                          area_presentation_files, quick_chest, CHEST_FLOW,
@@ -31,8 +31,8 @@ from oot_rando.game.resource_allocations import allocation, grow_resources, add_
 from oot_rando.formats.byml_writer import patch_strings
 from oot_rando.logic import rando_options
 
-GENERATOR_VERSION = '0.7.0'
-ADAPTER_VERSION = 'ap-glitchless-v3'
+GENERATOR_VERSION = '0.8.0'
+ADAPTER_VERSION = 'ap-glitchless-v4'   # v4: short key ring / boss key / regional soul actor names
 ADULT_MAP = MAP.replace('_Child_', '_Adult_')
 STARTING_ITEMS = ('Item_BulletBag_Small', 'Item_Quiver_Small')
 
@@ -208,11 +208,7 @@ def generate(nup_path, output, settings, progress=None):
     report('Checking the game and the settings…')
     nup = Nup(nup_path)
     try:
-        if nup.packages != [(int(TITLE, 16), 0, 1, 2, 65536), (int(TITLE, 16) + 0x800, 598, 599, 600, 131072)]:
-            raise ValueError('Unsupported NUP structure.')
-        main = nup.read('1/exefs/main')
-        if main[:4] != b'NSO0' or main[0x40:0x60].hex() != BUILD:
-            raise ValueError('Unsupported game build.')
+        check_supported_game(nup)
         d = dictionaries(nup)
         members = effective_members(nup)
         files, sources = {}, {}
@@ -665,7 +661,10 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
         actor = placement.get('reward_actor', placement['after'])
         return canonical_of(actor) if is_derived(actor) else actor
 
-    key_items = sorted({p['item'] for p in plan['placements'] if is_key_actor(_reward(p))})
+    key_items = {p['item'] for p in plan['placements'] if is_key_actor(_reward(p))}
+    # Received from other worlds too: the mailbox hands over the same actors.
+    from oot_rando.patching.ap_mailbox import key_items as _mailbox_key_items
+    key_items = sorted(key_items | set(_mailbox_key_items(ap_records(settings))))
     plan['key_items'] = key_records(key_items)
     if plan['key_items']:
         report('Building dungeon-specific keys (key rings, boss keys)…')

@@ -17,8 +17,16 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
 fi
 tag="v$version"
 
+package=$(sed -n 's/^__version__ *= *"\(.*\)"/\1/p' src/oot_rando/__init__.py | head -n1)
+if [[ "$package" != "$project" ]]; then
+    echo "::error::pyproject.toml ($project) and src/oot_rando/__init__.py ($package) disagree."
+    exit 1
+fi
+# The built application reports __version__ and its updater compares it with the
+# release tag: a tag above it would make every build offer itself as an update.
 if [[ "$version" != "$project" ]]; then
-    echo "::warning::$tag does not match the project version ($project, pyproject.toml / oot_rando/__init__.py): the application will show $project."
+    echo "::error::$tag does not match the project version ($project). Bump pyproject.toml and src/oot_rando/__init__.py first."
+    exit 1
 fi
 
 if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
