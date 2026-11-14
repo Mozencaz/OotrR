@@ -196,11 +196,17 @@ class Integration(unittest.TestCase):
                                         self.groups, self.enemies, items)
         self.assertTrue(replay['beatable'])
         self.assertEqual(replay['unreachable'], [])
-        for family, actors in PROGRESSIVE.items():
-            spheres = {p['after']: p['sphere'] for p in result['placements'] if p['item'] == family}
-            ordered = [spheres[a] for a in actors if a in spheres]
-            self.assertEqual(ordered, sorted(ordered), family)
-            self.assertEqual(len(set(ordered)), len(ordered), family)
+        # Every progressive copy is its own token, as the replay names them.
+        from oot_rando.game.item_forms import canonical_of, is_derived
+        from oot_rando.patching.progressive import token_family
+        self.assertEqual(replay['progressive'], result['progressive'])
+        tokens = result['progressive']['tokens']
+        for p in result['placements']:
+            canonical = canonical_of(p['after']) if is_derived(p['after']) else p['after']
+            self.assertEqual(token_family(canonical), p['item'] if p['item'] in PROGRESSIVE else None, p)
+            self.assertEqual(canonical == tokens.get(p['id']), p['item'] in PROGRESSIVE, p)
+        every = list(tokens.values()) + [n['token'] for n in result['progressive']['natives']]
+        self.assertEqual(len(set(every)), len(every))
 
     def test_presets_beatable_and_ordered(self):
         for overrides in ({}, rando_options.PRESETS['prudent']['values'],
@@ -210,12 +216,13 @@ class Integration(unittest.TestCase):
                 with self.subTest(overrides=overrides, seed=seed):
                     self.assert_valid(self.run_plan(overrides, seed), overrides)
 
-    def test_hookshot_before_longshot(self):
-        for seed in ('h1', 'h2', 'h3', 'h4'):
+    def test_hookshot_copies_are_tokens(self):
+        # Issue #23: no copy carries a fixed level; the first one found gives the hookshot.
+        for seed in ('h1', 'h2'):
             result = self.run_plan({}, seed)
-            tiers = {p['after']: p['sphere'] for p in result['placements']
-                     if p['item'] == 'Progressive Hookshot'}
-            self.assertLess(tiers['Item_Hookshot'], tiers['Item_Longshot'])
+            copies = sorted(p['id'] for p in result['placements'] if p['item'] == 'Progressive Hookshot')
+            self.assertEqual([result['progressive']['tokens'][g] for g in copies],
+                             ['Item_Prog_Hookshot_1', 'Item_Prog_Hookshot_2'])
 
     def test_deterministic(self):
         a = self.run_plan({'shuffle_enemy_spawns': 'bosses'}, 'same')

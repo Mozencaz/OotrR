@@ -119,14 +119,12 @@ class Units(unittest.TestCase):
     def test_starting_actors(self):
         from oot_rando.randomizer.full_randomizer import FillError, starting_actors
         from oot_rando.patching.event_patch import starting_item_events
-        tiers = {'Progressive Hookshot': [0, 1]}
-        self.assertEqual(starting_actors(['Progressive Hookshot', 'Hover Boots'], tiers),
-                         ['Item_Hookshot', 'Item_HoverBoot'])
-        self.assertEqual(starting_actors(['Progressive Hookshot'] * 2, tiers), ['Item_Hookshot', 'Item_Longshot'])
+        self.assertEqual(starting_actors(['Progressive Hookshot', 'Hover Boots']), ['Item_Hookshot', 'Item_HoverBoot'])
+        self.assertEqual(starting_actors(['Progressive Hookshot'] * 2), ['Item_Hookshot', 'Item_Longshot'])
         with self.assertRaises(FillError):
-            starting_actors(['Progressive Hookshot'] * 3, tiers)
+            starting_actors(['Progressive Hookshot'] * 3)
         with self.assertRaises(FillError):
-            starting_actors(['Small Key (Forest Temple)'], tiers)
+            starting_actors(['Small Key (Forest Temple)'])
         self.assertEqual(starting_item_events(['Item_Bottle', 'Obj_Heart_Piece', 'Item_Bottle']),
                          ['RandoStartItem_Item_Bottle', 'RandoStartItem_Obj_Heart_Piece', 'RandoStartItem_Item_Bottle_2'])
 
@@ -181,27 +179,11 @@ class WithGame(unittest.TestCase):
     def test_local_only_items(self):
         world = self.player()
         from oot_rando.game.remake_world import PROGRESSIVE
-        progressive = set(PROGRESSIVE) & set(world.pool)
-        # Every family is either handed over by the client (dynamic tiers) or kept here.
-        self.assertEqual(progressive, (progressive & world.local_only) | world.dynamic)
-        self.assertFalse(world.dynamic & world.local_only)
-        self.assertTrue(world.dynamic, 'no progressive family can go to another world')
-        self.assertTrue(world.restricted <= world.local_only)
-        # A dynamic copy found here is an Archipelago item: same locations as one.
-        for family in world.dynamic:
-            self.assertEqual([g for g in world.names if world.can_hold(g, family)],
-                             [g for g in world.names if world.can_hold(g)])
-
-    def test_tier_conflict(self):
-        world = self.player()
-        wallets = [g for g in world.names][:2]
-        from oot_rando.game.remake_world import PROGRESSIVE
-        for family in sorted(PROGRESSIVE):
-            items = {wallets[0]: family, wallets[1]: family}
-            shared = world.tier_conflict(items, {wallets[0]: 1, wallets[1]: 1})
-            # Fixed tiers need distinct spheres; dynamic ones are chosen in game.
-            self.assertEqual(shared, None if family in world.dynamic else family)
-            self.assertIsNone(world.tier_conflict(items, {wallets[0]: 1, wallets[1]: 3}))
+        # Dungeon-bound items stay here; progressive copies can go to any world: each one,
+        # found here (a token) or received (the mailbox), gives the next level.
+        self.assertEqual(world.local_only, world.restricted)
+        self.assertTrue(set(PROGRESSIVE) & set(world.pool))
+        self.assertFalse(set(PROGRESSIVE) & world.local_only)
 
     def test_assigned_plan_with_foreign_items(self):
         """Placements of the built-in fill, a few given to another player, rebuilt as a plan."""
@@ -263,13 +245,15 @@ class WithGame(unittest.TestCase):
                                                starting=['Progressive Hookshot', 'Hover Boots'])
         self.assertEqual(result['starting'], [{'item': 'Progressive Hookshot', 'actor': 'Item_Hookshot'},
                                               {'item': 'Hover Boots', 'actor': 'Item_HoverBoot'}])
-        after = {p['id']: p['after'] for p in result['placements']}
-        self.assertIn('Longshot', after[hookshots[1]])
-        with self.assertRaises(full_randomizer.FillError):   # one copy too many
+        # The copy left in the world is a token: the level above the starting hookshot.
+        from oot_rando.game.item_forms import canonical_of, is_derived
+        after = {p['id']: p['after'] for p in result['placements']}[hookshots[1]]
+        self.assertEqual(canonical_of(after) if is_derived(after) else after, 'Item_Prog_Hookshot_1')
+        with self.assertRaises(full_randomizer.FillError):   # more copies than levels
             full_randomizer.plan_assigned(World(), world.options, copy.deepcopy(self.groups),
                                           copy.deepcopy(self.enemies), key, placed, True,
                                           extra=copy.deepcopy(self.extra),
-                                          starting=['Progressive Hookshot'] * 2)
+                                          starting=['Progressive Hookshot'] * 3)
 
     def test_reload_test_variants(self):
         """Both board variants: one more event, same size once compressed."""

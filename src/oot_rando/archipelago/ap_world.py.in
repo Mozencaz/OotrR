@@ -10,7 +10,6 @@ whoever built the apworld. Generation writes one ``.aprmk`` patch per remake
 player; the application turns it into the RomFS mod.
 """
 import json
-import logging
 import os
 import pkgutil
 import sys
@@ -93,7 +92,7 @@ class OoTRemakeWorld(World):
                                            dict(self.options.start_inventory_from_pool.value))
         if error:
             raise OptionError(f'{GAME} ({self.player_name}): {error}')
-        # Dungeon-bound keys and progressive tiers are actors of this game: they stay here.
+        # Dungeon-bound keys are generic actors of this game: they stay here.
         self.options.local_items.value |= self.remake.local_only
 
     def create_regions(self):
@@ -153,15 +152,6 @@ class OoTRemakeWorld(World):
             junk = [loc for loc in free if loc.progress_type == LocationProgressType.EXCLUDED]
             self.random.choice(junk or free).place_locked_item(item)
 
-    # ------------------------------------------------------------ progressive tiers
-    def _own_items(self):
-        result = {}
-        for gid, name in self.remake.names.items():
-            item = self.multiworld.get_location(name, self.player).item
-            if item and item.player == self.player and item.game == GAME:
-                result[gid] = item.name
-        return result
-
     def _spheres(self):
         """gid → sphere of the multiworld playthrough (reachable locations only)."""
         result = {}
@@ -171,35 +161,6 @@ class OoTRemakeWorld(World):
                     result[self.remake.gids[location.name]] = index
         return result
 
-    def post_fill(self):
-        """Progressive copies in distinct spheres (their tier actors are fixed, lowest first).
-
-        Like the built-in fill: swap one copy with another item of this world and keep
-        the swap only when every world still fulfils its accessibility.
-        """
-        remake = self.remake
-        for _ in range(200):
-            items = self._own_items()
-            sphere_of = self._spheres()
-            family = remake.tier_conflict(items, sphere_of)
-            if family is None:
-                return
-            sources = [g for g, i in items.items() if i == family]
-            source = self.random.choice(sources)
-            targets = [g for g, i in items.items() if i != family and remake.can_hold(g, family)
-                       and remake.can_hold(source, i)]
-            first = self.multiworld.get_location(remake.names[source], self.player)
-            targets = [g for g in targets if not self.multiworld.get_location(remake.names[g], self.player).locked]
-            if first.locked or not targets:
-                continue
-            second = self.multiworld.get_location(remake.names[self.random.choice(targets)], self.player)
-            first.item, second.item = second.item, first.item
-            first.item.location, second.item.location = first, second
-            if not self.multiworld.fulfills_accessibility():
-                first.item, second.item = second.item, first.item
-                first.item.location, second.item.location = first, second
-        logging.warning(f'{GAME} ({self.player_name}): progressive copies left in a shared sphere.')
-
     def generate_output(self, output_directory):
         remake, multiworld = self.remake, self.multiworld
         sphere_of = self._spheres()
@@ -207,10 +168,6 @@ class OoTRemakeWorld(World):
         for gid, name in remake.names.items():
             item = multiworld.get_location(name, self.player).item
             own = item.player == self.player and item.game == GAME
-            # A copy of a dynamic progressive family found here is handed over by the
-            # client too (its tier is chosen in game): an Archipelago item of this world.
-            if own and item.name in remake.dynamic:
-                own = False
             if not remake.can_hold(gid, item.name if own else None):
                 raise Exception(f'{GAME}: {item.name} cannot be given by {name}.')
             placements[gid] = {'item': item.name, 'own': own, 'player': multiworld.get_player_name(item.player),
@@ -219,7 +176,7 @@ class OoTRemakeWorld(World):
         remote = [{'item': loc.item.name, 'location': loc.name, 'player': multiworld.get_player_name(loc.player)}
                   for loc in multiworld.get_locations()
                   if loc.item and loc.address is not None and loc.item.player == self.player
-                  and (loc.player != self.player or loc.item.name in remake.dynamic)]
+                  and loc.player != self.player]
         precollected = [item.name for item in multiworld.precollected_items[self.player]]
         patch = remake.patch(placements, remote, multiworld.seed_name, self.player_name, self.player,
                              CATALOG['game_build'], precollected)

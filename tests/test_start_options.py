@@ -120,7 +120,7 @@ class ItemPoolTests(unittest.TestCase):
         pool = Counter(apply_item_pool(self.POOL, 'plentiful', self.RELEVANT))
         self.assertEqual(pool['Bottle'], 6)
         self.assertEqual(pool['Hover Boots'], 2)
-        self.assertEqual(pool['Progressive Hookshot'], 2)   # tiers are fixed
+        self.assertEqual(pool['Progressive Hookshot'], 2)   # one copy per level
         self.assertEqual(pool['Rupee (1)'], 0)              # cheapest filler first
 
     def test_scarce_and_minimal(self):
@@ -177,12 +177,17 @@ class Integration(unittest.TestCase):
         with self.assertRaises(ValueError):
             check_start_values(self.gamedata, {'DungeonInfo.Nowhere.IsGetMap': True})
 
-    def test_starting_inventory_takes_lowest_tiers(self):
+    def test_starting_inventory_takes_lowest_levels(self):
+        from oot_rando.game.item_forms import canonical_of, is_derived
+        from oot_rando.patching.progressive import token_family
         result = self.plan({'start_inventory_from_pool': {'Progressive Hookshot': 1, 'Hover Boots': 1}})
         starting = {s['item']: s['actor'] for s in result['starting']}
         self.assertEqual(starting['Progressive Hookshot'], 'Item_Hookshot')
-        placed = [p for p in result['placements'] if p['item'] == 'Progressive Hookshot']
-        self.assertTrue(all(p['after'] == 'Item_Longshot' for p in placed))
+        # The copy left in the pool is a token: in game, the level above the hookshot held.
+        placed = [p['after'] for p in result['placements'] if p['item'] == 'Progressive Hookshot']
+        self.assertEqual(len(placed), 1)
+        self.assertEqual(token_family(canonical_of(placed[0]) if is_derived(placed[0]) else placed[0]),
+                         'Progressive Hookshot')
         self.assertFalse([p for p in result['placements'] if p['item'] == 'Hover Boots'])
 
     def test_removed_keys_and_item_pools_beatable(self):

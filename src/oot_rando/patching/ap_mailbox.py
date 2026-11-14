@@ -6,7 +6,8 @@ instant signal from outside is a GameData Bool written in the game's memory by t
 client. Everything else is in the mod, the same on Hookshot and on emulators.
 
 The items other worlds can send are known when the mod is built (the patch's
-``remote`` list; never a progressive item: those stay local). Each one, a *record*:
+``remote`` list; a progressive one gives the level above the one Link holds). Each
+one, a *record*:
 
 * ``RandoAP.Recv.<key>``: the client's signal (written in memory);
 * ``RandoAP.Got.<key>``: saved, set once the item was handed over. The client reads it
@@ -91,18 +92,6 @@ def given_actor(event):
     return None, None
 
 
-def tier_events(record):
-    """(check event, held tier, given tier) of a progressive record, highest tier first.
-
-    Link holding tier k gets tier k + 1; holding the last one, the last one again
-    (the pool has no copy beyond its tiers: a harmless fallback, never an empty get).
-    Holding none: the first tier (event ``<name>_Give0``).
-    """
-    tiers, name = record['tiers'], record['event']
-    last = len(tiers) - 1
-    return [(name if k == last else f'{name}_Has{k}', k, min(k + 1, last)) for k in range(last, -1, -1)]
-
-
 def remote_actor(item):
     """Actor handed over for an item received from another world.
 
@@ -148,142 +137,63 @@ def add_entries(raw, items):
     ``get``: the item get of its actor (Link's pose, message). ``pickup``: the silent
     add a chest makes (GetPouchContent/GetPouchContent: ``EventTriggerAddOrRemovePouchContent``
     of the chest actor) and the pick-up window above Link (Dm_SY_Get/PouchAddItem Event45).
+    ``progressive``: the tier above the highest one Link holds (progressive.add_tier_chain).
     """
-    from evfl.actor import Actor
-    from evfl.common import ActorIdentifier, StringHolder
-    from evfl.container import Container
     from evfl.entry_point import EntryPoint
-    from evfl.event import Event, ActionEvent, SubFlowEvent, SwitchEvent
-    from evfl.util import make_index, make_rindex
-    from oot_rando.patching.event_patch import GAMEDATA_ACTOR_PARAMS, _flow, _snapshot
-    flow = _flow(raw)
-    chart = flow.flowchart
-    expected = _snapshot(flow)
+    from evfl.util import make_index
+    from oot_rando.patching.progressive import FlowEditor, add_tier_chain, link
+    editor = FlowEditor(raw, FLOW)
+    chart = editor.chart
     entries = {e.name for e in chart.entry_points}
     events = {e.name for e in chart.events}
     if GET_ENTRY not in entries:
         raise ValueError('Item get entry point missing: ' + GET_ENTRY)
-    def action_of(identifier, name):
-        owner = next((a for a in chart.actors if str(a.identifier) == identifier), None)
-        if owner is None:
-            if identifier != 'GameDataActor':
-                raise ValueError(f'{FLOW} has no {identifier}.')
-            owner = Actor()
-            owner.identifier = ActorIdentifier('GameDataActor')
-            owner.concurrent_clips = 1
-            owner.params = Container()
-            owner.params.data = dict(GAMEDATA_ACTOR_PARAMS)
-            chart.actors.append(owner)
-        found = next((a for a in owner.actions if a.v == name), None)
-        if found is None:
-            found = StringHolder(name)
-            owner.actions.append(found)
-        return owner, found
-
-    def query_of(identifier, name):
-        owner = next((a for a in chart.actors if str(a.identifier) == identifier), None)
-        if owner is None:
-            raise ValueError(f'{FLOW} has no {identifier}.')
-        found = next((q for q in owner.queries if q.v == name), None)
-        if found is None:
-            found = StringHolder(name)
-            owner.queries.append(found)
-        return owner, found
-
-    def subflow_event(name, flowchart, entry, params):
-        event = Event()
-        event.name, event.data = name, SubFlowEvent()
-        event.data.res_flowchart_name = flowchart
-        event.data.entry_point_name = entry
-        event.data.params = Container()
-        event.data.params.data = params
-        chart.events.append(event)
-        expected[name] = dict(params)
-        return event
 
     def give_events(name, actor):
         """(first event, last event, sub-flow events) handing ``actor`` over."""
         if actor in DISPLAY_ONLY:
-            add = action_event(name, 'PouchSystemActor', 'EventTriggerAddOrRemovePouchContent', {
+            add = editor.action(name, 'PouchSystemActor', 'EventTriggerAddOrRemovePouchContent', {
                 'Num': 1, 'IsEquipDIrect': False, 'IsSetMessageTargetActorName': True, 'Actor': actor,
                 'IsGetEvent': False})
-            show = subflow_event(name + '_Show', DISPLAY_FLOW, DISPLAY_ENTRY, {'ActorName': actor})
-            add.data.nxt = make_index(show)
+            show = editor.subflow(name + '_Show', DISPLAY_FLOW, DISPLAY_ENTRY, {'ActorName': actor})
+            link(add, show)
             return add, show, [show]
-        event = subflow_event(name, '', GET_ENTRY, {'ActorName': actor, 'IsNpcEventStarter': False})
+        event = editor.subflow(name, '', GET_ENTRY, {'ActorName': actor, 'IsNpcEventStarter': False})
         return event, event, [event]
 
-    def action_event(name, identifier, action, params):
-        event = Event()
-        event.name, event.data = name, ActionEvent()
-        owner, found = action_of(identifier, action)
-        event.data.actor, event.data.actor_action = make_rindex(owner), make_rindex(found)
-        event.data.params = Container()
-        event.data.params.data = params
-        chart.events.append(event)
-        expected[name] = dict(params)
-        return event
+    def got_event(record):
+        return editor.action(record['event'] + '_Got', 'GameDataActor', 'EventTriggerSetGameDataBool',
+                             {'GameDataName': record['got'], 'Index': -1, 'Value': True})
+
+    def add_entry(name, first, sub_flows):
+        entry = EntryPoint(name)
+        entry.main_event = make_index(first)
+        entry._sub_flow_event_indices = [chart.events.index(e) for e in sub_flows]
+        chart.entry_points.append(entry)
 
     for record in items:
         name = record['event']
         if name in entries or {name, name + '_Show', name + '_Got'} & events:
             raise ValueError('Reception entry point already present: ' + name)
         if record['style'] == 'progressive':
-            got = action_event(name + '_Got', 'GameDataActor', 'EventTriggerSetGameDataBool',
-                               {'GameDataName': record['got'], 'Index': -1, 'Value': True})
-            tiers = record['tiers']
-            otherwise, last, gives = give_events(name + '_Give0', tiers[0])
-            last.data.nxt = make_index(got)
-            owner, query = query_of('PouchSystemActor', 'EventQueryIsExistInPouch')
-            # Built from the lowest tier up: each check falls back to the one below it.
-            for check_name, held, given in reversed(tier_events(record)):
-                give, last, subs = give_events(f'{name}_Give{given}_From{held}', tiers[given])
-                last.data.nxt = make_index(got)
-                gives.extend(subs)
-                check = Event()
-                check.name, check.data = check_name, SwitchEvent()
-                check.data.actor, check.data.actor_query = make_rindex(owner), make_rindex(query)
-                check.data.params = Container()
-                check.data.params.data = {'Actor': tiers[held], 'Num': 1}
-                check.data.cases = {0: make_index(give), 1: make_index(otherwise)}   # case 0 = true
-                chart.events.append(check)
-                expected[check_name] = dict(check.data.params.data)
-                otherwise = check
-            entry = EntryPoint(name)
-            entry.main_event = make_index(otherwise)
-            entry._sub_flow_event_indices = [chart.events.index(g) for g in gives]
-            chart.entry_points.append(entry)
+            got = got_event(record)
+            first, sub_flows = add_tier_chain(editor, name, record['tiers'], give_events, got)
+            add_entry(name, first, sub_flows)
             continue
         if record['style'] == 'pickup':
-            first = action_event(name, 'PouchSystemActor', 'EventTriggerAddOrRemovePouchContent', {
+            first = editor.action(name, 'PouchSystemActor', 'EventTriggerAddOrRemovePouchContent', {
                 'Num': 1, 'IsEquipDIrect': False, 'IsSetMessageTargetActorName': False,
                 'Actor': record['actor'], 'IsGetEvent': False})
-            show = action_event(name + '_Show', 'UISystemActor', 'EventTriggerRequestOpenPickUpWindow',
-                                {'ActorName': record['actor']})
-            first.data.nxt = make_index(show)
+            show = editor.action(name + '_Show', 'UISystemActor', 'EventTriggerRequestOpenPickUpWindow',
+                                 {'ActorName': record['actor']})
+            link(first, show)
             last, sub_flows = show, []
         else:
-            first = Event()
-            first.name, first.data = name, SubFlowEvent()
-            first.data.entry_point_name = GET_ENTRY
-            first.data.params = Container()
-            first.data.params.data = {'ActorName': record['actor'], 'IsNpcEventStarter': False}
-            chart.events.append(first)
-            expected[name] = dict(first.data.params.data)
-            last, sub_flows = first, [len(chart.events) - 1]
-        got = action_event(name + '_Got', 'GameDataActor', 'EventTriggerSetGameDataBool',
-                           {'GameDataName': record['got'], 'Index': -1, 'Value': True})
-        last.data.nxt = make_index(got)
-        entry = EntryPoint(name)
-        entry.main_event = make_index(first)
-        entry._sub_flow_event_indices = sub_flows
-        chart.entry_points.append(entry)
-    stream = io.BytesIO()
-    flow.write(stream)
-    result = stream.getvalue()
-    checked = _flow(result)
-    if _snapshot(checked) != expected:
-        raise ValueError('The reception entries changed other parameters.')
+            first = editor.subflow(name, '', GET_ENTRY, {'ActorName': record['actor'], 'IsNpcEventStarter': False})
+            last, sub_flows = first, [first]
+        link(last, got_event(record))
+        add_entry(name, first, sub_flows)
+    result, checked = editor.write('The reception entries')
     written = {e.name: e for e in checked.flowchart.entry_points}
     for record in items:
         if record['style'] == 'progressive':
@@ -302,20 +212,9 @@ def add_entries(raw, items):
 
 def _check_tiers(entry, record):
     """The written chain of a progressive record: each check, the tier it gives, then Got."""
-    name, tiers = record['event'], record['tiers']
-    event = entry.main_event.v
-    for check_name, held, given in tier_events(record):
-        if event is None or event.name != check_name or event.data.params.data.get('Actor') != tiers[held]:
-            raise ValueError('Progressive reception wrongly chained: ' + name)
-        actor, after = given_actor(event.data.cases[0].v)
-        if actor != tiers[given] or after is None or after.name != name + '_Got':
-            raise ValueError('Progressive reception gives the wrong tier: ' + name)
-        event = event.data.cases[1].v
-    if event is None:
-        raise ValueError('Progressive reception without its first tier: ' + name)
-    actor, after = given_actor(event)
-    if event.name != name + '_Give0' or actor != tiers[0] or after is None or after.name != name + '_Got':
-        raise ValueError('Progressive reception without its first tier: ' + name)
+    from oot_rando.patching.progressive import check_tier_chain
+    name = record['event']
+    check_tier_chain(entry.main_event.v, name, record['tiers'], given_actor, name + '_Got')
 
 
 def add_event_rows(settings_raw, items):

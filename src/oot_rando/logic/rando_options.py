@@ -133,9 +133,12 @@ OPTIONS = [
            ((False, OK), (True, OK)), True, 'Items absent from the AP logic: moved as filler.', kind='bool'),
     Option('progressive_order', 'Items', 'Progressive items in order (hookshot before longshot…)',
            ((False, OK), (True, OK)), True,
-           'If the higher level is reached first, the two items are swapped.', kind='bool'),
+           'Always the case: each copy found gives the level above the one held. No effect, kept for '
+           'older settings.', kind='bool'),
     Option('progressive_strict', 'Items', 'Strict order: the higher level requires the previous one',
-           ((False, OK), (True, OK)), False, 'More constraining; may need several attempts.', kind='bool'),
+           ((False, OK), (True, OK)), False,
+           'Always the case: a level is only given above the previous one. No effect, kept for older '
+           'settings.', kind='bool'),
     Option('shuffle_song_items', 'Items', 'Songs',
            (('song', 'Vanilla', OK), ('dungeon', 'Dungeon rewards', NO_EVENT), ('any', 'Anywhere', NO_EVENT)), 'song'),
     Option('shopsanity', 'Items', 'Shops (items shuffled per shop)',
