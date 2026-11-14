@@ -108,8 +108,8 @@ the dialogue box stayed empty and blocked the game. A new save is required.
   ever reach must be reachable **at that age** (`Child|`/`Adult|` members, the AP
   `is_child`/`is_adult` rules). Being adult needs `Time Travel` (Door of Time: Song
   of Time, which the child gets for the three spiritual stones). A source with no
-  such location only receives filler. An object on both maps under one hash is one
-  check for either age.
+  such location only receives filler. Its tracker name ends in `(child)`/`(adult)`;
+  an object on both maps under one hash is one check for either age.
 - NPCs: exact AP location; for the man on the roof (adult only in the remake) and
   the lake lab (child only), the age rule is added.
 - A group holding a location that the AP rules never reach only receives filler.
