@@ -1,11 +1,13 @@
 import _src_path  # noqa: F401  (src on sys.path)
 import copy
+import math
 import os
 import unittest
 
 from oot_rando.formats import byml_codec
 from oot_rando.patching.repeatable_adapter import (prepare_repeatables, patch_repeatable_sources,
-                                instrument_pickup_event, register_repeatable_flags)
+                                instrument_pickup_event, register_repeatable_flags,
+                                add_sold_out_board, limit_shop_stock, shop_stock_edits)
 from oot_rando.formats.inspect_resources import sarc, decompress, Byml
 
 
@@ -120,8 +122,50 @@ class RepeatableSourceTests(unittest.TestCase):
         self.assertEqual(record['variants'], [])     # the shelf keeps its Presence: none added
         self.assertEqual(shelf['after'], record['actor'])
         self.assertEqual(plan['matches'][shelf['id']]['first_collect_flag'], record['flag'])
+        self.assertEqual([(s['resource'], s['index'], s['shelf']) for s in record['shelves']],
+                         [('map', 0, 'Shop_Bottle_Fish')])
+        seller = {'Gyaml': 'Npc_Shop', 'Hash': 7, 'Links': [{'Dst': 100, 'Name': 'ForSale', 'Src': 7}]}
+        actors = [{'Gyaml': 'Shop_Bottle_Fish', 'Hash': 100, 'Dynamic': {'ShopItemIndex': 3},
+                   'Translate': [1.0, 2.0, 3.0], 'Rotate': [0.0, math.pi / 2, 0.0], 'SRTHash': 9},
+                  {'Gyaml': 'Shop_ArrowBundle_01', 'Hash': 101}, seller]
+        maps = {'map': {'raw': byml_codec.dump({'endian': '<', 'version': 7, 'root': {'Actors': actors}}),
+                        'root': {'Actors': actors}}}
+        self.assertEqual(shop_stock_edits(records, maps), {'Npc_Shop': {3: 'Shop_Bottle_Fish'}})
         output = {}
-        self.assertEqual(patch_repeatable_sources(records, {}, output), [])
+        self.assertEqual(patch_repeatable_sources(records, maps, output), ['map'])
+        result = byml_codec.load(output['map'])['root']['Actors']
+        board = result[-1]
+        self.assertEqual(board['Gyaml'], 'Shop_Board_SoldOut')
+        self.assertEqual(int(board['Hash']), record['shelves'][0]['board_hash'])
+        self.assertAlmostEqual(board['Translate'][0], 1.0 - 0.25)   # behind the shelf
+        self.assertAlmostEqual(board['Translate'][2], 3.0)
+        self.assertEqual(board['SRTHash'], 9)
+        self.assertEqual([(int(l['Dst']), l['Name']) for l in result[0]['Links']],
+                         [(record['shelves'][0]['board_hash'], 'Reference')])
+
+    def test_native_sold_out_board_is_not_doubled(self):
+        actors = [{'Gyaml': 'Shop_DekuStick', 'Hash': 1, 'Translate': [0.0, 0.0, 0.0],
+                   'Links': [{'Dst': 2, 'Name': 'Reference', 'Src': 1}]},
+                  {'Gyaml': 'Shop_Board_SoldOut', 'Hash': 2}]
+        self.assertIsNone(add_sold_out_board(actors, 0, 3))
+        self.assertEqual(len(actors), 2)
+
+    def test_shop_goods_of_shuffled_slots_are_sold_once(self):
+        def good(actor):
+            return {'Actor': f'Work/Actor/{actor}.engine__actor__ActorParam.gyml', 'StockNum': -1}
+        param = {'GoodsList': [good('Shop_Heart'), good('Shop_DekuStick'), good('Shop_DekuNutBundle_01')]}
+        pack = byml_codec.build_sarc({
+            'Component/ShopParam/Npc.game__component__ShopParam.bgyml':
+                byml_codec.dump({'endian': '<', 'version': 7, 'root': param}),
+            'Actor/Npc.engine__actor__ActorParam.bgyml': b'other'})
+        raw, changed = limit_shop_stock(pack, {1: 'Shop_DekuStick'})
+        self.assertEqual(changed, [1])
+        files = sarc(raw)
+        goods = byml_codec.load(files['Component/ShopParam/Npc.game__component__ShopParam.bgyml'])['root']['GoodsList']
+        self.assertEqual([g['StockNum'] for g in goods], [-1, 1, -1])
+        self.assertEqual(files['Actor/Npc.engine__actor__ActorParam.bgyml'], b'other')
+        with self.assertRaisesRegex(ValueError, 'not found'):
+            limit_shop_stock(pack, {2: 'Shop_DekuStick'})   # another shelf in that slot
 
     def test_uncombinable_presence_fails_instead_of_bypassing_original_requirement(self):
         plan, maps = self.fixtures({'FlagName': 'QuestGate', 'IsNegation': False})
@@ -147,12 +191,19 @@ class LocalGraphTests(unittest.TestCase):
         after = ainb.AINB.from_binary(instrument_shop_ai(raw, 'Rando.Check.test', 'Shop_RandoOnce_test.root')).as_dict()
         self.assertEqual(before['Commands'], after['Commands'])
         nodes = {n['Node Index']: n for n in after['Nodes']}
-        setter, query, delete = after['Nodes'][len(before['Nodes']):]
+        setter, query, delete, native = after['Nodes'][len(before['Nodes']):]
         self.assertEqual((setter['Name'], query['Name'], delete['Name']),
                          ('OneShotSetNonStructGameDataBool', 'QueryGetNonStructGameDataBool', 'OneShotGenericDeleteThisActor'))
         visibility = next(n for n in after['Nodes'] if n['Node Type'] == 'Element_BoolSelector'
                           and _refers(n.get('Parameters'), query['Node Index']))
-        self.assertEqual({p['Name']: p['Node Index'] for p in visibility['Plugs']['Child']}['True'], delete['Node Index'])
+        self.assertEqual({p['Name']: p['Node Index'] for p in visibility['Plugs']['Child']}['True'], native['Node Index'])
+        # Bought: hidden while the shop's own stock says sold out, deleted otherwise.
+        sold_out = next(n['Node Index'] for n in after['Nodes'] if n['Name'] == 'QueryShopItemIsSoldOut')
+        self.assertEqual(native['Queries'], [sold_out])
+        branches = {p['Name']: nodes[p['Node Index']] for p in native['Plugs']['Child']}
+        self.assertEqual(branches['True']['Name'], 'OneShotGameModelControllerSetVisible')
+        self.assertIs(branches['True']['Parameters']['Inputs']['Bool'][0]['Default Value'], False)
+        self.assertEqual(branches['False']['Node Index'], delete['Node Index'])
         put = next(n['Node Index'] for n in after['Nodes'] if n['Name'] == 'ExecuteShopItemPutInPouch')
         put_parent = next(n for n in after['Nodes'] if any(p['Node Index'] == put for p in n['Plugs'].get('Child', [])))
         self.assertNotIn(visibility['Node Index'], [p['Node Index'] for p in put_parent['Plugs']['Child']])
@@ -165,10 +216,10 @@ class LocalGraphTests(unittest.TestCase):
         self.assertEqual(len(parents), 2)   # bought with a get demo, or put in the pouch
         self.assertIn(('ExecuteASPlay', 'Rotate_GetDemo'), steps)
         self.assertIn(('ExecuteShopItemPutInPouch', None), steps)
-        sold_out = next(n['Node Index'] for n in after['Nodes'] if n['Name'] == 'QueryShopItemIsSoldOut')
         readers = [i for i, n in nodes.items() if _refers(n.get('Parameters'), query['Node Index'])]
         self.assertEqual(len(readers), 2)   # model visibility and sold out message
-        self.assertFalse([i for i, n in nodes.items() if i != sold_out and _refers(n.get('Parameters'), sold_out)])
+        self.assertEqual([i for i, n in nodes.items() if i != sold_out and _refers(n.get('Parameters'), sold_out)],
+                         [native['Node Index']])
 
     def test_native_pickup_graph_adds_flag_after_pouch_action_and_preserves_commands(self):
         import ainb
