@@ -13,6 +13,8 @@ shop's, already have one).
 """
 import copy
 import hashlib
+import math
+import struct
 import uuid
 
 from oot_rando.formats import byml_codec
@@ -185,9 +187,11 @@ def instrument_shop_ai(raw, flag, filename):
       held up by Link: checked in game, bought items take this one) and
       ``ExecuteShopItemPutInPouch``;
     * every reader of the native ``QueryShopItemIsSoldOut`` (model hidden, sold
-      out message to the shop) reads ``flag`` instead, and the hidden branch
-      deletes the actor: the shop still sells a hidden shelf, not an absent one.
-      Since the flag is saved, the shelf deletes itself again after each reload.
+      out message to the linked ``Shop_Board_SoldOut``) reads ``flag`` instead;
+    * once bought, the hidden branch asks the native sold out state: sold out
+      (StockNum 1, see ``limit_shop_stock``), the shelf is only hidden and stays
+      selectable; not sold out (stock restored on reload), it deletes itself,
+      since the shop still sells a hidden shelf, not an absent one.
     """
     try:
         import ainb
@@ -262,14 +266,26 @@ def instrument_shop_ai(raw, flag, filename):
         raise ValueError('Shop item AI: sold out branch not recognised.')
     put_parent = parents[1]
     put_parent['Plugs']['Child'] = [p for p in put_parent['Plugs']['Child'] if p['Node Index'] != selector['Node Index']]
-    delete_index = len(nodes) + 2
+    delete_index, native_index = len(nodes) + 2, len(nodes) + 3
     delete = {'Node Type': 'UserDefined', 'Node Index': delete_index, 'Name': 'OneShotGenericDeleteThisActor',
               'GUID': _guid(flag + '/delete'), 'Flags': [], 'Queries': [], 'Attachments': [],
               'Properties': {'Bool': [{'Name': 'ExecuteEveryFrame', 'Default Value': False, 'Flags': []},
                                       {'Name': 'IsFade', 'Default Value': False, 'Flags': []}]},
               'Parameters': {'Inputs': {}, 'Outputs': {}}, 'XLink Actions': [], 'Plugs': {}}
-    branch['Node Index'] = delete_index
-    nodes.extend([setter, query, delete])
+    # Bought: while the shop's own stock (StockNum 1) says sold out, the shelf only
+    # hides its model and stays selectable (the native sold out state, the shop
+    # refuses a second sale). Only if that stock came back (not saved) is the
+    # shelf deleted, so that a hidden shelf is never sold again.
+    native = copy.deepcopy(selector)
+    native.update({'Node Index': native_index, 'GUID': _guid(flag + '/native-sold-out'), 'Queries': [sold_out],
+                   'Attachments': [], 'Flags': [], 'XLink Actions': []})
+    native['Parameters'] = {'Inputs': {'Bool': [{'Name': 'Input', 'Default Value': False, 'Node Index': sold_out,
+                                                 'Output Index': 0, 'Flags': []}]}, 'Outputs': {}}
+    native['Plugs'] = {'Generic': [{'Node Index': sold_out, 'Name': 'Input', 'Unknown 1': 0, 'Unknown 2': 0}],
+                       'Child': [{'Node Index': branch['Node Index'], 'Name': 'True'},
+                                 {'Node Index': delete_index, 'Name': 'False'}]}
+    branch['Node Index'] = native_index
+    nodes.extend([setter, query, delete, native])
     document['Filename'] = filename
     binary = build(document)
     result = ainb.AINB.from_binary(binary).as_dict()
@@ -319,6 +335,13 @@ def prepare_repeatables(plan, maps):
         record = {'id': placement['id'], 'actor': actor, 'canonical': canonical, 'kind': 'shop' if shop else 'pickup',
                   'original_reward_actor': previous, 'flag': flag, 'flag_hash': murmur3(flag),
                   'event_filename': 'RandoOnce_' + key + '.event.root', 'variants': variants}
+        if shop:
+            record['shelves'] = [{'resource': patch['resource'], 'index': patch['path'][1], 'shelf': placement['before'],
+                                  'board_hash': int.from_bytes(hashlib.sha256(
+                                      f"{placement['id']}/sold-out/{patch['resource']}/{patch['path'][1]}".encode()).digest()[:8],
+                                      'little')}
+                                 for patch in placement['patches']
+                                 if 'event' not in patch and tuple(patch['path'][:1]) == ('Actors',)]
         placement['after'] = actor
         placement['reward_actor'] = previous
         placement['first_collect_flag'] = flag
@@ -414,6 +437,92 @@ def _alias_rows(tables, standard, actor):
         rows.sort(key=lambda row: row['__RowId'])
 
 
+SOLD_OUT_BOARD = 'Shop_Board_SoldOut'
+BOARD_BACK = 0.25   # vanilla sold-out boards sit about this far behind their shelf
+
+
+def add_sold_out_board(actors, index, ident):
+    """Put a native ``Shop_Board_SoldOut`` behind shelf ``actors[index]``, linked to it.
+
+    As in the Kokiri shop before the Deku Tree: the shelf's AI tells the board
+    linked by ``Reference`` whether it is sold out (board shown or hidden).
+    """
+    shelf = actors[index]
+    boards = {int(actor['Hash']) for actor in actors if actor.get('Gyaml') == SOLD_OUT_BOARD}
+    if any(link.get('Name') == 'Reference' and int(link.get('Dst', 0)) in boards for link in shelf.get('Links', [])):
+        return None   # a native one already (Kokiri shop before the Deku Tree)
+    used = {int(actor['Hash']) for actor in actors if 'Hash' in actor}
+    if ident in used:
+        raise ValueError('Sold out board hash collision.')
+    rotate = list(shelf.get('Rotate', [0.0, 0.0, 0.0]))
+    x, y, z = shelf['Translate']
+    yaw = rotate[1]
+    def f32(value):   # as stored in the map, so that a replay compares equal
+        return struct.unpack('<f', struct.pack('<f', value))[0]
+    board = {'Gyaml': SOLD_OUT_BOARD, 'Hash': byml_codec.U64(ident),
+             'Translate': [f32(x - math.sin(yaw) * BOARD_BACK), y, f32(z - math.cos(yaw) * BOARD_BACK)]}
+    if 'Rotate' in shelf:
+        board['Rotate'] = rotate
+    if 'SRTHash' in shelf:
+        board['SRTHash'] = shelf['SRTHash']
+    if 'Presence' in shelf:   # present with its shelf (Kokiri full or short stock)
+        board['Presence'] = copy.deepcopy(shelf['Presence'])
+    shelf.setdefault('Links', []).append({'Dst': byml_codec.U64(ident), 'Gyaml': 'Reference', 'Name': 'Reference',
+                                          'Src': shelf['Hash']})
+    actors.append(board)
+    return board
+
+
+def shop_stock_edits(records, maps):
+    """{shopkeeper actor: {ShopItemIndex: vanilla shelf actor}} of the shuffled shelves.
+
+    The shopkeeper is the actor whose ``ForSale`` link reaches the shelf.
+    """
+    edits = {}
+    for record in records:
+        for shelf in record.get('shelves', []):
+            actors = maps[shelf['resource']]['root']['Actors']
+            target = actors[shelf['index']]
+            sellers = {actor['Gyaml'] for actor in actors for link in actor.get('Links', [])
+                       if link.get('Name') == 'ForSale' and link.get('Dst') == target['Hash']}
+            if not sellers:
+                raise ValueError('Shop shelf without a shopkeeper: ' + record['id'])
+            slot = (target.get('Dynamic') or {}).get('ShopItemIndex', 0)
+            for seller in sellers:
+                old = edits.setdefault(seller, {}).setdefault(slot, shelf['shelf'])
+                if old != shelf['shelf']:
+                    raise ValueError(f'Two shelves share slot {slot} of {seller}.')
+    return edits
+
+
+def limit_shop_stock(pack_raw, slots):
+    """Shopkeeper pack whose ShopParam goods at ``slots`` are sold once (StockNum 1).
+
+    ``slots`` maps ShopItemIndex -> vanilla shelf actor; a good is only changed
+    if its Actor is that shelf. Returns (new SARC bytes, changed slots).
+    """
+    files = dict(sarc(pack_raw))
+    changed = set()
+    for name in sorted(files):
+        if not (name.startswith('Component/ShopParam/') and name.endswith('.bgyml')):
+            continue
+        document = byml_codec.load(files[name])
+        goods = document['root'].get('GoodsList', [])
+        touched = False
+        for slot, shelf in slots.items():
+            if slot < len(goods) and goods[slot].get('Actor', '').endswith(
+                    '/' + shelf + '.engine__actor__ActorParam.gyml'):
+                goods[slot]['StockNum'] = 1
+                changed.add(slot)
+                touched = True
+        if touched:
+            files[name] = byml_codec.dump(document)
+    missing = set(slots) - changed
+    if missing:
+        raise ValueError(f'Shop goods not found for slots {sorted(missing)}.')
+    return byml_codec.build_sarc(files), sorted(changed)
+
+
 def patch_repeatable_sources(records, maps, raw_maps):
     """Select first/randomized and subsequent/vanilla sources with saved flags.
 
@@ -453,6 +562,12 @@ def patch_repeatable_sources(records, maps, raw_maps):
                 fallback['Phive']['Placement']['ID'] = byml_codec.U64(ident)
             fallback['Presence'] = {'FlagName': record['flag'], 'IsNegation': False, 'IsCheckLazy': False}
             actors.append(fallback)
+    for record in records:
+        for shelf in record.get('shelves', []):
+            resource = shelf['resource']
+            if resource not in documents:
+                documents[resource] = byml_codec.load(raw_maps.get(resource, maps[resource]['raw']))
+            add_sold_out_board(documents[resource]['root']['Actors'], shelf['index'], shelf['board_hash'])
     for resource, document in documents.items():
         raw_maps[resource] = byml_codec.dump(document)
     return sorted(documents)

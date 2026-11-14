@@ -99,7 +99,11 @@ def verify(nup_path, seed_dir):
             if not variant['native_once']:
                 repeat_first[variant['resource']][variant['index']] = record
                 repeat_fallback[variant['resource']].append((record, variant))
-    report = {'maps': 0, 'rewards': 0, 'presence': 0, 'events': 0}
+    repeat_boards = defaultdict(list)
+    for record in tracking.get('repeatables', []):
+        for shelf in record.get('shelves', []):
+            repeat_boards[shelf['resource']].append(shelf)
+    report ={'maps': 0, 'rewards': 0, 'presence': 0, 'events': 0}
     always_skulltulas = bool((manifest.get('settings') or {}).get('skulltulas_always_present'))
     # Per-chest opening flags: each shuffled chest's own event (chest_flags), rebuilt
     # from the spoiler's chests and the original maps.
@@ -285,6 +289,14 @@ def verify(nup_path, seed_dir):
             if actual_fallbacks != expected_fallbacks:
                 raise ValueError('Return to the original loot does not match: ' + path)
             after = dict(after, Actors=[a for a in after['Actors'] if a.get('Hash') not in expected_fallbacks])
+        if path in repeat_boards:
+            # Shuffled shelves: a native sold out board linked behind each one.
+            from oot_rando.patching.repeatable_adapter import add_sold_out_board
+            actors = __import__('copy').deepcopy(before['Actors'])
+            for shelf in repeat_boards[path]:
+                if add_sold_out_board(actors, shelf['index'], shelf['board_hash']) is not None:
+                    report['sold_out_boards'] = report.get('sold_out_boards', 0) + 1
+            before = dict(before, Actors=json.loads(json.dumps(actors)))
         edits = map_edits.get(path, {})
         if path in QOL_MAPS:
             kept = {a.get('Hash') for a in after['Actors']}

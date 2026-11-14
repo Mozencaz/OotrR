@@ -834,6 +834,13 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
         if raw is None:
             raw = decompress(read(GAMEDATA), dictionaries_)
         modified[GAMEDATA] = add_saved_flags(raw, saved_flags)
+    # Shuffled shelves are sold once by the shop itself: the slot stays selectable.
+    from oot_rando.patching.repeatable_adapter import limit_shop_stock, shop_stock_edits
+    for seller, slots in sorted(shop_stock_edits(repeatables, maps).items()):
+        path = 'Pack/Actor/' + seller + '.pack.zs'
+        if path in modified or path in new:
+            raise ValueError('Shopkeeper pack already modified: ' + seller)
+        modified[path], _ = limit_shop_stock(decompress(read(path), dictionaries_), slots)
     derived = derived_actors(p['after'] for p in plan['placements'])
     if derived or repeatables:
         report(f'Building {len(derived)} derived actors (freestanding and shop items)…')
