@@ -12,7 +12,8 @@ from tkinter import ttk, filedialog, messagebox, simpledialog
 
 from oot_rando.randomizer.randomizer_core import Settings, CHECKS, GENERATOR_VERSION, generate
 from oot_rando.randomizer.randomizer_services import (read_artifact, generate_in_mods, qol_seed_warning,
-                                                      validate_mod_directory)
+                                                      validate_mod_directory, has_ingame_tracker,
+                                                      update_ingame_tracker)
 from oot_rando.randomizer.qol_install import install_qol
 from oot_rando.tracker.auto_tracker import TrackerSession, newest_save
 from oot_rando.tracker import game_overlay
@@ -344,6 +345,7 @@ class Application:
         row = self.buttons(box, pady=(5, 12))
         ttk.Entry(row, textvariable=self.slot, width=22).pack(side='left')
         ttk.Button(row, text='Reload the tracker', command=self.load_tracker).pack(side='left', padx=(8, 0))
+        ttk.Button(row, text='Update the in-game tracker', command=self.update_seed_tracker).pack(side='left', padx=(8, 0))
         ttk.Label(box, textvariable=self.connection_status, style='Small.TLabel', wraplength=780).pack(anchor='w')
         ttk.Label(box, textvariable=self.turbo_status, style='Small.TLabel').pack(anchor='w')
         box = self.card(parent, 'Application updates', f'Installed version: {APP_VERSION}'
@@ -1437,6 +1439,28 @@ class Application:
             self.refresh_tracker()
         except Exception as error:
             self.error(error)
+
+    def update_seed_tracker(self):
+        """Give the open seed this version's in-game tracker (its data file and module, and the icons from the game
+        file when it's set; nothing else)."""
+        if not self.artifact:
+            self.status.set('Open a seed first.')
+            return
+        try:
+            manifest, _ = read_artifact(self.artifact)
+            add = not has_ingame_tracker(manifest)
+            if add and not messagebox.askyesno('In-game tracker', 'This seed was made without the in-game tracker. Add it?'):
+                return
+            directory, nup = self.artifact, Path(self.nup.get())
+            nup = nup if self.nup.get() and nup.is_file() else None   # the icons come from the game, when it's set
+            self.run_job(lambda progress: update_ingame_tracker(directory, add=add, nup=nup), self.ingame_tracker_updated)
+        except Exception as error:
+            self.error(error)
+
+    def ingame_tracker_updated(self, written):
+        self.status.set('In-game tracker updated (' + ', '.join(written) + '): it applies the next time the game starts.'
+                        if written else 'The in-game tracker is already up to date.')
+        self.load_tracker()
 
     def render_tracker(self):
         if not hasattr(self, 'tracker_rows') or not hasattr(self, 'home_list'):

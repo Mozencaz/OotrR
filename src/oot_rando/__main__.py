@@ -10,6 +10,9 @@ Without a command, the graphical application starts. Commands:
   the mod of an Archipelago patch (with the in-game tracker module, unless told not to);
 * ``qol-install GAME.nup MODS_FOLDER [--no-intro-skip] [--no-fast-chests]`` — install only the
   quality-of-life patches (intro skip, fast chests), without randomization;
+* ``update-tracker SEED_OR_MODS_FOLDER [--add] [--nup GAME.nup]`` — bring an installed seed's
+  in-game tracker (its data file and module) to this version; ``--add`` gives it to a seed made
+  without it, ``--nup`` makes the items' icons from the game too;
 * ``ap-client MOD_FOLDER SERVER [--password P] [--slot NAME]`` — Archipelago client without
   the window: sends the checks and the goal of the running game;
 * ``ap-give SEED_FOLDER [N]`` — test of the Archipelago reception: lists the items other
@@ -20,6 +23,8 @@ Without a command, the graphical application starts. Commands:
 import sys
 
 NO_INGAME_TRACKER = '--no-ingame-tracker'
+ADD_INGAME_TRACKER = '--add'
+NUP_OPTION = '--nup'
 
 
 def main(argv=None):
@@ -63,6 +68,8 @@ def _run(argv=None):
     if command == 'qol-install':
         from oot_rando.randomizer.qol_install import main as qol_install
         return qol_install(argv)
+    if command == 'update-tracker':
+        return update_tracker(argv)
     if command == 'ap-client':
         from oot_rando.archipelago.client import main as client
         return client(argv)
@@ -131,6 +138,28 @@ def ap_install(argv):
     installed = generate_in_mods(argv[1], argv[2], settings, print, archive=data_dir() / 'seeds-uninstalled',
                                  ingame_tracker=ingame_tracker)
     print(f'Installed: {installed}')
+    return 0
+
+
+def update_tracker(argv):
+    from oot_rando.randomizer.randomizer_services import update_ingame_trackers
+    add = ADD_INGAME_TRACKER in argv
+    argv = [argument for argument in argv if argument != ADD_INGAME_TRACKER]
+    nup = None
+    if NUP_OPTION in argv[:-1]:
+        at = argv.index(NUP_OPTION)
+        nup = argv[at + 1]
+        del argv[at:at + 2]
+    if len(argv) != 1 or NUP_OPTION in argv:
+        print(f'Usage: update-tracker SEED_OR_MODS_FOLDER [{ADD_INGAME_TRACKER}] [{NUP_OPTION} GAME.nup]')
+        return 2
+    try:
+        results = update_ingame_trackers(argv[0], add=add, nup=nup)
+    except ValueError as error:
+        print(error)
+        return 1
+    for seed, written in results:
+        print(f'Updated {seed}: ' + ', '.join(written) if written else f'Already up to date: {seed}')
     return 0
 
 
