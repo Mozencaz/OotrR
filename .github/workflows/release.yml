@@ -1,5 +1,7 @@
 # Manual: tests + Windows/Linux builds, then tag vX.Y.Z and a GitHub release
 # with the two portable applications attached.
+# A version with a suffix (0.7.0-beta.1) is always published as a pre-release: only
+# players who ticked "Use experimental versions" in Setup are offered it.
 name: Release
 
 on:
@@ -10,7 +12,7 @@ on:
         required: false
         default: ''
       prerelease:
-        description: 'Mark as pre-release'
+        description: 'Mark as pre-release (automatic for a version like 0.7.0-beta.1)'
         type: boolean
         default: false
       draft:
@@ -97,7 +99,11 @@ jobs:
           Checksums: \`SHA256SUMS.txt\`, signed (Ed25519) in \`SHA256SUMS.txt.sig\`.
           EOF
           flags=()
-          [[ "${{ inputs.prerelease }}" == "true" ]] && flags+=(--prerelease)
+          # A suffixed version is never published as stable: the updater would offer it to everyone.
+          if [[ "${{ inputs.prerelease }}" == "true" || "$VERSION" == *-* ]]; then
+            flags+=(--prerelease)
+            echo "> Experimental version: only players who opted in to experimental versions are offered it." >> notes.md
+          fi
           [[ "${{ inputs.draft }}" == "true" ]] && flags+=(--draft)
           gh release create "$TAG" release/* --verify-tag --title "OoT Randomizer $TAG" \
             --notes-file notes.md --generate-notes "${flags[@]}"

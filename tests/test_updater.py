@@ -57,6 +57,31 @@ class UpdaterTest(unittest.TestCase):
         for base in ('https://example.invalid/', 'https://github.com/Other/Repo/releases/download/v1/'):
             self.assertIsNone(updater.release_from_json(api('v0.4.0', *names, base=base), '0.3.0', 'win32'))
 
+    def test_prerelease_versions(self):
+        order = ['0.6.0', '0.7.0-alpha', '0.7.0-beta.1', '0.7.0-beta.2', '0.7.0-beta.10', '0.7.0-rc.1', '0.7.0', 'v0.7.1-beta.1']
+        for older, newer in zip(order, order[1:]):
+            self.assertTrue(updater.is_newer(newer, older), (newer, older))
+            self.assertFalse(updater.is_newer(older, newer), (older, newer))
+        self.assertFalse(updater.is_newer('0.7.0-beta.1', '0.7.0-beta.1'))
+        self.assertTrue(updater.is_prerelease('v0.7.0-beta.1'))
+        self.assertFalse(updater.is_prerelease('0.7.0'))
+
+    def test_experimental_channel(self):
+        names = ('x-0.7.0-beta.1-windows-x64.zip', updater.SUMS, updater.SIGNATURE)
+        beta = api('v0.7.0-beta.1', *names, prerelease=True)
+        self.assertIsNone(updater.release_from_json(beta, '0.6.0', 'win32'))   # stable players: never
+        unflagged = api('v0.7.0-beta.1', *names)   # suffixed tag published without the flag
+        self.assertIsNone(updater.release_from_json(unflagged, '0.6.0', 'win32'))
+        self.assertEqual(updater.release_from_json(beta, '0.6.0', 'win32', experimental=True).version, '0.7.0-beta.1')
+        stable = api('v0.6.1', *names)
+        listing = [api('v0.7.0-beta.2', *names, prerelease=True), stable, beta, {'draft': True}]
+        self.assertEqual(updater.newest_release(listing, '0.6.0', 'win32', experimental=True).version, '0.7.0-beta.2')
+        self.assertEqual(updater.newest_release(listing, '0.6.0', 'win32').version, '0.6.1')
+        # Back on stable after a beta: the final release supersedes it, older stables do not.
+        self.assertEqual(updater.release_from_json(api('v0.7.0', *names), '0.7.0-beta.2', 'win32').version, '0.7.0')
+        self.assertIsNone(updater.release_from_json(stable, '0.7.0-beta.2', 'win32'))
+        self.assertIsNone(updater.newest_release({'message': 'rate limited'}, '0.6.0', 'win32', experimental=True))
+
     def test_signature(self):
         self.assertTrue(updater.verify_signature(GOOD_SUMS, GOOD_SIG, TEST_KEY))
         import base64
