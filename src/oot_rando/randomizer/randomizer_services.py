@@ -9,9 +9,15 @@ from oot_rando.patching.randomize_kokiri import TITLE, BUILD
 from oot_rando.pc_port import is_port_folder
 
 
+QOL_FOLDER = 'OoT_QoL'
+QOL_KIND = 'qol'
+
+
 def read_artifact(directory):
     directory = Path(directory).resolve()
     manifest = json.loads((directory / 'manifest.json').read_text(encoding='utf-8'))
+    if manifest.get('kind') == QOL_KIND:
+        raise ValueError('This folder is a quality-of-life install, not a randomizer seed.')
     if manifest.get('schema_version') != 1 or manifest.get('title_id') != TITLE or manifest.get('build_id') != BUILD:
         raise ValueError('Unsupported manifest or build.')
     settings = Settings.from_dict(manifest['settings'])
@@ -81,6 +87,18 @@ def is_randomizer_seed(directory):
             and directory.name == 'OoT_Randomizer_' + manifest['seed_id'][:16])
 
 
+def is_qol_install(directory):
+    """True for the quality-of-life folder written by ``qol_install`` (never a seed)."""
+    directory = Path(directory)
+    if not directory.is_dir() or directory.name != QOL_FOLDER:
+        return False
+    try:
+        manifest = json.loads((directory / 'manifest.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return False
+    return manifest.get('kind') == QOL_KIND and manifest.get('title_id') == TITLE
+
+
 def archive_previous_seeds(title_directory, archive, keep=None):
     """Move earlier seeds of this application out of the mods folder (never delete them)."""
     title_directory = Path(title_directory)
@@ -113,9 +131,10 @@ def validate_mod_directory(directory):
                      + ' Hookshot, Longshot...).')
 
 
-def _conflicting_mods(title_directory, manifest, skip):
+def conflicting_mods(title_directory, manifest, skip):
     return [other.name for other in title_directory.iterdir()
             if other.is_dir() and other.name != skip and not is_randomizer_seed(other)
+            and not is_qol_install(other)
             and any((other / 'romfs' / name).exists() for name in manifest['files'])]
 
 
@@ -177,7 +196,7 @@ def generate_in_mods(nup, title_directory, settings, progress=None, archive=None
     else:
         generate(nup, destination, settings, report)
     manifest, _ = read_artifact(destination)
-    conflicts = _conflicting_mods(title_directory, manifest, name)
+    conflicts = conflicting_mods(title_directory, manifest, name)
     if conflicts:
         if archive is not None:
             _move_to_archive(destination, Path(archive), '')
@@ -185,7 +204,21 @@ def generate_in_mods(nup, title_directory, settings, progress=None, archive=None
                          + '. Move these mods out of the title folder, then generate again.')
     if archive is not None:
         archive_previous_seeds(title_directory, Path(archive), keep=name)
+    warning = qol_seed_warning(title_directory)
+    if warning:
+        report('Warning: ' + warning)
     return destination
+
+
+def qol_seed_warning(title_directory):
+    """Text to show after a seed install while ``OoT_QoL`` sits beside it, else None.
+
+    The QoL folder sorts first and carries its own resource table and chest flows, which
+    would hide the seed's larger ones."""
+    if is_qol_install(Path(title_directory) / QOL_FOLDER):
+        return (QOL_FOLDER + " is installed in this mods folder. Turn it off in your emulator's add-ons, "
+                'or move it out of the mods folder, while playing this seed.')
+    return None
 
 
 class ManualTracker:

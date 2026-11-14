@@ -214,6 +214,112 @@ def placements_for(settings):
     return result
 
 
+def source_reader(nup, members, sources):
+    """``read(path, expected_sha256=None)``: a resource of the game; its hash is recorded in ``sources``."""
+    def read(path, expected=None):
+        data = nup.read(members[path])
+        sources[path] = sha256(data)
+        if expected and sources[path] != expected:
+            raise ValueError(f'Unexpected source resource: {path}')
+        return data
+    return read
+
+
+def recompress(raw, original, dictionaries_):
+    """Compress ``raw`` with the dictionary of the resource it replaces, and check the round trip."""
+    ident = zstd.get_frame_parameters(original).dict_id
+    candidates = [zstd.ZstdCompressionDict(v) for v in dictionaries_.values()]
+    matched = [v for v in candidates if v.dict_id() == ident] if ident else []
+    if ident and len(matched) != 1:
+        raise ValueError('Compression dictionary ambiguous or missing.')
+    encoded = zstd.ZstdCompressor(level=10, dict_data=matched[0] if matched else None).compress(raw)
+    if decompress(encoded, dictionaries_) != raw:
+        raise ValueError('Recompression check failed.')
+    return encoded
+
+
+def complete_event_info(extra_raw, nup, members, d, read):
+    """Events load only the external sub-flows listed for them: a changed flow that
+    calls a new flowchart (the Deku Tree gift's Dm_SY_GetInEvent) gets it listed.
+
+    Updates ``extra_raw`` in place and returns the summary of what was added."""
+    from oot_rando.patching.event_info import (GAME_ANALYZED_EVENT_INFO, add_child_events,
+                                                add_subflow_dependencies, flow_name, flow_path,
+                                                new_subflows, new_transitions)
+    skips = {}
+    changed_flows = {flow_name(p): raw for p, raw in extra_raw.items() if flow_name(p)}
+    vanilla_cache = {}
+
+    def vanilla_flow(name):
+        if name not in vanilla_cache:
+            path = flow_path(name)
+            vanilla_cache[name] = decompress(nup.read(members[path]), d) if path in members else None
+        return vanilla_cache[name]
+    added_calls = new_subflows(changed_flows, vanilla_flow)
+    current_named = lambda name: changed_flows.get(name) or vanilla_flow(name)
+    if added_calls:
+        extra_raw[GAME_ANALYZED_EVENT_INFO], skips['subflow_dependencies'] = add_subflow_dependencies(
+            decompress(read(GAME_ANALYZED_EVENT_INFO), d), Byml(decompress(read(EVENT_SETTINGS), d)).root,
+            added_calls, current_named)
+    # Same for the events a changed flow now starts by EventTransition (the ocarina
+    # guide's Dm_SY_Ocarina after every item get).
+    added_events = new_transitions(changed_flows, vanilla_flow)
+    if added_events:
+        info_source = extra_raw.get(GAME_ANALYZED_EVENT_INFO) or decompress(read(GAME_ANALYZED_EVENT_INFO), d)
+        extra_raw[GAME_ANALYZED_EVENT_INFO], skips['child_events'] = add_child_events(
+            info_source, Byml(decompress(read(EVENT_SETTINGS), d)).root, added_events, current_named)
+    return skips
+
+
+def compress_changed(extra_raw, files, growths, read, d):
+    """Recompress edited resources into ``files``; ``growths`` records how much each one grew."""
+    for path, raw in sorted(extra_raw.items()):
+        source = read(path)
+        growths[path] = max(len(raw) - len(decompress(source, d)), 0)
+        files[path] = recompress(raw, source, d)
+
+
+def grow_resource_table(files, growths, new_sizes, read, d):
+    """Make room in the resource size table (RESTBL) for grown or new resources.
+
+    Writes the new table into ``files`` and returns the changed allocations."""
+    if not (any(growths.values()) or new_sizes):
+        return []
+    rest_source = read(RESTBL)
+    rest, allocations = grow_resources(decompress(rest_source, d), growths)
+    if new_sizes:
+        rest, added = add_resources(rest, new_sizes)
+        allocations += added
+    files[RESTBL] = recompress(rest, rest_source, d)
+    return allocations
+
+
+def publish_mod(output, files, documents, finish=None):
+    """Write a mod folder atomically: ``romfs/<path>`` for ``files``, then ``documents``
+    (name to bytes or text), then whatever ``finish(staging)`` adds. ``output`` must not exist."""
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.oot-stage-', dir=output.parent) as temporary:
+        staging = Path(temporary) / 'ready'
+        staging.mkdir()
+        for path, data in files.items():
+            destination = staging / 'romfs' / path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(data)
+        for name, data in documents.items():
+            if isinstance(data, bytes):
+                (staging / name).write_bytes(data)
+            else:
+                (staging / name).write_text(data, encoding='utf-8')
+        if finish:
+            finish(staging)
+        staging.rename(output)
+
+
+def json_document(value):
+    return json.dumps(value, ensure_ascii=False, indent=2)
+
+
 def generate(nup_path, output, settings, progress=None, save_seed_id=None):
     """Publish a complete new mod directory, never install or modify a game/save.
 
@@ -232,23 +338,10 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
         members = effective_members(nup)
         files, sources = {}, {}
 
-        def read(path, expected=None):
-            data = nup.read(members[path])
-            sources[path] = sha256(data)
-            if expected and sources[path] != expected:
-                raise ValueError(f'Unexpected source resource: {path}')
-            return data
+        read = source_reader(nup, members, sources)
 
         def compress(path, raw, original):
-            ident = zstd.get_frame_parameters(original).dict_id
-            candidates = [zstd.ZstdCompressionDict(v) for v in d.values()]
-            matched = [v for v in candidates if v.dict_id() == ident] if ident else []
-            if ident and len(matched) != 1:
-                raise ValueError('Compression dictionary ambiguous or missing.')
-            encoded = zstd.ZstdCompressor(level=10, dict_data=matched[0] if matched else None).compress(raw)
-            if decompress(encoded, d) != raw:
-                raise ValueError('Recompression check failed.')
-            files[path] = encoded
+            files[path] = recompress(raw, original, d)
 
         placements = placements_for(settings)
         raw_maps = {}
@@ -263,7 +356,6 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
         if settings.full is not None:
             full, extra_raw, new_files = _build_full(nup, d, members, settings, raw_maps, sources, read, report)
         chests = []
-        allocations = []
         active = settings.randomize_chests and len(settings.excluded_checks) < len(CHESTS)
         if active or settings.open_forest:
             source = read(MAP, DYNAMIC_SOURCE_SHA256)
@@ -407,32 +499,7 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
                           if 'Event/EventFlow/' + n + '.bfevfl.zs' not in extra_raw]
             flows, skips['cutscene_windows'] = cutscene_window_files(original_flow, flow_names, candidates)
             extra_raw.update(flows)
-        # Events load only the external sub-flows listed for them: a changed flow that
-        # calls a new flowchart (the Deku Tree gift's Dm_SY_GetInEvent) gets it listed.
-        from oot_rando.patching.event_info import (GAME_ANALYZED_EVENT_INFO, add_child_events,
-                                                    add_subflow_dependencies, flow_name, flow_path,
-                                                    new_subflows, new_transitions)
-        changed_flows = {flow_name(p): raw for p, raw in extra_raw.items() if flow_name(p)}
-        vanilla_cache = {}
-
-        def vanilla_flow(name):
-            if name not in vanilla_cache:
-                path = flow_path(name)
-                vanilla_cache[name] = decompress(nup.read(members[path]), d) if path in members else None
-            return vanilla_cache[name]
-        added_calls = new_subflows(changed_flows, vanilla_flow)
-        current_named = lambda name: changed_flows.get(name) or vanilla_flow(name)
-        if added_calls:
-            extra_raw[GAME_ANALYZED_EVENT_INFO], skips['subflow_dependencies'] = add_subflow_dependencies(
-                decompress(read(GAME_ANALYZED_EVENT_INFO), d), Byml(decompress(read(EVENT_SETTINGS), d)).root,
-                added_calls, current_named)
-        # Same for the events a changed flow now starts by EventTransition (the ocarina
-        # guide's Dm_SY_Ocarina after every item get).
-        added_events = new_transitions(changed_flows, vanilla_flow)
-        if added_events:
-            info_source = extra_raw.get(GAME_ANALYZED_EVENT_INFO) or decompress(read(GAME_ANALYZED_EVENT_INFO), d)
-            extra_raw[GAME_ANALYZED_EVENT_INFO], skips['child_events'] = add_child_events(
-                info_source, Byml(decompress(read(EVENT_SETTINGS), d)).root, added_events, current_named)
+        skips.update(complete_event_info(extra_raw, nup, members, d, read))
         if settings.skip_locked_cutscenes or settings.skip_auto_dialogues:
             # In place on the vanilla table (same size); chest rows are added after.
             report('Dialogues and area presentations skippable with + …')
@@ -446,7 +513,7 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
             # sub-flow completion above: its own row lists what it calls.
             report('Archipelago item reception…')
             from oot_rando.patching import ap_mailbox
-            from oot_rando.patching.event_info import flow_path as mailbox_flow_path
+            from oot_rando.patching.event_info import GAME_ANALYZED_EVENT_INFO, flow_path as mailbox_flow_path
             current_raw = lambda path: extra_raw[path] if path in extra_raw else decompress(read(path), d)
             extra_raw[ap_mailbox.FLOW_PATH] = ap_mailbox.add_entries(current_raw(ap_mailbox.FLOW_PATH), mailbox_items)
             mailbox_flows = lambda name: (extra_raw[ap_mailbox.FLOW_PATH] if name == ap_mailbox.FLOW
@@ -495,10 +562,7 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
                 raise ValueError('A composed map shrank unexpectedly.')
             growths[path] = growth
             compress(path, raw, source)
-        for path, raw in sorted(extra_raw.items()):
-            source = read(path)
-            growths[path] = max(len(raw) - len(decompress(source, d)), 0)
-            compress(path, raw, source)
+        compress_changed(extra_raw, files, growths, read, d)
         for path, raw in sorted(plain_raw.items()):
             # Uncompressed resources (sequence AI): written as they are.
             growths[path] = max(len(raw) - len(read(path)), 0)
@@ -509,13 +573,7 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
             compress(path, raw, read(template))
             # A copy of a resource (model, texture) needs at least the original's allocation.
             new_sizes[path] = max((len(raw) + 0x1000 + 4095) & ~4095, allocation(rest_raw, template) or 0)
-        if any(growths.values()) or new_sizes:
-            rest_source = read(RESTBL)
-            rest, allocations = grow_resources(decompress(rest_source, d), growths)
-            if new_sizes:
-                rest, added = add_resources(rest, new_sizes)
-                allocations += added
-            compress(RESTBL, rest, rest_source)
+        allocations = grow_resource_table(files, growths, new_sizes, read, d)
         if settings.skip_locked_cutscenes:
             report('Skippable cutscenes…')
             cutscenes, skips['cutscenes'] = cutscene_files(read)
@@ -591,21 +649,13 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
         manifest['tracking'] = {'schema_version': 1, 'sha256': sha256(tracking_bytes),
                                 'new_save_required': True, 'mode': 'save'}
         report('Writing the mod and its manifests atomically…')
-        output.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix='.oot-stage-', dir=output.parent) as temporary:
-            staging = Path(temporary) / 'ready'
-            staging.mkdir()
-            for path, data in files.items():
-                destination = staging / 'romfs' / path
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_bytes(data)
-            for name, data in [('manifest.json', manifest), ('checks.json', checks), ('spoiler.json', spoiler)]:
-                (staging / name).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
-            (staging / 'tracking.json').write_bytes(tracking_bytes)
+        def write_spoiler_text(staging):
             # Human-readable spoiler next to spoiler.json (not part of the manifest).
             from oot_rando.randomizer.spoiler_report import SPOILER_TEXT, load_report, write_text
             write_text(load_report(staging), staging / SPOILER_TEXT)
-            staging.rename(output)
+        publish_mod(output, files, {'manifest.json': json_document(manifest), 'checks.json': json_document(checks),
+                                    'spoiler.json': json_document(spoiler), 'tracking.json': tracking_bytes},
+                    write_spoiler_text)
         report('Generation done.')
         return manifest
     finally:

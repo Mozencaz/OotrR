@@ -8,6 +8,8 @@ Without a command, the graphical application starts. Commands:
 * ``apworld GAME.nup [OUT.apworld]`` — build the Archipelago world from the game;
 * ``ap-install PATCH.aprmk GAME.nup MODS_FOLDER`` — build and install the mod of an
   Archipelago patch;
+* ``qol-install GAME.nup MODS_FOLDER [--no-intro-skip] [--no-fast-chests]`` — install only the
+  quality-of-life patches (intro skip, fast chests), without randomization;
 * ``ap-client MOD_FOLDER SERVER [--password P] [--slot NAME]`` — Archipelago client without
   the window: sends the checks and the goal of the running game;
 * ``ap-give SEED_FOLDER [N]`` — test of the Archipelago reception: lists the items other
@@ -56,6 +58,9 @@ def _run(argv=None):
         return apworld(argv)
     if command == 'ap-install':
         return ap_install(argv)
+    if command == 'qol-install':
+        from oot_rando.randomizer.qol_install import main as qol_install
+        return qol_install(argv)
     if command == 'ap-client':
         from oot_rando.archipelago.client import main as client
         return client(argv)
