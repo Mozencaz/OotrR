@@ -80,10 +80,12 @@ check counts over the game window; toggle it with **Ctrl + Shift + O**.
 ## In-game tracker
 
 On an emulator or a Switch, every seed carries a small module that draws a tracker inside the game, in
-the game's own style: press **R + right stick up** to open it and again (or **B**) to close it. While it is
-open the game does not see R, the right stick or B. It shows the items (with their levels), the dungeons'
-small keys and boss keys, the checks found per region and in total, the enemy souls, and a warning when the
-loaded save is not from this seed. It only reads the game's save data; it never changes the game or the save.
+the game's own style: press **R + right stick up** to open it and again (or **B**) to close it. It shows the
+items (with their levels), the dungeons' small keys and boss keys, the checks found per region and in total,
+the enemy souls, and a warning when the loaded save is not from this seed. The D-pad or the left stick moves
+over the regions, **A** opens a region's checks by name (ticked when collected), **B** goes back. While it is
+open the game does not see R, the right stick, A, B, the D-pad or the left stick. It only reads the game's
+save data; it never changes the game or the save.
 
 The seed folder gets `romfs/RandoTracker/seed.trk` (the flags to watch, no item placements; the format is in
 [docs/ingame-tracker-format.md](docs/ingame-tracker-format.md)) and `exefs/subsdk7`, the module. Both are
@@ -95,8 +97,16 @@ build it). It does not apply to a PC port (Hookshot,
 Longshot), which keeps its own overlay.
 
 To leave it out, untick **In-game tracker** in Settings > Customize settings > Quality of life, or add
-`--no-ingame-tracker` to `ap-install`. Seeds generated before this feature have no tracker data: generate
-them again.
+`--no-ingame-tracker` to `ap-install`. A seed generated before this feature, or without the tracker, can get
+it with `update-tracker --add` (below); if its data is too old for it, generate it again.
+
+A newer version of the application brings a newer tracker. **Update the in-game tracker** (Setup > Save,
+next to **Reload the tracker**), or `python -m oot_rando update-tracker SEED_OR_MODS_FOLDER`, gives the
+installed seed this version's `seed.trk` and module without generating it again: those two files and their
+entries in `manifest.json` are rewritten (staged, then moved into place), nothing else in the folder changes,
+so saves of the seed carry on. It refuses a folder that isn't a seed or whose data doesn't match its manifest.
+A seed made without the tracker gets it only when asked (`--add`). Close the game first: the new module loads
+the next time the game starts.
 
 ## Skippable cutscenes and quality of life
 
@@ -190,7 +200,7 @@ format stays available (optional PyYAML).
 
 ```
 src/oot_rando/
-  __main__.py      entry point (GUI; audit, verify, memory, selftest, apworld, ap-install, ap-client)
+  __main__.py      entry point (GUI; audit, verify, memory, selftest, apworld, ap-install, update-tracker, ap-client)
   paths.py         application folders (sources: build/; portable: data/)
   formats/         NUP, zstd/SARC resources, BYML, MSBT
   game/            remake map reading, matching, item forms

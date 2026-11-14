@@ -1,13 +1,17 @@
 """Local artifact verification, conservative installation and manual tracker storage."""
+import copy
 import hashlib
 import json
+import os
 import shutil
+import tempfile
 from pathlib import Path, PurePosixPath
 
 from oot_rando.randomizer.randomizer_core import Settings, settings_identity
 from oot_rando.patching.randomize_kokiri import TITLE, BUILD
 from oot_rando.pc_port import is_port_folder
-from oot_rando.tracker.ingame_bundle import MODULE_FILE
+from oot_rando.tracker import ingame_bundle
+from oot_rando.tracker.ingame_bundle import MODULE_FILE, SEED_FILE
 
 
 def _verify_exefs(directory, manifest):
@@ -200,6 +204,92 @@ def generate_in_mods(nup, title_directory, settings, progress=None, archive=None
     if archive is not None:
         archive_previous_seeds(title_directory, Path(archive), keep=name)
     return destination
+
+
+def has_ingame_tracker(manifest):
+    return SEED_FILE in manifest['files'] or MODULE_FILE in (manifest.get('exefs') or {})
+
+
+def _replace_files(directory, contents):
+    """Put ``contents`` ({relative path: bytes}) in ``directory``, in order: all staged first, then each
+    moved into place; if a move fails, the files already moved are put back."""
+    with tempfile.TemporaryDirectory(prefix='.oot-tracker-', dir=directory) as temporary:
+        stage, staged, created, moved = Path(temporary), [], [], []
+        for index, (relative, data) in enumerate(contents.items()):
+            (stage / f'new-{index}').write_bytes(data)
+            staged.append((directory / relative, stage / f'new-{index}', stage / f'old-{index}'))
+        try:
+            for target, new, old in staged:
+                for folder in reversed(target.parents):
+                    if folder.is_relative_to(directory) and not folder.exists():
+                        folder.mkdir()
+                        created.append(folder)
+                backup = None
+                if target.exists():
+                    os.replace(target, old)
+                    backup = old
+                moved.append((target, backup))
+                os.replace(new, target)
+        except OSError as error:
+            for target, backup in reversed(moved):
+                if backup is not None:
+                    os.replace(backup, target)
+                else:
+                    target.unlink(missing_ok=True)
+            for folder in reversed(created):
+                folder.rmdir()
+            if isinstance(error, PermissionError):
+                raise ValueError('A file of the seed is in use: close the game, then update the in-game tracker again.') from error
+            raise
+
+
+def update_ingame_tracker(directory, add=False):
+    """Bring a seed's in-game tracker to this version of the application: ``romfs/RandoTracker/seed.trk``,
+    ``exefs/subsdk7`` and their entries in ``manifest.json``. Nothing else in the folder changes. A seed made
+    without the tracker gets it only with ``add``. Returns the files written (none when already up to date)."""
+    directory = Path(directory).resolve()
+    if not (directory / 'manifest.json').is_file():
+        raise ValueError('Not a seed folder (no manifest.json): ' + str(directory))
+    raw = (directory / 'manifest.json').read_bytes()
+    try:
+        manifest, catalogue = read_artifact(directory)
+    except (OSError, KeyError, TypeError) as error:
+        raise ValueError('This seed folder is damaged or incomplete (' + str(error) + '): generate it again.') from error
+    if not manifest.get('tracking'):
+        raise ValueError('This seed has no tracking data, so it can\'t have the in-game tracker: generate it again.')
+    if not has_ingame_tracker(manifest) and not add:
+        raise ValueError('This seed was made without the in-game tracker. Ask to add it to update it.')
+    tracking = json.loads((directory / 'tracking.json').read_bytes())
+    updated, files, exefs = copy.deepcopy(manifest), {}, {}
+    try:
+        ingame_bundle.attach(updated, files, exefs, catalogue['checks'], tracking)
+    except (KeyError, TypeError) as error:
+        raise ValueError('This seed\'s tracking data is too old for the in-game tracker: generate it again.') from error
+    contents = {}
+    for relative, data in [(Path('romfs', SEED_FILE), files[SEED_FILE]), (Path('exefs', MODULE_FILE), exefs[MODULE_FILE])]:
+        path = directory / relative
+        if not path.is_file() or path.read_bytes() != data:
+            contents[relative] = data
+    if updated != manifest:
+        newline = '\r\n' if b'\r\n' in raw else '\n'
+        text = json.dumps(updated, ensure_ascii=False, indent=2).replace('\n', newline)
+        contents[Path('manifest.json')] = text.encode('utf-8')
+    if contents:
+        _replace_files(directory, contents)
+        read_artifact(directory)
+    return [relative.as_posix() for relative in contents]
+
+
+def update_ingame_trackers(folder, add=False):
+    """:func:`update_ingame_tracker` on a seed folder, or on each seed of this application in a mods folder.
+    Returns ``[(seed folder, files written)]``."""
+    folder = Path(folder)
+    if (folder / 'manifest.json').is_file():
+        return [(folder, update_ingame_tracker(folder, add))]
+    seeds = sorted(other for other in folder.iterdir() if is_randomizer_seed(other)) if folder.is_dir() else []
+    if not seeds:
+        raise ValueError('Neither a seed folder (no manifest.json) nor a mods folder holding a seed: ' + str(folder))
+    return [(seed, update_ingame_tracker(seed, add)) for seed in seeds]
 
 
 class ManualTracker:

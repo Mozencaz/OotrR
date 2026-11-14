@@ -1,8 +1,11 @@
 """In-game tracker: the seed file format, its export from a seed and its installation. NUP tests need OOT_NUP."""
 import _src_path  # noqa: F401  (src on sys.path)
+import contextlib
 import hashlib
+import io
 import json
 import os
+import shutil
 import struct
 import tempfile
 import unittest
@@ -10,7 +13,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from oot_rando.randomizer.randomizer_core import Settings, generate
-from oot_rando.randomizer.randomizer_services import generate_in_mods, read_artifact
+from oot_rando.randomizer.randomizer_services import (generate_in_mods, read_artifact, update_ingame_tracker,
+                                                      update_ingame_trackers)
+from oot_rando.__main__ import main as command_line
 from oot_rando.paths import resource
 from oot_rando.tracker import ingame_bundle, ingame_format as fmt
 from oot_rando.tracker.check_labels import check_labels
@@ -303,6 +308,141 @@ class InstallTests(unittest.TestCase):
             generate_in_mods('game.nup', title, Settings('off'), archive=Path(directory) / 'a', generate=fake_generate,
                              ingame_tracker=False)
         self.assertEqual(received, [{}, {'ingame_tracker': False}])
+
+
+class UpdateTests(unittest.TestCase):
+    """update-tracker: a seed's seed.trk and subsdk7 brought to this version, nothing else touched."""
+    TRACKER_PATHS = {'romfs/' + ingame_bundle.SEED_FILE, 'exefs/subsdk7'}
+
+    def setUp(self):
+        patcher = patch.object(ingame_bundle, 'module_binary', return_value=FAKE_MODULE)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.mods = Path(directory.name) / '0400486024DEC000'
+        self.mods.mkdir()
+
+    def installed_seed(self, tracker=True):
+        """A seed as generate writes it, whose tracker (if any) came from an older version."""
+        root = self.mods / 'seed'
+        ServiceTests('make_artifact').make_artifact(root, 'update')
+        manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+        root = root.rename(self.mods / ('OoT_Randomizer_' + manifest['seed_id'][:16]))
+        _, checks, tracking = synthetic_seed()
+        tracking.update(seed_id=manifest['seed_id'], schema_version=1)
+        tracking_bytes = json.dumps(tracking, ensure_ascii=False, indent=2).encode('utf-8')
+        if tracker:
+            for relative, data in [(Path('romfs') / ingame_bundle.SEED_FILE, b'RTRK from 0.1.0'),
+                                   (Path('exefs') / 'subsdk7', b'NSO0 module 0.1.0')]:
+                (root / relative).parent.mkdir(parents=True, exist_ok=True)
+                (root / relative).write_bytes(data)
+            manifest['files'] = dict(sorted({**manifest['files'],
+                                             ingame_bundle.SEED_FILE: ingame_bundle.describe(b'RTRK from 0.1.0')}.items()))
+            manifest['exefs'] = {'subsdk7': ingame_bundle.describe(b'NSO0 module 0.1.0')}
+        manifest['tracking'] = {'schema_version': 1, 'sha256': hashlib.sha256(tracking_bytes).hexdigest(),
+                                'new_save_required': True, 'mode': 'save'}
+        for name, data in [('manifest.json', manifest), ('checks.json', {'seed_id': manifest['seed_id'], 'checks': checks}),
+                           ('spoiler.json', {'placements': ['Ice Arrows']})]:
+            (root / name).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+        (root / 'tracking.json').write_bytes(tracking_bytes)
+        read_artifact(root)
+        return root
+
+    @staticmethod
+    def snapshot(root):
+        return {path.relative_to(root).as_posix(): path.read_bytes() for path in root.rglob('*') if path.is_file()}
+
+    def changed(self, before, after):
+        self.assertLessEqual(set(before), set(after))   # nothing removed, and only the tracker's files added
+        self.assertLessEqual(set(after) - set(before), self.TRACKER_PATHS)
+        return {path for path in after if before.get(path) != after[path]}
+
+    def test_only_the_tracker_files_and_their_manifest_entries_change(self):
+        root = self.installed_seed()
+        before = self.snapshot(root)
+        self.assertEqual(update_ingame_tracker(root), ['romfs/' + ingame_bundle.SEED_FILE, 'exefs/subsdk7', 'manifest.json'])
+        after = self.snapshot(root)
+        self.assertEqual(self.changed(before, after), self.TRACKER_PATHS | {'manifest.json'})
+        self.assertEqual(after['exefs/subsdk7'], FAKE_MODULE)
+        self.assertEqual(struct.unpack_from('<H', after['romfs/' + ingame_bundle.SEED_FILE], 4)[0], fmt.VERSION)
+        old, new = (json.loads(data['manifest.json']) for data in (before, after))
+        self.assertEqual(new['files'][ingame_bundle.SEED_FILE],
+                         ingame_bundle.describe(after['romfs/' + ingame_bundle.SEED_FILE]))
+        self.assertEqual(new['exefs'], {'subsdk7': ingame_bundle.describe(FAKE_MODULE)})
+        for manifest in (old, new):
+            del manifest['files'][ingame_bundle.SEED_FILE], manifest['exefs']
+        self.assertEqual(old, new)
+        old_lines, new_lines = before['manifest.json'].splitlines(True), after['manifest.json'].splitlines(True)
+        self.assertEqual(len(old_lines), len(new_lines))   # same layout and line endings: only the four values differ
+        self.assertEqual(len([1 for a, b in zip(old_lines, new_lines) if a != b]), 4)
+        read_artifact(root)
+
+    def test_a_second_update_changes_nothing(self):
+        root = self.installed_seed()
+        update_ingame_tracker(root)
+        before = self.snapshot(root)
+        self.assertEqual(update_ingame_tracker(root), [])
+        self.assertEqual(self.snapshot(root), before)
+
+    def test_a_seed_without_the_tracker_gets_it_only_when_asked(self):
+        root = self.installed_seed(tracker=False)
+        before = self.snapshot(root)
+        with self.assertRaisesRegex(ValueError, 'without the in-game tracker'):
+            update_ingame_tracker(root)
+        self.assertEqual(self.snapshot(root), before)
+        update_ingame_tracker(root, add=True)
+        after = self.snapshot(root)
+        self.assertEqual(self.changed(before, after), self.TRACKER_PATHS | {'manifest.json'})
+        manifest = read_artifact(root)[0]
+        self.assertIn(ingame_bundle.SEED_FILE, manifest['files'])
+        self.assertEqual(update_ingame_tracker(root), [])
+
+    def test_refuses_what_is_not_a_seed_or_does_not_match_its_manifest(self):
+        with self.assertRaisesRegex(ValueError, 'no manifest.json'):
+            update_ingame_tracker(self.mods)
+        with self.assertRaisesRegex(ValueError, 'Neither a seed folder'):
+            update_ingame_trackers(self.mods)
+        for name, change, message in [('tracking.json', lambda t: t.replace(b'4000000000', b'4000000001'), 'Tracking data'),
+                                      ('checks.json', lambda t: t.replace(b'"seed_id": "', b'"seed_id": "0'), 'another seed'),
+                                      ('tracking.json', None, 'damaged or incomplete')]:
+            with self.subTest(name=name, message=message):
+                root = self.installed_seed()
+                if change:
+                    (root / name).write_bytes(change((root / name).read_bytes()))
+                else:
+                    (root / name).unlink()
+                before = self.snapshot(root)
+                with self.assertRaisesRegex(ValueError, message):
+                    update_ingame_tracker(root)
+                self.assertEqual(self.snapshot(root), before)
+                for path in root.parent.iterdir():
+                    shutil.rmtree(path)
+
+    def test_a_file_in_use_leaves_the_seed_as_it_was(self):
+        root = self.installed_seed()
+        before, real_replace, calls = self.snapshot(root), os.replace, []
+
+        def replace(source, target):
+            calls.append(target)
+            if len(calls) == 3:   # the module, after the seed file is in place
+                raise PermissionError('in use')
+            real_replace(source, target)
+        with patch('oot_rando.randomizer.randomizer_services.os.replace', replace):
+            with self.assertRaisesRegex(ValueError, 'in use: close the game'):
+                update_ingame_tracker(root)
+        self.assertEqual(self.snapshot(root), before)
+        self.assertEqual([path.name for path in root.iterdir() if path.name.startswith('.')], [])
+
+    def test_the_command_updates_every_seed_of_a_mods_folder(self):
+        root = self.installed_seed()
+        for expected in ('Updated ' + str(root), 'Already up to date: ' + str(root)):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(command_line(['update-tracker', str(self.mods)]), 0)
+            self.assertIn(expected, output.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(command_line(['update-tracker', str(self.mods / 'missing')]), 1)
 
 
 @unittest.skipUnless(NUP, 'OOT_NUP absent')

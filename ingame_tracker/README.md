@@ -37,7 +37,8 @@ down is sloperinaGZ's menu and is left alone.
 The module is shipped by the randomizer: the application copies it into each seed it generates, as `exefs/subsdk7` next to the
 seed's `romfs/RandoTracker/seed.trk` (the flags to watch, no item placements). It is therefore only active while that
 seed is enabled in the game's Properties > Add-Ons, and it does nothing if `seed.trk` is missing. To leave it out,
-turn off "In-game tracker" in OotrR's install options (or pass `--no-ingame-tracker` to `ap-install`).
+turn off "In-game tracker" in OotrR's install options (or pass `--no-ingame-tracker` to `ap-install`). OotrR's
+"Update the in-game tracker" (or `update-tracker`) puts a newer build in an installed seed.
 
 It reads the game's save data (GameData) in place and never writes to it or calls a game function. It knows main's
 layout for the game builds 1.0.0 and 1.1.1; on another build the panel says "Game version not supported" and nothing
