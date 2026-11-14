@@ -12,13 +12,17 @@ The remake gives an item through three kinds of actors:
 When the game has no native actor of the required form, a derived actor is
 fabricated from a native template (``Obj_Rando_<canonical>`` from the gold
 token pickup, ``Shop_Rando_<canonical>`` from a shop bundle) with the model and
-pouch content of the canonical item. Their behaviour is experimental until an
-in-game pilot confirms it.
+pouch content of the canonical item. A gold skulltula drop is always built on
+the token, as ``<native pickup>_GS`` when the item has a native world pickup.
+Their behaviour is experimental until an in-game pilot confirms it.
 """
 import copy
 
 WORLD_PREFIX = 'Obj_Rando_'
 SHOP_PREFIX = 'Shop_Rando_'
+# Skulltula drop of a native world pickup; keeps the name within MAX_ACTOR_NAME
+# (naming of REALAZK pickup_pack/kit.rs, MIT, ae9e4063).
+KIT_SUFFIX = '_GS'
 WORLD_TEMPLATE = 'Obj_Token_Gold'
 SHOP_TEMPLATE = 'Shop_ArrowBundle_01'
 SHOP_PRICE = 10  # affordable without any wallet upgrade: the logic ignores prices
@@ -41,31 +45,43 @@ NATIVE_WORLD = {
 }
 # Native world pickups found in maps or drop fields → canonical actor.
 WORLD_CANONICAL = {world: canonical for canonical, world in NATIVE_WORLD.items()}
+# Pouch settings of a derived world pickup. The token's AI saves the gold
+# skulltula that dropped it (its Bool64bitKey rows) only when the get event
+# ends, so the event must play on every pickup, even at full capacity.
+WORLD_POUCH_FLAGS = {'PlayGetEventManyTimes': True, 'IsPlayGetEventPouchMax': True}
+
+
+def _kit_native(actor):
+    """Native world pickup of a ``<native>_GS`` skulltula drop, else None."""
+    native = actor.removesuffix(KIT_SUFFIX)
+    return native if native != actor and native in WORLD_CANONICAL and native != WORLD_TEMPLATE else None
+
+
+def is_world_derived(actor):
+    return actor.startswith(WORLD_PREFIX) or _kit_native(actor) is not None
 
 
 def is_derived(actor):
-    return actor.startswith((WORLD_PREFIX, SHOP_PREFIX))
+    return actor.startswith(SHOP_PREFIX) or is_world_derived(actor)
 
 
-# Native world pickups taken with the A button (``PickUpItem`` attention) instead
-# of on contact (``AutoPickUpItem``). Dropped where Link cannot press A (a gold
-# skulltula killed on vines or a wall leaves its drop floating there), they are
-# unreachable: such drops use the derived contact pickup (gold token template).
-MANUAL_PICKUP = frozenset({'Obj_Heart_Piece', 'Obj_Heart_Container'})
-
-
-def form_actor(canonical, form, airborne=False):
+def form_actor(canonical, form, skulltula_drop=False):
     """Actor giving ``canonical`` through a location of the given form.
 
-    ``airborne``: the world pickup appears where Link may be climbing or
-    hanging (gold skulltula drops), so it must be collected on contact.
+    ``skulltula_drop``: a gold skulltula drops the pickup. Only the token's AI
+    saves the skulltula when its drop is collected; the native pickups (rupees,
+    ammo, hearts…) never do, so the skulltula and its check came back. Every
+    other item is dropped by a derived pickup built on the token, which is also
+    collected on contact where Link hangs on vines or walls.
     """
     if form in ('chest', 'event'):
         return canonical
     if form == 'world':
         native = NATIVE_WORLD.get(canonical)
-        if native and not (airborne and native in MANUAL_PICKUP):
+        if native == WORLD_TEMPLATE or (native and not skulltula_drop):
             return native
+        if native:
+            return native + KIT_SUFFIX
         return WORLD_PREFIX + canonical
     if form == 'shop':
         return canonical if canonical.startswith('Shop_') else SHOP_PREFIX + canonical
@@ -92,6 +108,9 @@ def derived_actors(actors):
 
 
 def canonical_of(derived):
+    native = _kit_native(derived)
+    if native:
+        return WORLD_CANONICAL[native]
     for prefix in (WORLD_PREFIX, SHOP_PREFIX):
         if derived.startswith(prefix):
             return derived[len(prefix):]
@@ -181,7 +200,7 @@ def _merge_game_parameters(derived, source, source_components, files, components
 def build_pack(derived, read_pack, codec):
     """Return the SARC bytes of a derived actor and its template pack path."""
     canonical = canonical_of(derived)
-    kind = 'world' if derived.startswith(WORLD_PREFIX) else 'shop'
+    kind = 'world' if is_world_derived(derived) else 'shop'
     template_name = WORLD_TEMPLATE if kind == 'world' else SHOP_TEMPLATE
     template = read_pack(template_name)
     source = read_pack(canonical)
@@ -215,6 +234,8 @@ def build_pack(derived, read_pack, codec):
     pouch_path = f'Component/PouchContentParam/{derived}.game__component__PouchContentParam.bgyml'
     pouch = {'$parent': 'Work/' + _pack_path(pouch_ref)[:-len('.bgyml')] + '.gyml',
              'PouchActor': f'Work/Actor/{canonical}.engine__actor__ActorParam.gyml', 'DefaultAutoGet': True}
+    if kind == 'world':
+        pouch.update(WORLD_POUCH_FLAGS)
     files[pouch_path] = codec.dump({'endian': '<', 'version': 7, 'root': pouch})
     components['PouchContentRef'] = '?' + pouch_path
     _merge_game_parameters(derived, source, source_components, files, components, codec)
@@ -260,7 +281,7 @@ def add_rsdb_rows(tables, derived_list):
     by_id = {name: {row['__RowId']: row for row in rows} for name, rows in tables.items()}
     for derived in derived_list:
         canonical = canonical_of(derived)
-        template = WORLD_TEMPLATE if derived.startswith(WORLD_PREFIX) else SHOP_TEMPLATE
+        template = WORLD_TEMPLATE if is_world_derived(derived) else SHOP_TEMPLATE
         for name in RSDB_TABLES:
             rows = by_id[name]
             if derived in rows:

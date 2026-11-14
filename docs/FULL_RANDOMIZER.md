@@ -10,7 +10,7 @@ and logic are checked statically (`python -m oot_rando verify`); items marked
 | Option | Source | Write into the game |
 |---|---|---|
 | **Chests** (`shuffle_chests`) | every chest, major items included | `Dynamic.Drop__DropActor` of the chest |
-| **Gold Skulltulas** (`tokensanity`: dungeons / overworld / all) | 100 skulltulas = the 100 AP locations | `Drop__DropActor` added to the enemy (native instance parameter) |
+| **Gold Skulltulas** (`tokensanity`: dungeons / overworld / all) | 100 skulltulas = the 100 AP locations | `Drop__DropActor` added to the enemy (native instance parameter); every item but the token is dropped by a pickup built on the token (see below) |
 | **Shops** (`shopsanity`: 1 to 4 items per shop, or random) | 64 stalls, masks excluded | stall `Gyaml`; fixed price of 10 rupees; bought once |
 | **Freestanding items** (`shuffle_freestanding_items`) | non-respawning heart pieces, rupees and hearts | item `Gyaml` |
 | **NPC gifts and minigames** (`shuffle_npc_gifts`) | 29 gifts (`extra_sources.NPC_GIFTS`) | item parameter of the event (`ActorName`, `ReveiveItem`…) via `evfl` |
@@ -62,6 +62,15 @@ a shop…), the generator builds `Obj_Rando_<item>` (behaviour of the gold token
 model and content of the item) or `Shop_Rando_<item>` (behaviour of an arrow
 stall), with their RSDB rows and RESTBL entry. AP "Buy …" purchases never leave
 the shops and keep at least one copy on sale.
+
+Gold skulltula drops: the skulltula hands its saved `Bool64bitKey` row to its drop
+(blackboard `GoldTokenGmdHash`), and only the token's AI writes it, when the get
+event of the pickup ends. A native rupee, heart or ammo pickup never does: the
+skulltula came back and its check was never counted. Every skulltula drop but the
+token is therefore built on the token: `<native pickup>_GS` (e.g. `Obj_Rupee_Red_GS`,
+names of REALAZK's token kits, at most 25 characters) or `Obj_Rando_<item>`. Their
+pouch sets `PlayGetEventManyTimes` and `IsPlayGetEventPouchMax`, so the get event
+plays on every pickup, even at full capacity. The tracker reads the same row.
 
 ## Dungeon-specific keys (`key_adapter.py`)
 
@@ -176,7 +185,9 @@ outside the maps are not covered (except chest events).
    Nabooru…) continue their story; persistence after save/reload.
 2. **Souls**: Queen Gohma does not appear without her soul; the soul item is
    received from a chest; the boss appears afterwards.
-3. **Skulltula**: a gold skulltula carrying another item drops it (and not a token too).
+3. **Skulltula**: a gold skulltula carrying another item (rupee, arrows, heart piece…)
+   drops it (and not a token too); after the pickup the skulltula stays dead after a
+   reload and its check counts in the tracker.
 4. **Derived freestanding item** (`Obj_Rando_*`): visible model, pickup, name, no respawn.
 5. **Shop**: a `Shop_Rando_*` item shows (name, price 10), the purchase gives the item.
 6. **NPC**: e.g. Dampé's digging or bowling gives the placed item and the NPC continues.
