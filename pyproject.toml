@@ -23,4 +23,4 @@ oot-rando = "oot_rando.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-oot_rando = ["logic/world/*.json", "logic/world/*.txt", "logic/world/regions/*.json"]
+oot_rando = ["logic/world/*.json", "logic/world/*.txt", "logic/world/regions/*.json", "resources/ingame_tracker/*"]

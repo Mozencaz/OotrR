@@ -32,6 +32,7 @@ from oot_rando.game.world_maps import SAFE_CATEGORIES, build_world, effective_me
 from oot_rando.game.resource_allocations import allocation, grow_resources, add_resources
 from oot_rando.formats.byml_writer import patch_strings
 from oot_rando.logic import rando_options
+from oot_rando.tracker import ingame_bundle, ingame_icons
 
 GENERATOR_VERSION = '0.9.0'
 ADAPTER_VERSION = 'ap-glitchless-v5'   # v5: progressive tokens (every copy gives the next level)
@@ -299,9 +300,10 @@ def grow_resource_table(files, growths, new_sizes, read, d):
     return allocations
 
 
-def publish_mod(output, files, documents, finish=None):
-    """Write a mod folder atomically: ``romfs/<path>`` for ``files``, then ``documents``
-    (name to bytes or text), then whatever ``finish(staging)`` adds. ``output`` must not exist."""
+def publish_mod(output, files, documents, finish=None, exefs=None):
+    """Write a mod folder atomically: ``romfs/<path>`` for ``files``, ``exefs/<name>`` for ``exefs``,
+    then ``documents`` (name to bytes or text), then whatever ``finish(staging)`` adds.
+    ``output`` must not exist."""
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.oot-stage-', dir=output.parent) as temporary:
@@ -311,6 +313,9 @@ def publish_mod(output, files, documents, finish=None):
             destination = staging / 'romfs' / path
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(data)
+        for name, data in (exefs or {}).items():
+            (staging / 'exefs').mkdir(exist_ok=True)
+            (staging / 'exefs' / name).write_bytes(data)
         for name, data in documents.items():
             if isinstance(data, bytes):
                 (staging / name).write_bytes(data)
@@ -325,11 +330,12 @@ def json_document(value):
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
-def generate(nup_path, output, settings, progress=None, save_seed_id=None):
+def generate(nup_path, output, settings, progress=None, save_seed_id=None, ingame_tracker=True):
     """Publish a complete new mod directory, never install or modify a game/save.
 
     ``save_seed_id``: an earlier seed of the same Archipelago slot whose saves this one
-    continues (its save marker is kept); by default the seed binds its own saves."""
+    continues (its save marker is kept); by default the seed binds its own saves.
+    ``ingame_tracker``: ship the in-game tracker module and its data file with the seed."""
     settings.validate_supported()
     output = Path(output)
     if output.exists():
@@ -666,6 +672,11 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
                 if row:
                     actor = placement.get('after', '')
                     row['reward'] = reward_label(actor_item(actor, placement.get('folder', '')), actor)
+        exefs = {}
+        if ingame_tracker:
+            report('In-game tracker: the items\' icons from the game…')
+            icons = ingame_icons.nup_icons(nup, d)
+            ingame_bundle.attach(manifest, files, exefs, checks['checks'], tracking, icons)
         tracking_bytes = json.dumps(tracking, ensure_ascii=False, indent=2).encode('utf-8')
         manifest['tracking'] = {'schema_version': 1, 'sha256': sha256(tracking_bytes),
                                 'new_save_required': True, 'mode': 'save'}
@@ -676,7 +687,7 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
             write_text(load_report(staging), staging / SPOILER_TEXT)
         publish_mod(output, files, {'manifest.json': json_document(manifest), 'checks.json': json_document(checks),
                                     'spoiler.json': json_document(spoiler), 'tracking.json': tracking_bytes},
-                    write_spoiler_text)
+                    write_spoiler_text, exefs)
         report('Generation done.')
         return manifest
     finally:
