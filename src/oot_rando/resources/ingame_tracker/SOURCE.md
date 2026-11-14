@@ -9,10 +9,10 @@ version 3 or later (the text is in `LICENSE` here), built from [ocarinaMIDI](htt
 [sloperinaGZ](https://github.com/PracticeROM/sloperina)'s GPL-3 code.
 
 - Source: the `ingame_tracker/` folder of this repository (GPL-3, with its own `LICENSE`)
-- Commit: `1377b8a` (module version 0.2.0)
-- Built with devkitA64: `make ship` in `ingame_tracker/` at that commit (it embeds `0.2.0 (v0.5.1-8-g1377b8a)`); the build is
-  the same from any folder, so `make PACKAGE_VERSION="0.2.0 (v0.5.1-8-g1377b8a)"` there gives this binary again
-- sha256 of `subsdk7`: `9217a28b57bf83e1bcd6aacffdaf7ba6917e01ac4947140bd61cb7526da8fb9a` (69,731 bytes)
+- Commit: `5913044` (module version 0.2.0)
+- Built with devkitA64: `make ship` in `ingame_tracker/` at that commit (it embeds `0.2.0 (v0.5.1-11-g5913044)`); the build is
+  the same from any folder, so `make PACKAGE_VERSION="0.2.0 (v0.5.1-11-g5913044)"` there gives this binary again
+- sha256 of `subsdk7`: `e51bbd7e74a28eb7e73765044ae6466eb29c83859b396e839c2ea726a0de0501` (75,825 bytes)
 
 The source of this exact binary is that folder at the commit above. To change the module, change it there, run `make ship` in that
 folder (it copies the new build here and prints its checksum and size), and update this file's commit and checksum (the tests check
