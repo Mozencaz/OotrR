@@ -198,7 +198,7 @@ class ShippedModuleTests(unittest.TestCase):
     def test_the_module_comes_with_its_licence_and_source(self):
         folder = resource('resources', 'ingame_tracker')
         self.assertIn('GNU GENERAL PUBLIC LICENSE', (folder / 'LICENSE').read_text(encoding='utf-8'))
-        self.assertIn('https://github.com/waze3174/ootr-ingame-tracker', (folder / 'SOURCE.md').read_text(encoding='utf-8'))
+        self.assertIn('`ingame_tracker/` folder of this repository', (folder / 'SOURCE.md').read_text(encoding='utf-8'))
 
 
 class InstallTests(unittest.TestCase):

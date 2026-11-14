@@ -8,10 +8,11 @@ It is **not** part of this application's MIT licence: it is free software under 
 version 3 or later (the text is in `LICENSE` here), built from [ocarinaMIDI](https://github.com/waze3174/ocarinaMIDI) and
 [sloperinaGZ](https://github.com/PracticeROM/sloperina)'s GPL-3 code.
 
-- Source: <https://github.com/waze3174/ootr-ingame-tracker>
-- Commit: `565cb4e` (version 0.1.0)
-- Built with devkitA64 (`make`, see the module's docs/BUILDING.md)
+- Source: the `ingame_tracker/` folder of this repository (GPL-3, with its own `LICENSE`)
+- Commit: `d403cc1` (module version 0.1.0; it was `565cb4e` in the repository the module lived in before)
+- Built with devkitA64: `make PACKAGE_VERSION="0.1.0 (565cb4e)"` in `ingame_tracker/` (see its `docs/BUILDING.md`)
 - sha256 of `subsdk7`: `054734cd8690585a1be78ac76296f9e33daeb94fd3b0ea559346a4faa3b70d8e` (66,723 bytes)
 
-The source of this exact binary is the commit above in that repository. To change the module, change it there and copy the new
-build and this file's commit and checksum here (the tests check that the checksum matches the binary).
+The source of this exact binary is that folder at the commit above. To change the module, change it there, run `make ship` in that
+folder (it copies the new build here and prints its checksum and size), and update this file's commit and checksum (the tests check
+that the checksum matches the binary).
