@@ -114,9 +114,9 @@ a picture has its own 36 elements per slot.
 `content:/RandoTracker/icons.bin` ([docs/ingame-tracker-format.md](../../docs/ingame-tracker-format.md)), which the randomizer writes on the
 player's PC from their own game: for each item of the grid, the game's picture as its BNTX stores it (ASTC 4x4 blocks in the GPU's
 block-linear layout) and the BNTX's description of that layout. Nothing is decoded on either side: the module gives the bytes to NVN as an
-ASTC 4x4 texture with that packaged layout (`nvnTextureBuilderSetPackagedTextureLayout`), as sloperinaGZ's `gpuui.c` makes textures of the
-game's own pictures (master 5287f64). They are sampled as unorm whatever the BNTX says, as sloperinaGZ does: no sRGB decode, like
-everything else the panel draws.
+ASTC 4x4 texture with that packaged layout (`nvnTextureBuilderSetPackagedTextureLayout`), as sloperinaGZ's `gpuui.c` (`make_images`,
+master 5287f64) makes textures of the game's controller pictures; sloperinaGZ decodes its icons on the CPU instead (`astc.c`). They are
+sampled as unorm whatever the BNTX says, as sloperinaGZ's `gameimage.c` does: no sRGB decode, like everything else the panel draws.
 
 The pictures are large (up to 704 KB each, about 7 MB for the 27) and the game's heap has little to spare (sloperinaGZ's NATIVE_UI.md and
 FINDINGS.md: it refused allocations past about 10 to 11 MB), so they are not kept. Each is shrunk once, on the GPU, into a 64-pixel slot
