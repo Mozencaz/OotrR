@@ -1,7 +1,8 @@
 # Live test plan
 
-Nothing in 0.1.0 has run in the game. The PC tests (`make test`) cover the seed file's parser, the state, the game-data reader over a fake
-GameData, and the controls. These steps cover the rest. Back up the save first.
+Nothing in 0.1.0 or 0.2.0 has run in the game. The PC tests (`make test`) cover the seed file's parser (versions 1 and 2), the state, a
+region's list of checks, the game-data reader over a fake GameData, the controls (repeat, what the game doesn't see) and the browsing.
+These steps cover the rest. Back up the save first.
 
 ## Setup
 
@@ -27,8 +28,19 @@ R3 + D-pad).
 - In a new game of this seed: the header shows the seed's id and no warning. In a save started without the seed: "This save is not from
   this seed".
 - The panel has the game's look (dark box, gold title), fits 1280x720 and 1920x1080, doesn't flicker and doesn't slow the game down.
-- While it is open, R and the right stick do nothing in the game (the camera stays still); B closes it and doesn't act in the game.
+- While it is open, R, the right stick, A, B, the D-pad and the left stick do nothing in the game (the camera and Link stay still).
+- B closes it and doesn't act in the game (no sword swing, even if B is held a moment after closing).
 - R + right stick up again closes it. Opening and closing ten times in a row works.
+
+## 3b. Browsing the regions
+
+- The D-pad and the left stick move the gold highlight over the regions: down a column, then the next; left and right across columns.
+  Held, it repeats after a moment.
+- A on a region shows its checks with their names, as the desktop tracker names them. Collected ones have a filled green box, missing ones
+  an empty white box. A large region (Kokiri Forest, 90 checks) scrolls with up and down, a page at a time with left and right; the
+  heading's `N-M of T` follows.
+- Pick up a check of the open list: its box fills within half a second.
+- B goes back to the regions, with the same region highlighted; B again closes the panel.
 
 ## 4. What it shows
 

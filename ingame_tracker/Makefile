@@ -27,8 +27,13 @@ OBJDIR                = obj
 BINDIR                = bin
 DISTDIR               = dist
 
+# The folder this is built in, as the compiler records it (devkitPro's MSYS2 gives the Windows form): mapped to ".",
+# so the debug info, and with it the build id, is the same from any folder.
+BUILD_FOLDER         := $(shell pwd -W 2>/dev/null || pwd)
+
 ARCHFLAGS             = -march=armv8-a+crc+crypto -mtune=cortex-a78 -mtp=soft -fPIC
 CFLAGS                = -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter $(ARCHFLAGS) \
+                        -ffile-prefix-map=$(BUILD_FOLDER)=. \
                         -fvisibility=hidden -ffunction-sections -fdata-sections \
                         -fno-asynchronous-unwind-tables -fno-unwind-tables \
                         -fno-stack-protector -fno-plt -fno-common \

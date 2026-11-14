@@ -1,12 +1,13 @@
 """In-game tracker of a seed: the data file it reads and the module that draws it.
 
 A seed folder gets ``romfs/RandoTracker/seed.trk`` (spoiler-free: seed and goal markers,
-region names, the save flags to observe) and ``exefs/subsdk7``, the prebuilt GPL-3 module
+region and check names, the save flags to observe) and ``exefs/subsdk7``, the prebuilt GPL-3 module
 that reads them while the game runs (R + right stick up). Both are listed in the manifest.
 """
 import hashlib
 
 from oot_rando.paths import resource
+from oot_rando.tracker.check_labels import check_labels
 from oot_rando.tracker import ingame_format as fmt
 
 SEED_FILE = 'RandoTracker/seed.trk'
@@ -17,13 +18,13 @@ SEED_ID_LENGTH = 16   # the length the seed folder name uses
 
 
 def _regions(checks, tracking_rows):
-    """Observable checks grouped by region, in catalogue order."""
-    regions = {}
+    """Observable checks grouped by region, in catalogue order, named as the window's tracker names them."""
+    regions, labels = {}, check_labels(checks)
     for check in checks:
         reference = tracking_rows.get(check['id'], {}).get('collection')
         if reference:
             regions.setdefault(check['region'], []).append(
-                (COLLECTION_KINDS[reference['type']], int(reference['hash'])))
+                (COLLECTION_KINDS[reference['type']], int(reference['hash']), labels[check['id']]))
     return list(regions.items())
 
 

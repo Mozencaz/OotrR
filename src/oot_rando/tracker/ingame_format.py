@@ -1,17 +1,18 @@
 """Binary seed file read by the in-game tracker module (``RandoTracker/seed.trk``).
 
 The layout is documented in ``docs/ingame-tracker-format.md``; the module parses exactly this.
-Little-endian, version 1. ``build`` writes the file, ``parse`` is the reference reader the
-tests use (the module validates the same bounds).
+Little-endian. ``build`` writes version 2 (version 1 without the checks' names), ``parse`` is the
+reference reader the tests use and reads both (the module validates the same bounds).
 """
 import struct
 
 MAGIC = b'RTRK'
-VERSION = 1
+VERSION = 2
+READABLE_VERSIONS = (1, 2)   # version 1: the checks have no names
 
 HEADER = struct.Struct('<4sHH16I')
 REGION = struct.Struct('<III')       # name offset, first check, check count
-CHECK = struct.Struct('<QII')        # key, kind, reserved
+CHECK = struct.Struct('<QII')        # key, kind, name offset (reserved and 0 in version 1)
 ITEM = struct.Struct('<IHH')         # name offset, first rule, rule count
 RULE = struct.Struct('<IHH')         # Bool hash, level, reserved
 KEYS = struct.Struct('<IBBHIIII')    # name offset, flags, small key total, reserved, found, held, ring, boss
@@ -53,7 +54,7 @@ def _bounded(value, limit, what):
 def build(seed_id, seed_marker, goal_marker, regions, items, keys):
     """Serialise the seed file.
 
-    ``regions``: ``[(name, [(kind, key)])]``; ``items``: ``[(name, [(hash, level)])]``;
+    ``regions``: ``[(name, [(kind, key, check name)])]``; ``items``: ``[(name, [(hash, level)])]``;
     ``keys``: ``[{'name', 'flags', 'total', 'found', 'held', 'ring', 'boss'}]``.
     """
     if len(regions) > MAX_REGIONS or len(keys) > MAX_KEY_ROWS:
@@ -63,7 +64,8 @@ def build(seed_id, seed_marker, goal_marker, regions, items, keys):
     region_rows, check_rows, item_rows, rule_rows = [], [], [], []
     for name, checks in regions:
         region_rows.append(REGION.pack(strings.add(name), len(check_rows), len(checks)))
-        check_rows.extend(CHECK.pack(_bounded(key, MAX_U64, 'check key'), kind, 0) for kind, key in checks)
+        check_rows.extend(CHECK.pack(_bounded(key, MAX_U64, 'check key'), kind, strings.add(check_name))
+                          for kind, key, check_name in checks)
     for name, rules in items:
         item_rows.append(ITEM.pack(strings.add(name), _bounded(len(rule_rows), MAX_U16, 'rule index'),
                                    _bounded(len(rules), MAX_U16, 'rule count')))
@@ -110,8 +112,8 @@ def parse(data):
     if len(data) < HEADER.size:
         raise ValueError('File shorter than its header.')
     magic, version, header_size, *fields = HEADER.unpack_from(data)
-    if magic != MAGIC or version != VERSION or header_size != HEADER.size:
-        raise ValueError('Not a version 1 seed file.')
+    if magic != MAGIC or version not in READABLE_VERSIONS or header_size != HEADER.size:
+        raise ValueError('Not a seed file of a version this reader knows.')
     header = dict(zip(HEADER_FIELDS, fields))
     if header['file_size'] != len(data):
         raise ValueError('File size differs from the header.')
@@ -121,11 +123,11 @@ def parse(data):
     for table, children in ((regions, checks), (items, rules)):
         if any(first + count > len(children) for _, first, count in table):
             raise ValueError('A table row leaves the table it points into.')
+    named = [(kind, key, _string(data, header, check_name)) for key, kind, check_name in checks]
     return {
         'seed_id': _string(data, header, header['seed_id_offset']),
         'seed_marker': header['seed_marker'], 'goal_marker': header['goal_marker'],
-        'regions': [(_string(data, header, name), [(kind, key) for key, kind, _ in checks[first:first + count]])
-                    for name, first, count in regions],
+        'regions': [(_string(data, header, name), named[first:first + count]) for name, first, count in regions],
         'items': [(_string(data, header, name), [(h, level) for h, level, _ in rules[first:first + count]])
                   for name, first, count in items],
         'keys': [{'name': _string(data, header, name), 'flags': flags, 'total': total, 'found': found,

@@ -13,19 +13,24 @@ save has found:
 - each dungeon's small keys found out of the total and its boss key;
 - the checks found, per region and in total, as `collected / trackable` (a check without a save flag can't be
   observed, so it isn't counted), and the enemy souls if the seed has them;
+- each region's checks by name, ticked when collected, so you can see what's still missing there;
 - the seed's id, a warning when the save isn't from this seed, and "Goal reached".
 
-Version 0.1.0. **Not yet tested in the game**; see [docs/TESTING.md](docs/TESTING.md).
+Version 0.2.0. **Not yet tested in the game**; see [docs/TESTING.md](docs/TESTING.md).
 
 ## Controls
 
 | | |
 |---|---|
 | R + right stick up | open the panel, or close it |
-| B | close it |
+| D-pad or left stick | move the highlight over the regions; in a region's list, scroll (left and right: a page). Held, it repeats |
+| A | open the highlighted region's list of checks |
+| B | back to the regions, or close the panel |
 
-While the panel is open (and while the combination is held) the game doesn't see R, the right stick (so the camera
-stays still) or, once it's open, B. R + right stick down is sloperinaGZ's menu and is left alone.
+While the panel is open the game doesn't see R, the right stick (so the camera stays still), A, B, the D-pad or the left
+stick (Link stands still); while the combination is held, it doesn't see R or the right stick. A button still held when the
+panel closes stays hidden from the game until it's let go, so closing with B doesn't also swing the sword. R + right stick
+down is sloperinaGZ's menu and is left alone.
 
 ## What it needs
 

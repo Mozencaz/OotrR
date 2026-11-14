@@ -9,7 +9,8 @@ The module is GPL-3 and its source is in this repository, in [`ingame_tracker/`]
 `content:/RandoTracker/seed.trk` and compares it with the running game's save flags. It only reads memory.
 
 `seed.trk` holds no placement: no item or reward of any check. It lists which flags to observe, grouped by the
-region names the desktop tracker shows. The writer is `src/oot_rando/tracker/ingame_format.py` (`build`); `parse`
+region names the desktop tracker shows, with each check's name as the desktop tracker shows it
+(`src/oot_rando/tracker/check_labels.py`). The writer is `src/oot_rando/tracker/ingame_format.py` (`build`); `parse`
 there is the reference reader the tests use. The module validates the same bounds and ignores a file that fails.
 
 ## Layout
@@ -22,7 +23,7 @@ string table, regions, checks, items, rules, keys; each table starts 4-byte alig
 | Offset | Type | Field |
 |---|---|---|
 | 0 | char[4] | magic `RTRK` |
-| 4 | u16 | version (1) |
+| 4 | u16 | version (2; 1 in seeds made before the checks had names) |
 | 6 | u16 | header size (72) |
 | 8 | u32 | file size |
 | 12 | u32 | seed marker: Bool hash, true in a save started with this seed |
@@ -37,9 +38,10 @@ string table, regions, checks, items, rules, keys; each table starts 4-byte alig
 | 64 | u32, u32 | keys: offset, count |
 
 A reader rejects the file unless the magic, the version, the header size and the file size match, and every table
-lies inside the file. Newer versions may add tables or fields; a reader of version 1 refuses other versions.
-Version 1 holds at most 64 regions and 16 key rows (the module keeps a fixed-size state for each); the writer
-refuses more.
+lies inside the file. Newer versions may add tables or fields; a reader refuses versions it doesn't know. Version 2
+only gives the checks' reserved field a meaning (their name); a reader of version 2 reads version 1 files, whose
+checks are then unnamed. A file holds at most 64 regions and 16 key rows (the module keeps a fixed-size state for
+each); the writer refuses more.
 
 ### String table
 
@@ -64,11 +66,12 @@ others have no save flag), so the count is "trackable"; a region without such a 
 |---|---|---|
 | 0 | u64 | key |
 | 8 | u32 | kind: 1 = Bool (key is the u32 hash), 2 = Bool64bitKey (key is the 64-bit key) |
-| 12 | u32 | reserved (0) |
+| 12 | u32 | name: string offset (version 2); reserved and 0 in version 1, which reads as the empty string |
 
 A check is collected when the game's flag for its key reads true. A key the game does not know is unknown, not
 false. Bool64bitKey keys live in a table that is sorted at the start and followed by unsorted records appended by
-the seed: a lookup binary-searches the sorted head and scans the tail.
+the seed: a lookup binary-searches the sorted head and scans the tail. A check's name must be a string offset inside
+the table, like every other string; a check without a name (version 1) is shown by its number in its region.
 
 ### Items (8 bytes each) and rules (8 bytes each)
 

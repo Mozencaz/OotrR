@@ -49,6 +49,15 @@ static bool regions_fit(const trk_t *trk)
   return true;
 }
 
+/* every check's name lies in the string table */
+static bool names_fit(const trk_t *trk)
+{
+  for (uint32_t i = 0; i < trk->check_count; i++)
+    if (trk_check(trk, i).name >= trk->strings_size)
+      return false;
+  return true;
+}
+
 /* every item's rules lie in the rule table */
 static bool items_fit(const trk_t *trk)
 {
@@ -66,7 +75,8 @@ static bool header_ok(const uint8_t *data, size_t size, const char **why)
     *why = "not a seed file";
     return false;
   }
-  if (le16(data + H_VERSION) != TRK_VERSION || le16(data + H_HEADER_SIZE) != HEADER_SIZE) {
+  uint16_t version = le16(data + H_VERSION);
+  if (version < TRK_OLDEST_VERSION || version > TRK_VERSION || le16(data + H_HEADER_SIZE) != HEADER_SIZE) {
     *why = "another version of the seed file";
     return false;
   }
@@ -80,7 +90,7 @@ static bool header_ok(const uint8_t *data, size_t size, const char **why)
 static void read_header(trk_t *trk, const uint8_t *data, size_t size)
 {
   *trk = (trk_t){
-    .data = data, .size = size,
+    .data = data, .size = size, .version = le16(data + H_VERSION),
     .seed_marker = le32(data + H_SEED_MARKER), .goal_marker = le32(data + H_GOAL_MARKER),
     .seed_id = le32(data + H_SEED_ID),
     .strings_at = le32(data + H_STRINGS_AT), .strings_size = le32(data + H_STRINGS_SIZE),
@@ -119,6 +129,10 @@ bool trk_parse(trk_t *trk, const uint8_t *data, size_t size, const char **why)
     *why = "a region or an item points outside its table";
     return false;
   }
+  if (!names_fit(trk)) {
+    *why = "a check's name is outside the string table";
+    return false;
+  }
   return true;
 }
 
@@ -136,7 +150,7 @@ trk_region_t trk_region(const trk_t *trk, uint32_t index)
 trk_check_t trk_check(const trk_t *trk, uint32_t index)
 {
   const uint8_t *row = trk->data + trk->checks_at + (size_t)index * CHECK_SIZE;
-  return (trk_check_t){ le64(row), le32(row + 8) };
+  return (trk_check_t){ le64(row), le32(row + 8), le32(row + 12) };
 }
 
 trk_item_t trk_item(const trk_t *trk, uint32_t index)

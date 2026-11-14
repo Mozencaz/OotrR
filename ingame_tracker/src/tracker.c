@@ -118,6 +118,20 @@ static void compute_keys(const trk_t *seed, const flag_source_t *flags, tracker_
   }
 }
 
+uint32_t tracker_check_rows(const trk_t *seed, const flag_source_t *flags, uint32_t region, uint32_t first,
+                            check_row_t *rows, uint32_t room)
+{
+  if (region >= seed->region_count)
+    return 0;
+  trk_region_t checks = trk_region(seed, region);
+  uint32_t filled = 0;
+  for (uint32_t i = first; i < checks.check_count && filled < room; i++, filled++) {
+    trk_check_t check = trk_check(seed, checks.first_check + i);
+    rows[filled] = (check_row_t){ trk_string(seed, check.name), i + 1, (uint8_t)check_flag(&check, flags) };
+  }
+  return filled;
+}
+
 void tracker_compute(const trk_t *seed, const flag_source_t *flags, tracker_state_t *state)
 {
   *state = (tracker_state_t){ .link = link_of(seed, flags) };

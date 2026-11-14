@@ -45,6 +45,15 @@ typedef struct {
   uint32_t unreadable; /* trackable checks whose flag the game doesn't have: not counted as collected */
 } tracker_state_t;
 
+typedef struct {
+  const char *name; /* points into the seed file; "" if the file has no names (version 1) */
+  uint32_t number;  /* its place in its region, from 1 */
+  uint8_t flag;     /* gd_flag_t: collected, missing or unknown */
+} check_row_t;
+
 void tracker_compute(const trk_t *seed, const flag_source_t *flags, tracker_state_t *state);
+/* Up to `room` of region `region`'s checks from its `first`; how many were filled. */
+uint32_t tracker_check_rows(const trk_t *seed, const flag_source_t *flags, uint32_t region, uint32_t first,
+                            check_row_t *rows, uint32_t room);
 
 #endif

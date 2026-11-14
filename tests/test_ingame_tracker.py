@@ -13,6 +13,7 @@ from oot_rando.randomizer.randomizer_core import Settings, generate
 from oot_rando.randomizer.randomizer_services import generate_in_mods, read_artifact
 from oot_rando.paths import resource
 from oot_rando.tracker import ingame_bundle, ingame_format as fmt
+from oot_rando.tracker.check_labels import check_labels
 from test_randomizer_services import ServiceTests
 
 NUP = os.environ.get('OOT_NUP')
@@ -22,8 +23,9 @@ FAKE_MODULE = b'NSO0 fake module'
 
 def sample_file():
     return fmt.build('0123456789abcdef', 1220450581, 3488204275,
-                     [('Kokiri Forest', [(fmt.KIND_BOOL, 1740986978), (fmt.KIND_BOOL64, 2056926167552020049)]),
-                      ('Deku Tree', [(fmt.KIND_BOOL, 7)])],
+                     [('Kokiri Forest', [(fmt.KIND_BOOL, 1740986978, "Mido's House Chest"),
+                                         (fmt.KIND_BOOL64, 2056926167552020049, 'GS Kokiri Bean Patch')]),
+                      ('Deku Tree', [(fmt.KIND_BOOL, 7, 'Deku Tree Map Chest')])],
                      [('Bomb Bag', [(2525649529, 3), (2999220442, 2)]), ('Ice Arrows', [(1552887961, 1)])],
                      [{'name': 'Forest Temple', 'flags': fmt.KEY_SMALL | fmt.KEY_BOSS, 'total': 5,
                        'found': 11, 'held': 12, 'ring': 13, 'boss': 14}])
@@ -34,8 +36,9 @@ class FormatTests(unittest.TestCase):
         parsed = fmt.parse(sample_file())
         self.assertEqual(parsed['seed_id'], '0123456789abcdef')
         self.assertEqual((parsed['seed_marker'], parsed['goal_marker']), (1220450581, 3488204275))
-        self.assertEqual(parsed['regions'], [('Kokiri Forest', [(1, 1740986978), (2, 2056926167552020049)]),
-                                             ('Deku Tree', [(1, 7)])])
+        self.assertEqual(parsed['regions'], [('Kokiri Forest', [(1, 1740986978, "Mido's House Chest"),
+                                                               (2, 2056926167552020049, 'GS Kokiri Bean Patch')]),
+                                             ('Deku Tree', [(1, 7, 'Deku Tree Map Chest')])])
         self.assertEqual(parsed['items'], [('Bomb Bag', [(2525649529, 3), (2999220442, 2)]),
                                            ('Ice Arrows', [(1552887961, 1)])])
         self.assertEqual(parsed['keys'][0]['name'], 'Forest Temple')
@@ -49,7 +52,23 @@ class FormatTests(unittest.TestCase):
     def test_header_layout_is_the_documented_one(self):
         data = sample_file()
         self.assertEqual(data[:4], b'RTRK')
-        self.assertEqual(struct.unpack_from('<HHIII', data, 4), (1, 72, len(data), 1220450581, 3488204275))
+        self.assertEqual(struct.unpack_from('<HHIII', data, 4), (2, 72, len(data), 1220450581, 3488204275))
+
+    def test_version_1_files_still_read_with_unnamed_checks(self):
+        data = bytearray(sample_file())
+        struct.pack_into('<H', data, 4, 1)
+        checks_offset, check_count = struct.unpack_from('<II', data, 40)
+        for index in range(check_count):
+            struct.pack_into('<I', data, checks_offset + index * fmt.CHECK.size + 12, 0)   # reserved in version 1
+        parsed = fmt.parse(bytes(data))
+        self.assertEqual(parsed['regions'][0][1], [(1, 1740986978, ''), (2, 2056926167552020049, '')])
+
+    def test_a_check_name_outside_the_strings_is_refused(self):
+        data = bytearray(sample_file())
+        checks_offset, strings_size = struct.unpack_from('<I', data, 40)[0], struct.unpack_from('<I', data, 28)[0]
+        struct.pack_into('<I', data, checks_offset + 12, strings_size)
+        with self.assertRaises(ValueError):
+            fmt.parse(bytes(data))
 
     def test_malformed_files_are_refused(self):
         data = bytearray(sample_file())
@@ -60,7 +79,8 @@ class FormatTests(unittest.TestCase):
             return bytes(copy)
         broken = {
             'magic': b'XXXX' + bytes(data[4:]),
-            'version': changed(4, '<H', 2),
+            'version': changed(4, '<H', 3),
+            'version 0': changed(4, '<H', 0),
             'header size': changed(6, '<H', 64),
             'truncated': bytes(data[:-1]),
             'longer': bytes(data) + b'\0',
@@ -100,15 +120,17 @@ class FormatTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             fmt.build('x', 1 << 32, 0, [], [], [])
         with self.assertRaises(ValueError):
-            fmt.build('x', 0, 0, [('r', [(fmt.KIND_BOOL, 1 << 64)])], [], [])
+            fmt.build('x', 0, 0, [('r', [(fmt.KIND_BOOL, 1 << 64, 'c')])], [], [])
         with self.assertRaises(ValueError):
             fmt.build('x', 0, 0, [], [('Bow', [(1, 1 << 16)])], [])
 
 
 def synthetic_seed():
-    checks = [{'id': 'a', 'region': 'Kokiri Forest'}, {'id': 'b', 'region': 'Deku Tree'},
-              {'id': 'c', 'region': 'Kokiri Forest'}, {'id': 'd', 'region': 'Lost Woods'},
-              {'id': 'e', 'region': 'Deku Tree'}]
+    checks = [{'id': 'a', 'region': 'Kokiri Forest', 'name': 'Mido Chest'},
+              {'id': 'b', 'region': 'Deku Tree', 'name': 'DekuTree#123', 'category': 'world_chests'},
+              {'id': 'c', 'region': 'Kokiri Forest', 'name': 'Shop Item 1'},
+              {'id': 'd', 'region': 'Lost Woods', 'name': 'Skull Kid'},
+              {'id': 'e', 'region': 'Deku Tree', 'name': 'Slingshot Chest'}]
     secret = 'Ice Arrows'
     rows = {'a': {'collection': {'type': 'bool', 'hash': '100'}, 'reward': secret, 'item': secret, 'actor': 'Item_X'},
             'b': {'collection': {'type': 'bool64', 'hash': '18446744073709551615'}, 'reward': 'Bomb Bag'},
@@ -133,8 +155,18 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(parsed['seed_id'], 'f' * 16)
         self.assertEqual(parsed['seed_marker'], 4000000000)
         self.assertEqual(parsed['goal_marker'], 0)
-        self.assertEqual(parsed['regions'], [('Kokiri Forest', [(fmt.KIND_BOOL, 100)]),
-                                             ('Deku Tree', [(fmt.KIND_BOOL64, (1 << 64) - 1), (fmt.KIND_BOOL, 200)])])
+        self.assertEqual(parsed['regions'], [('Kokiri Forest', [(fmt.KIND_BOOL, 100, 'Mido Chest')]),
+                                             ('Deku Tree', [(fmt.KIND_BOOL64, (1 << 64) - 1, 'Chest 1'),
+                                                            (fmt.KIND_BOOL, 200, 'Slingshot Chest')])])
+
+    def test_check_names_are_the_ones_the_window_tracker_shows(self):
+        manifest, checks, tracking = synthetic_seed()
+        parsed = fmt.parse(ingame_bundle.seed_file(manifest, checks, tracking))
+        labels = check_labels(checks)
+        exported = [name for _, region in parsed['regions'] for _, _, name in region]
+        self.assertEqual(exported, [labels[c['id']] for c in checks if tracking['checks'][c['id']]['collection']])
+        self.assertEqual(labels['b'], 'Chest 1')   # a world chest: numbered in its region, as in the window
+        self.assertEqual(labels['e'], 'Slingshot Chest')
 
     def test_goal_marker_is_written_when_the_seed_has_one(self):
         manifest, checks, tracking = synthetic_seed()
@@ -179,7 +211,7 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(parsed['seed_marker'], int(tracking['seed_marker']))
         self.assertEqual(parsed['goal_marker'], int(tracking['goal_marker']))
         self.assertEqual(sum(len(rules) for _, rules in parsed['items']), len(tracking['inventory']))
-        self.assertEqual({kind for _, c in parsed['regions'] for kind, _ in c}, {fmt.KIND_BOOL, fmt.KIND_BOOL64})
+        self.assertEqual({kind for _, c in parsed['regions'] for kind, _, _ in c}, {fmt.KIND_BOOL, fmt.KIND_BOOL64})
         data = ingame_bundle.seed_file(manifest, checks, tracking)
         rewards = {r['reward'] for r in tracking['checks'].values() if r['reward']} - {name for name, _ in parsed['items']}
         self.assertTrue(rewards)

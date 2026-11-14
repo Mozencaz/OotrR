@@ -1,7 +1,7 @@
 /* The tracker panel in the game's own style (see trackerui.h). The box, the gold title over a hairline and
  * the type are sloperinaGZ's menu in its game style, at its sizes: a font pixel is a 360th of the picture's
  * height (3 pixels at 1080p). The sections follow OotrR's overlay: the items in rows, the dungeons' keys, the
- * checks found by region. */
+ * checks found by region, one of them highlighted; or, with a region's list open, its checks. */
 #include "trackerui.h"
 
 #include "gamefont.h"
@@ -34,9 +34,17 @@
 #define KEYS_ROW_FP       13
 #define SUMMARY_ROW_FP    13
 #define REGION_ROW_FP     11
-#define REGION_COLUMNS    3
+#define REGION_COLUMNS    BROWSE_REGION_COLUMNS
 #define REGION_COLUMN_GAP_FP 12
 #define REGION_NAME_GAP_FP   4 /* between a region's name and its count */
+#define HIGHLIGHT_PAD_FP  3    /* the highlight band reaches this far left and right of its row */
+#define HIGHLIGHT_BAR_FP  1    /* its gold edge on the left */
+#define HINT_ROW_FP       12
+#define LIST_HEAD_ROW_FP  14
+#define LIST_ROW_FP       11
+#define TICK_BOX_FP       5    /* a check's box */
+#define TICK_GAP_FP       5    /* between the box and the name */
+#define TICK_LINE_FP      0.6f /* an empty box's outline */
 
 /* opacities */
 #define BOX_OPACITY        0.86f
@@ -44,12 +52,15 @@
 #define CELL_OWNED_ALPHA   0.85f
 #define CELL_MISSING_ALPHA 0.10f
 #define CELL_UNKNOWN_ALPHA 0.04f
+#define HIGHLIGHT_ALPHA    0.16f
 
 #define MAX_STATUS_LINES 2
 #define STATUS_ROOM      80
 #define NAME_ROOM        64
 #define ELLIPSIS         ".."
 #define COUNT_ROOM       24
+#define HINT_REGIONS     "D-pad: choose a region     A: its checks     B: close"
+#define HINT_LIST        "D-pad: scroll (left / right: a page)     B: back to the regions"
 
 static const rgb_t box_colour = { 0x0A, 0x09, 0x08 };
 static const rgb_t title_colour = { 0xF5, 0xD6, 0x85 };
@@ -97,7 +108,7 @@ typedef struct {
 typedef struct {
   status_line_t status[MAX_STATUS_LINES];
   int status_count;
-  bool tracking, has_keys, has_summary;
+  bool tracking, has_keys, has_summary, list;
   int region_rows;
 } content_t;
 
@@ -128,9 +139,10 @@ static content_t content_of(const panel_t *panel)
     case PANEL_HIDDEN: break;
   }
   if (content.tracking) {
-    content.has_keys = panel->state.key_count > 0;
-    content.has_summary = true;
-    content.region_rows = (int)((panel->state.region_count + REGION_COLUMNS - 1) / REGION_COLUMNS);
+    content.list = panel->browse.view == BROWSE_CHECKS && panel->browse.region < panel->state.region_count;
+    content.has_keys = !content.list && panel->state.key_count > 0;
+    content.has_summary = !content.list;
+    content.region_rows = content.list ? 0 : (int)browse_region_rows(panel->state.region_count);
   }
   return content;
 }
@@ -148,8 +160,10 @@ typedef struct {
 static float content_height_fp(const content_t *content)
 {
   float h = 2 * PAD_Y_FP + TITLE_ROW_FP + TITLE_GAP_FP + content->status_count * STATUS_ROW_FP;
+  if (content->list)
+    return h + LIST_HEAD_ROW_FP + BROWSE_CHECK_ROWS * LIST_ROW_FP + SECTION_GAP_FP + HINT_ROW_FP;
   if (content->tracking)
-    h += GRID_ROWS * GRID_ROW_FP + SECTION_GAP_FP;
+    h += GRID_ROWS * GRID_ROW_FP + SECTION_GAP_FP + HINT_ROW_FP;
   if (content->has_keys)
     h += KEYS_ROW_FP + SECTION_GAP_FP;
   if (content->has_summary)
@@ -281,6 +295,19 @@ static void fit_name(const layout_t *l, const char *name, float room, char out[N
   text_copy(out + length, NAME_ROOM - length, ELLIPSIS);
 }
 
+/* the band behind the highlighted row, with its gold edge */
+static void draw_highlight(const layout_t *l, float x, float y, float w, float h)
+{
+  float pad = HIGHLIGHT_PAD_FP * l->fp;
+  gpuui_fill(x - pad, y, w + 2 * pad, h, to_gpu(title_colour, HIGHLIGHT_ALPHA));
+  gpuui_fill(x - pad, y, HIGHLIGHT_BAR_FP * l->fp, h, to_gpu(title_colour, 1));
+}
+
+static void draw_hint(const layout_t *l, const char *hint, float y)
+{
+  draw_text(&l->body, hint, l->inner_x, baseline_in(&l->body, y, HINT_ROW_FP * l->fp), dim_colour);
+}
+
 static void draw_region(const layout_t *l, const region_state_t *region, float x, float column_w, float y, float row)
 {
   char count[COUNT_ROOM], name[NAME_ROOM];
@@ -292,14 +319,79 @@ static void draw_region(const layout_t *l, const region_state_t *region, float x
   draw_text(&l->body, count, x + column_w - count_w, baseline, done ? done_colour : none ? dim_colour : white);
 }
 
-static void draw_regions(const layout_t *l, const tracker_state_t *state, int rows, float y)
+static float draw_regions(const layout_t *l, const panel_t *panel, int rows, float y)
 {
+  const tracker_state_t *state = &panel->state;
   float gap = REGION_COLUMN_GAP_FP * l->fp, row = REGION_ROW_FP * l->fp;
   float column_w = (l->inner_w - (REGION_COLUMNS - 1) * gap) / REGION_COLUMNS;
   for (uint32_t i = 0; i < state->region_count; i++) {
     int column = (int)i / rows, line = (int)i % rows;
-    draw_region(l, &state->regions[i], l->inner_x + column * (column_w + gap), column_w, y + line * row, row);
+    float x = l->inner_x + column * (column_w + gap), top = y + line * row;
+    if (i == panel->browse.region)
+      draw_highlight(l, x, top, column_w, row);
+    draw_region(l, &state->regions[i], x, column_w, top, row);
   }
+  return y + rows * row;
+}
+
+/* --- a region's list of checks ------------------------------------------------------------------ */
+
+static float draw_list_heading(const layout_t *l, const panel_t *panel, float y)
+{
+  const region_state_t *region = &panel->state.regions[panel->browse.region];
+  char count[COUNT_ROOM * 2];
+  float row = LIST_HEAD_ROW_FP * l->fp, baseline = baseline_in(&l->bold, y, row);
+  draw_text(&l->bold, region->name, l->inner_x, baseline, title_colour);
+  uint32_t first = panel->row_count ? panel->browse.top + 1 : 0, last = panel->browse.top + panel->row_count;
+  snprintf(count, sizeof(count), "%u / %u found     %u-%u of %u", (unsigned)region->collected,
+           (unsigned)region->trackable, (unsigned)first, (unsigned)last, (unsigned)region->trackable);
+  draw_text(&l->body, count, l->inner_x + l->inner_w - text_width(&l->body, count), baseline, dim_colour);
+  return y + row;
+}
+
+/* a check's box: filled when it's collected, empty when it's missing, a question mark when the game can't say */
+static void draw_tick_box(const layout_t *l, gd_flag_t flag, float x, float y, float row)
+{
+  float box = TICK_BOX_FP * l->fp, top = (float)(int)(y + (row - box) / 2);
+  float line = TICK_LINE_FP * l->fp < MIN_LINE_PX ? MIN_LINE_PX : (float)(int)(TICK_LINE_FP * l->fp + 0.5f);
+  if (flag == GD_TRUE) {
+    gpuui_fill(x, top, box, box, to_gpu(done_colour, 1));
+  } else if (flag == GD_FALSE) {
+    gpu_colour_t edge = to_gpu(white, 1);
+    gpuui_fill(x, top, box, line, edge);
+    gpuui_fill(x, top + box - line, box, line, edge);
+    gpuui_fill(x, top, line, box, edge);
+    gpuui_fill(x + box - line, top, line, box, edge);
+  } else {
+    draw_text(&l->bold, "?", x, baseline_in(&l->bold, y, row), faint_colour);
+  }
+}
+
+static void draw_check_row(const layout_t *l, const check_row_t *check, float y, float row)
+{
+  char unnamed[COUNT_ROOM], name[NAME_ROOM];
+  const char *text = check->name;
+  if (!text[0]) { /* a seed file made before the checks had names */
+    snprintf(unnamed, sizeof(unnamed), "Check %u", (unsigned)check->number);
+    text = unnamed;
+  }
+  draw_tick_box(l, (gd_flag_t)check->flag, l->inner_x, y, row);
+  float x = l->inner_x + (TICK_BOX_FP + TICK_GAP_FP) * l->fp;
+  fit_name(l, text, l->inner_x + l->inner_w - x, name);
+  rgb_t colour = check->flag == GD_TRUE ? done_colour : check->flag == GD_FALSE ? white : faint_colour;
+  draw_text(&l->body, name, x, baseline_in(&l->body, y, row), colour);
+}
+
+static float draw_list(const layout_t *l, const panel_t *panel, float y)
+{
+  float row = LIST_ROW_FP * l->fp;
+  for (uint32_t i = 0; i < panel->row_count; i++) {
+    float top = y + i * row;
+    if (panel->browse.top + i == panel->browse.check)
+      draw_highlight(l, l->inner_x, top, l->inner_w, row);
+    draw_check_row(l, &panel->rows[i], top, row);
+  }
+  return y + BROWSE_CHECK_ROWS * row + SECTION_GAP_FP * l->fp;
 }
 
 static void draw_panel(const panel_t *panel, nvn_rect_t area)
@@ -311,11 +403,16 @@ static void draw_panel(const panel_t *panel, nvn_rect_t area)
   y = draw_status(&l, &content, y);
   if (!content.tracking)
     return;
+  if (content.list) {
+    y = draw_list(&l, panel, draw_list_heading(&l, panel, y));
+    draw_hint(&l, HINT_LIST, y);
+    return;
+  }
   y = draw_grid(&l, &panel->state, y);
   if (content.has_keys)
     y = draw_keys(&l, &panel->state, y);
   y = draw_summary(&l, &panel->state, y);
-  draw_regions(&l, &panel->state, content.region_rows, y);
+  draw_hint(&l, HINT_REGIONS, draw_regions(&l, panel, content.region_rows, y));
 }
 
 bool trackerui_record(nvn_obj_t *cmd, int slot, nvn_texture_t *texture, const nvn_texture_info_t *info,

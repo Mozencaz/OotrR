@@ -14,6 +14,7 @@ from oot_rando.randomizer.randomizer_core import Settings, CHECKS, GENERATOR_VER
 from oot_rando.randomizer.randomizer_services import read_artifact, generate_in_mods, validate_mod_directory
 from oot_rando.tracker.auto_tracker import TrackerSession, newest_save
 from oot_rando.tracker import game_overlay
+from oot_rando.tracker.check_labels import check_labels
 from oot_rando.tracker import live_memory
 from oot_rando.randomizer import spoiler_report
 from oot_rando.tracker import turbo_a
@@ -1438,12 +1439,11 @@ class Application:
             tree.configure(yscrollcommand=scrollbar.set)
             scrollbar.pack(side='right', fill='y')
             tree.pack(side='left', fill='both', expand=True)
-            zones, visible, region_numbers = {}, 0, {}
+            zones, visible, labels = {}, 0, check_labels(self.current_checks)
             for check in self.current_checks:
                 state = states[check['id']]
                 completed, access = state.get('completed', False), state.get('access', 'unknown')
                 region = check.get('region') or 'Other'
-                region_numbers[region] = region_numbers.get(region, 0) + 1
                 bucket = 'done' if completed else 'available' if access == 'available' else 'blocked'
                 if self.tracker_filter != 'all' and bucket != self.tracker_filter:
                     continue
@@ -1451,7 +1451,7 @@ class Application:
                     continue
                 if not completed and access == 'blocked' and not self.show_blocked.get():
                     continue
-                name = check['name'] if check.get('category') != 'world_chests' else f'Chest {region_numbers[region]}'
+                name = labels[check['id']]
                 reward = state.get('reward', '') if completed else ''
                 kind = TRACKER_KINDS.get(check.get('category', ''), check.get('category', ''))
                 if query and query not in (region + ' ' + name + ' ' + kind + ' ' + reward).casefold():

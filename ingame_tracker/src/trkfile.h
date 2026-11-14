@@ -10,7 +10,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define TRK_VERSION 1
+#define TRK_VERSION 2        /* 1: the same, but its checks have no names */
+#define TRK_OLDEST_VERSION 1
 #define TRK_MAX_REGIONS 64  /* the module keeps a fixed-size state per region */
 #define TRK_MAX_KEY_ROWS 16 /* ... and per dungeon with keys */
 
@@ -18,7 +19,7 @@ enum { TRK_KIND_BOOL = 1, TRK_KIND_BOOL64 = 2 };
 enum { TRK_KEY_SMALL = 1, TRK_KEY_BOSS = 2, TRK_KEY_SMALL_ALL = 4, TRK_KEY_BOSS_ALL = 8 };
 
 typedef struct { uint32_t name, first_check, check_count; } trk_region_t;
-typedef struct { uint64_t key; uint32_t kind; } trk_check_t;
+typedef struct { uint64_t key; uint32_t kind, name; } trk_check_t; /* name: a string offset (0, "", in version 1) */
 typedef struct { uint32_t name, first_rule, rule_count; } trk_item_t;
 typedef struct { uint32_t hash, level; } trk_rule_t;
 typedef struct {
@@ -29,6 +30,7 @@ typedef struct {
 typedef struct {
   const uint8_t *data;
   size_t size;
+  uint32_t version;
   uint32_t seed_marker, goal_marker; /* Bool hashes; goal_marker 0: the seed has none */
   uint32_t seed_id;                  /* string offset */
   uint32_t strings_at, strings_size;
@@ -39,8 +41,8 @@ typedef struct {
   uint32_t keys_at, key_count;
 } trk_t;
 
-/* Validates `data` and fills `trk`. False with *why set if the file isn't a version 1 seed file or any
- * of its parts leaves the file. */
+/* Validates `data` and fills `trk`. False with *why set if the file isn't a seed file of a version this module
+ * reads (TRK_OLDEST_VERSION to TRK_VERSION) or any of its parts leaves the file. */
 bool trk_parse(trk_t *trk, const uint8_t *data, size_t size, const char **why);
 
 /* The NUL-terminated string at `offset` in the string table ("" if the offset is outside it). */
