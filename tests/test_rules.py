@@ -65,6 +65,15 @@ class LogicTests(unittest.TestCase):
         self.assertNotIn(song, self.reachable({song: None}, dict(everything, **{'Zeldas Lullaby': 0})))
         self.assertIn(song, self.reachable({song: None}, everything))
 
+    def test_lost_dog_waits_for_kakariko_gate(self):
+        # Remake: Richard only runs away once the Kakariko gate guard read Zelda's Letter.
+        dog = 'Market Lost Dog'
+        everything = {item: 9 for item in self.logic.referenced}
+        no_letter = {dog: None, 'HC Zeldas Letter': None}
+        without = dict(everything, **{'Zeldas Letter': 0, 'Kakariko Village Gate Open': 0})
+        self.assertNotIn(dog, self.reachable(no_letter, without))
+        self.assertIn(dog, self.reachable(no_letter, everything))
+
     def test_lost_woods_chest_needs_adult_bean_ride(self):
         # The remake's only Lost Woods chest stands on a ledge served by the
         # adult bean platform (soil near the bridge), not in a bombable grotto.

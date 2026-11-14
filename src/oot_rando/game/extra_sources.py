@@ -36,8 +36,11 @@ FREESTANDING_JUNK = ('Obj_Rupee_Green', 'Obj_Rupee_Blue', 'Obj_Rupee_Red', 'Obj_
                      'Obj_Rupee_Gold', 'Obj_Heart')
 ENV_DROPS = FREESTANDING_JUNK
 # Sources without any vanilla drop that still accept an instance Drop__DropActor
-# (most rocks of the remake: only 14 of 311 have an explicit drop).
-EMPTY_SOURCES = ('rocks',)
+# (most rocks of the remake: only 14 of 311 have an explicit drop). Empty pots and
+# crates too (Discord 14/11: Kakariko's 30 Obj_Pot_A_08 and every Hyrule Castle pot
+# and crate were left out; Obj_Pot_A_01/A_08 and Obj_BrokenBox_A_01 expose
+# Drop__DropActor per instance). Pots/crates with a random drop table stay vanilla.
+EMPTY_SOURCES = ('rocks', 'pots', 'crates')
 EMPTY_VANILLA = 'Rupee (1)'
 SKIP_FOLDERS = ('DreamWorld', 'SageRoom')
 
@@ -158,8 +161,11 @@ SCRUB_GIFTS = (
      'DeathMountain_Enemy_Scrub_Business_HeartPiece_01'),
 )
 SCRUB_LOW_PRICE = 10
-# Remake child wallet: 99 rupees.
-CHILD_WALLET = 99
+# Remake starting wallet: 200 rupees (Pouch_Wallet_Small ExpansionMaxNumActor
+# MaxNum 200; then 500 and 1000), not the original game's 99 (issue #17).
+CHILD_WALLET = 200
+# Highest 'random' scrub price: kept at 99 so existing seeds replay identically.
+SCRUB_RANDOM_MAX = 99
 EVENT_SOURCES = ('npc', 'boss', 'fairy', 'quest', 'scrub')
 # Boss heart container of each dungeon map (one placed Obj_Heart_Container each).
 BOSS_HEARTS = {
@@ -295,7 +301,7 @@ def scrub_price(option, rng_key, entry):
     if option == 'random':
         import hashlib
         digest = hashlib.sha256((rng_key + '\0scrub-price\0' + entry['id']).encode('utf-8')).digest()
-        return SCRUB_LOW_PRICE + int.from_bytes(digest[:8], 'big') % (CHILD_WALLET - SCRUB_LOW_PRICE + 1)
+        return SCRUB_LOW_PRICE + int.from_bytes(digest[:8], 'big') % (SCRUB_RANDOM_MAX - SCRUB_LOW_PRICE + 1)
     return entry['price']
 
 

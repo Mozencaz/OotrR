@@ -436,7 +436,7 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             return False
         if rule == 'overworld' and folder_dungeon[gid] is not None:
             return False
-        return can_take(canonical(item, gid), shuffled[gid]['form'])
+        return can_take(canonical(item, gid), shuffled[gid]['form'], shuffled[gid].get('ap', ()))
 
     # OoTR/AP vanilla-key compensation: with vanilla Fire Temple keys the logic
     # starts with one extra key (the vanilla layout expects the hammer door order).
@@ -828,14 +828,14 @@ def tracker_checks(data, matches, shuffled):
         if entry['kind'] in ('exact', 'group'):
             covered.update(entry['ap'])
         label = SOURCE_LABELS.get(source, source)
+        zone = _entry_zone(data, entry, gid)
         if entry['kind'] == 'exact' and entry['ap']:
             name = entry['ap'][0]
         else:
-            name = f'{label.capitalize()} {str(entry["hash"])[-6:]}' if entry.get('hash') else gid
+            name = f'{zone_label(zone)} {label} {str(entry["hash"])[-6:]}' if entry.get('hash') else gid
             age = source_age(entry['variants'])
             if age:
                 name += f' ({age})'   # only on that age's maps
-        zone = _entry_zone(data, entry, gid)
         checks.append({'id': gid, 'zone': zone, 'region': zone_label(zone),
                        'category': 'full_' + ('chests' if source == 'chest' else source), 'name': name,
                        'randomized': gid in shuffled, 'repeatable': source in REPEATABLE,
@@ -843,6 +843,12 @@ def tracker_checks(data, matches, shuffled):
     for location in sorted(data.location_table):
         areas = data.location_areas(location)
         if location in covered or data.location_type(location) not in TRACKED_TYPES:
+            continue
+        if data.location_type(location) in ORIGINAL_ONLY_TYPES and not _is_reward(data.vanilla_item(location)):
+            # Rupees, hearts and ammo of the original game's pots, crates, beehives
+            # and loose items: the remake places its own (tracked above by map hash
+            # when shuffled), most original spots do not exist (e.g. "KF Links House
+            # Pot") and none can be ticked automatically (Discord 13/11).
             continue
         if 'Master Quest' in areas and 'Vanilla' not in areas:
             continue
@@ -854,6 +860,16 @@ def tracker_checks(data, matches, shuffled):
     order = list(ZONE_LABELS)
     checks.sort(key=lambda c: (order.index(c['zone']) if c['zone'] in order else len(order), c['name']))
     return checks
+
+
+ORIGINAL_ONLY_TYPES = {'Freestanding', 'Pot', 'FlyingPot', 'Crate', 'SmallCrate', 'Beehive', 'RupeeTower'}
+_JUNK_PREFIXES = ('Rupee', 'Rupees', 'Recovery Heart', 'Deku Nuts', 'Deku Stick', 'Deku Seeds', 'Arrows',
+                  'Bombs', 'Bombchus', 'Fairy', 'Magic Jar')
+
+
+def _is_reward(item):
+    """Whether a vanilla item of the original game is worth a tracker line (heart pieces…)."""
+    return bool(item) and not item.startswith(_JUNK_PREFIXES)
 
 
 SOURCE_LABELS = {'chest': 'chest', 'skulltula': 'skulltula', 'shop': 'shop', 'freestanding': 'freestanding',
