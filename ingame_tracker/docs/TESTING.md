@@ -1,7 +1,8 @@
 # Live test plan
 
 Nothing in 0.1.0 or 0.2.0 has run in the game. The PC tests (`make test`) cover the seed file's parser (versions 1 and 2), the state, a
-region's list of checks, the game-data reader over a fake GameData, the controls (repeat, what the game doesn't see) and the browsing.
+region's list of checks, the game-data reader over a fake GameData, the controls (repeat, what the game doesn't see), the browsing and the
+icons file's index.
 These steps cover the rest. Back up the save first.
 
 ## Setup
@@ -41,6 +42,20 @@ R3 + D-pad).
   heading's `N-M of T` follows.
 - Pick up a check of the open list: its box fills within half a second.
 - B goes back to the regions, with the same region highlighted; B again closes the panel.
+
+## 3c. The items' icons
+
+With a seed this version made from your game (or one updated with `update-tracker --nup GAME.nup`), so it has
+`romfs/RandoTracker/icons.bin`:
+
+- Log, at the first opening: `gpu drawing: icon atlas 384x320 (N KiB), N KiB for a picture while they go in`, then, about a second later,
+  `gpu drawing: the icons are in; the pictures' N KiB go back`, and no `didn't go in` line.
+- The cells' letters give way to the items' icons over that second (one every other frame), with no hitch.
+- The icons are upright, in their own colours (as on the game's pause screen: not washed out, not too dark), smooth (no jagged edges or
+  shimmer: each is shrunk from up to 683 pixels), centred in their cells; owned ones bright, missing and unknown ones dim.
+- Opening and closing the panel while the icons go in, and ten times after, works.
+- Rename `icons.bin` and start the game again: the log says `no content:/RandoTracker/icons.bin: the items show as their letters` and the
+  cells show their letters. Rename it back.
 
 ## 4. What it shows
 

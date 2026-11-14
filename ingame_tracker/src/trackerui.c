@@ -1,11 +1,14 @@
 /* The tracker panel in the game's own style (see trackerui.h). The box, the gold title over a hairline and
  * the type are sloperinaGZ's menu in its game style, at its sizes: a font pixel is a 360th of the picture's
- * height (3 pixels at 1080p). The sections follow OotrR's overlay: the items in rows, the dungeons' keys, the
+ * height (3 pixels at 1080p). The sections follow OotrR's overlay: the items in rows (their icons, from the
+ * seed's icons.bin, once they're in; their letters until then or without it), the dungeons' keys, the
  * checks found by region, one of them highlighted; or, with a region's list open, its checks. */
 #include "trackerui.h"
 
+#include "gamefile.h"
 #include "gamefont.h"
 #include "gpuui.h"
+#include "iconfile.h"
 #include "slots.h"
 #include "sys.h"
 #include "text.h"
@@ -60,6 +63,8 @@
 #define ELLIPSIS         ".."
 #define COUNT_ROOM       24
 #define HINT_REGIONS     "D-pad: choose a region     A: its checks     B: close"
+#define ICON_FILE        GAME_ROM "/RandoTracker/icons.bin"
+_Static_assert(ICONFILE_MAX <= GPUUI_ICONS, "an atlas slot for each icon");
 #define HINT_LIST        "D-pad: scroll (left / right: a page)     B: back to the regions"
 
 static const rgb_t box_colour = { 0x0A, 0x09, 0x08 };
@@ -70,6 +75,9 @@ static const rgb_t dim_colour = { 0x96, 0x91, 0x87 };
 static const rgb_t faint_colour = { 0x5A, 0x57, 0x52 };
 static const rgb_t warning_colour = { 0xFF, 0x9A, 0x7A };
 static const rgb_t done_colour = { 0x9A, 0xDF, 0x9A };
+static const gpu_colour_t icon_owned = { 1, 1, 1, 1 };
+static const gpu_colour_t icon_missing = { 0.55f, 0.55f, 0.55f, 0.4f };
+static const gpu_colour_t icon_unknown = { 0.5f, 0.5f, 0.5f, 0.18f };
 
 /* what loading the game's files came to: set on the game thread, read on the render thread */
 static enum { LOAD_NONE, LOAD_OK, LOAD_FAILED } load_state;
@@ -96,6 +104,79 @@ bool trackerui_usable(void)
   if (gpu_state == GPU_FAILED)
     log_printf("game-style drawing can't start: no panel");
   return gpu_state == GPU_READY;
+}
+
+/* --- the items' icons: on the render thread, one in every other frame the panel is drawn --------- */
+
+static struct {
+  enum { ICONS_UNREAD, ICONS_LOADING, ICONS_IN, ICONS_NONE } state;
+  icon_index_t index;
+  uint64_t file_size;
+  uint32_t next;                /* the next entry to bring in */
+  int8_t cell_icon[GRID_CELLS]; /* each grid cell's icon (its entry and atlas slot), or -1 */
+} icon_ui;
+
+static bool icon_used(uint32_t entry)
+{
+  int cell = grid_index_of(icon_ui.index.entries[entry].name);
+  return cell >= 0 && icon_ui.cell_icon[cell] == (int8_t)entry;
+}
+
+/* the icons file's index, and the GPU's room for its pictures */
+static void icons_start(void)
+{
+  static uint8_t head[ICONFILE_HEAD_MAX];
+  icon_ui.state = ICONS_NONE;
+  for (int i = 0; i < GRID_CELLS; i++)
+    icon_ui.cell_icon[i] = -1;
+  const char *why = "";
+  int64_t got = gamefile_read_at(ICON_FILE, 0, head, sizeof(head), &icon_ui.file_size);
+  if (got < 0) {
+    log_printf("no %s: the items show as their letters", ICON_FILE);
+    return;
+  }
+  if (!iconfile_parse(&icon_ui.index, head, (size_t)got, icon_ui.file_size, &why)) {
+    log_printf("%s refused: %s; the items show as their letters", ICON_FILE, why);
+    return;
+  }
+  int used = 0;
+  for (uint32_t i = 0; i < icon_ui.index.count; i++) {
+    int cell = grid_index_of(icon_ui.index.entries[i].name);
+    if (cell >= 0 && icon_ui.cell_icon[cell] < 0) {
+      icon_ui.cell_icon[cell] = (int8_t)i;
+      used++;
+    }
+  }
+  if (used && gpuui_icons_init(icon_ui.index.largest))
+    icon_ui.state = ICONS_LOADING;
+}
+
+/* the next picture into the atlas, when the GPU can take one; the picture memory back once they're all in */
+static void icons_step(void)
+{
+  if (icon_ui.state == ICONS_UNREAD)
+    icons_start();
+  if (icon_ui.state != ICONS_LOADING)
+    return;
+  while (icon_ui.next < icon_ui.index.count && !icon_used(icon_ui.next))
+    icon_ui.next++;
+  if (icon_ui.next == icon_ui.index.count) {
+    if (gpuui_icons_done())
+      icon_ui.state = ICONS_IN;
+    return;
+  }
+  uint8_t *memory = gpuui_icon_staging();
+  if (!memory)
+    return;
+  const icon_entry_t *e = &icon_ui.index.entries[icon_ui.next];
+  gpuui_picture_t picture = { (int)e->width, (int)e->height, e->size, { 0 }, { 0 } };
+  memcpy(picture.layout, e->layout, sizeof(picture.layout));
+  memcpy(picture.swizzle, e->swizzle, sizeof(picture.swizzle));
+  uint64_t file_size = 0;
+  if (gamefile_read_at(ICON_FILE, e->offset, memory, e->size, &file_size) != (int64_t)e->size ||
+      file_size != icon_ui.file_size || !gpuui_icon_bake((int)icon_ui.next, &picture))
+    log_printf("the icon of %s didn't go in: it shows as its letters", e->name);
+  icon_ui.next++;
 }
 
 /* --- what the panel holds ---------------------------------------------------------------------- */
@@ -217,14 +298,27 @@ static float draw_status(const layout_t *l, const content_t *content, float y)
   return y;
 }
 
-static void draw_cell(const layout_t *l, const grid_cell_t *cell, cell_state_t state, float x, float y, float w, float h)
+/* the cell's icon, a square as tall as the cell in its middle; false if it has none (yet) */
+static bool draw_icon(int index, cell_state_t state, float x, float y, float w, float h)
 {
+  int icon = icon_ui.state == ICONS_LOADING || icon_ui.state == ICONS_IN ? icon_ui.cell_icon[index] : -1;
+  if (icon < 0 || !gpuui_icon_ready(icon))
+    return false;
+  gpuui_icon(icon, x + (w - h) / 2, y, h, h,
+             state.status == ITEM_OWNED ? icon_owned : state.status == ITEM_MISSING ? icon_missing : icon_unknown);
+  return true;
+}
+
+static void draw_cell(const layout_t *l, int index, cell_state_t state, float x, float y, float w, float h)
+{
+  const grid_cell_t *cell = grid_cell(index);
   bool owned = state.status == ITEM_OWNED, leveled = owned && cell->levels > 1;
   float alpha = owned ? CELL_OWNED_ALPHA : state.status == ITEM_MISSING ? CELL_MISSING_ALPHA : CELL_UNKNOWN_ALPHA;
   gpuui_fill(x, y, w, h, to_gpu(owned ? rgb_from_hex(cell->colour) : white, alpha));
   rgb_t colour = owned ? white : state.status == ITEM_MISSING ? dim_colour : faint_colour;
   float baseline = baseline_in(&l->bold, y, h), pad = CELL_LEVEL_PAD_FP * l->fp;
-  draw_text(&l->bold, cell->abbr, leveled ? x + pad : x + (w - text_width(&l->bold, cell->abbr)) / 2, baseline, colour);
+  if (!draw_icon(index, state, x, y, w, h))
+    draw_text(&l->bold, cell->abbr, leveled ? x + pad : x + (w - text_width(&l->bold, cell->abbr)) / 2, baseline, colour);
   if (leveled) {
     char digit[2] = { (char)('0' + (state.level > 9 ? 9 : state.level)), 0 };
     draw_text(&l->body, digit, x + w - pad - text_width(&l->body, digit), baseline, white);
@@ -236,7 +330,7 @@ static float draw_grid(const layout_t *l, const tracker_state_t *state, float y)
   float cell_w = l->inner_w / GRID_COLUMNS, row = GRID_ROW_FP * l->fp, gap = CELL_GAP_FP * l->fp;
   for (int i = 0; i < GRID_CELLS; i++) {
     float x = l->inner_x + (i % GRID_COLUMNS) * cell_w, top = y + (i / GRID_COLUMNS) * row;
-    draw_cell(l, grid_cell(i), state->cells[i], x + gap / 2, top + gap / 2, cell_w - gap, row - gap);
+    draw_cell(l, i, state->cells[i], x + gap / 2, top + gap / 2, cell_w - gap, row - gap);
   }
   return y + GRID_ROWS * row + SECTION_GAP_FP * l->fp;
 }
@@ -423,6 +517,7 @@ bool trackerui_record(nvn_obj_t *cmd, int slot, nvn_texture_t *texture, const nv
   if (gpuui_atlas_resetting() && !slots_wait_idle())
     return false;
   gpuui_begin(texture, area, info->height, nvn_origin_lower_left(), slot);
+  icons_step();
   draw_panel(panel, area);
   return gpuui_end(cmd, nvn_game_texture_pool(), nvn_game_sampler_pool());
 }

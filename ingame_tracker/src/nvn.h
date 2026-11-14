@@ -21,11 +21,13 @@ typedef struct { int32_t x, y, w, h; } nvn_rect_t;
 
 /* memory pool flags (nvnMemoryPoolBuilderSetFlags) */
 enum {
+  NVN_POOL_CPU_NO_ACCESS = 0x01,
   NVN_POOL_CPU_UNCACHED = 0x02,
   NVN_POOL_CPU_CACHED = 0x04,
   NVN_POOL_GPU_UNCACHED = 0x10,
   NVN_POOL_GPU_CACHED = 0x20,
   NVN_POOL_SHADER_CODE = 0x40,
+  NVN_POOL_COMPRESSIBLE = 0x80,
 };
 
 /* Room for an NVN object we own: NVN 1's are at most 0x100 bytes, NVN 2's may have grown. */

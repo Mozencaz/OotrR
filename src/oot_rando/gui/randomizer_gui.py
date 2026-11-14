@@ -1390,7 +1390,8 @@ class Application:
             self.error(error)
 
     def update_seed_tracker(self):
-        """Give the open seed this version's in-game tracker (its data file and module, nothing else)."""
+        """Give the open seed this version's in-game tracker (its data file and module, and the icons from the game
+        file when it's set; nothing else)."""
         if not self.artifact:
             self.status.set('Open a seed first.')
             return
@@ -1399,8 +1400,9 @@ class Application:
             add = not has_ingame_tracker(manifest)
             if add and not messagebox.askyesno('In-game tracker', 'This seed was made without the in-game tracker. Add it?'):
                 return
-            directory = self.artifact
-            self.run_job(lambda progress: update_ingame_tracker(directory, add=add), self.ingame_tracker_updated)
+            directory, nup = self.artifact, Path(self.nup.get())
+            nup = nup if self.nup.get() and nup.is_file() else None   # the icons come from the game, when it's set
+            self.run_job(lambda progress: update_ingame_tracker(directory, add=add, nup=nup), self.ingame_tracker_updated)
         except Exception as error:
             self.error(error)
 

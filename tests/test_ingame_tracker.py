@@ -17,13 +17,16 @@ from oot_rando.randomizer.randomizer_services import (generate_in_mods, read_art
                                                       update_ingame_trackers)
 from oot_rando.__main__ import main as command_line
 from oot_rando.paths import resource
-from oot_rando.tracker import ingame_bundle, ingame_format as fmt
+from oot_rando.tracker import ingame_bundle, ingame_format as fmt, ingame_icons
 from oot_rando.tracker.check_labels import check_labels
 from test_randomizer_services import ServiceTests
 
 NUP = os.environ.get('OOT_NUP')
 REAL_SEED = Path(r'C:\switch 2 roms\Ryuchii - latest\user\load\0400486024DEC000\OoT_Randomizer_76069ecc4740cec6')
 FAKE_MODULE = b'NSO0 fake module'
+FAKE_ICONS = b'RTIC fake icons'
+REPOSITORY = Path(__file__).resolve().parents[1]
+LAYOUT, SWIZZLE = bytes([4, 0, 0, 0, 0, 0, 0, 0]), bytes([2, 3, 4, 5])
 
 
 def sample_file():
@@ -224,6 +227,103 @@ class ExportTests(unittest.TestCase):
         self.assertFalse([r for r in rewards if r.encode() in stored])
 
 
+def synthetic_bntx(width=8, height=8, texture_format=0x2D01, tile_mode=0, levels=1, data=None):
+    """A BNTX of one texture, made here (no game data): its BRTI at 0x20, the levels' table at 0x100, the
+    levels from 0x200, each as long as the first (``data``)."""
+    data = bytes(7 * i % 256 for i in range(-(-width // 4) * -(-height // 4) * 16)) if data is None else data
+    out = bytearray(0x200 + len(data) * levels)
+    out[0:4], out[0x20:0x24] = b'BNTX', b'BRTI'
+    struct.pack_into('<H', out, 0x20 + 0x12, tile_mode)
+    struct.pack_into('<H', out, 0x20 + 0x16, levels)
+    struct.pack_into('<I', out, 0x20 + 0x1C, texture_format)
+    struct.pack_into('<II', out, 0x20 + 0x24, width, height)
+    out[0x20 + 0x34:0x20 + 0x3C] = LAYOUT
+    struct.pack_into('<I', out, 0x20 + 0x50, len(data) * levels)
+    out[0x20 + 0x58:0x20 + 0x5C] = SWIZZLE
+    struct.pack_into('<Q', out, 0x20 + 0x70, 0x100)
+    for level in range(levels):
+        at = 0x200 + level * len(data)
+        struct.pack_into('<Q', out, 0x100 + 8 * level, at)
+        out[at:at + len(data)] = data if level == 0 else b'\xEE' * len(data)
+    return bytes(out)
+
+
+def missing_picture(name):
+    raise KeyError(name)
+
+
+class IconTests(unittest.TestCase):
+    """icons.bin: the game's pictures as their BNTX stores them, checked as the module checks them."""
+    @staticmethod
+    def icons():
+        return [('Bow', ingame_icons.texture(synthetic_bntx())),
+                ('Progressive Hookshot', ingame_icons.texture(synthetic_bntx(12, 4, 0x2D06, data=bytes(range(56)))))]
+
+    def test_a_picture_is_copied_as_the_game_stores_it(self):
+        data = bytes(range(64))
+        for levels in (1, 3):
+            with self.subTest(levels=levels):
+                self.assertEqual(ingame_icons.texture(synthetic_bntx(data=data, levels=levels)),
+                                 {'width': 8, 'height': 8, 'format': 0x2D01, 'layout': LAYOUT, 'swizzle': SWIZZLE,
+                                  'data': data})
+
+    def test_pictures_other_than_astc_in_block_linear_layout_are_refused(self):
+        good = synthetic_bntx()
+        for what, bntx in [('magic', b'XNTX' + good[4:]), ('two textures', good + b'BRTI'),
+                           ('RGBA8', synthetic_bntx(texture_format=0x0B01)), ('linear', synthetic_bntx(tile_mode=1)),
+                           ('truncated', good[:-1])]:
+            with self.subTest(what), self.assertRaises(ValueError):
+                ingame_icons.texture(bntx)
+
+    def test_the_file_reads_back_with_its_pictures_aligned(self):
+        data = ingame_icons.build(self.icons())
+        self.assertEqual(data, ingame_icons.build(self.icons()))
+        self.assertEqual(ingame_icons.parse(data), self.icons())
+        self.assertEqual(ingame_icons.HEADER.unpack_from(data), (b'RTIC', 1, 32, 288, 2, 32, 64, 160, 0))
+        self.assertEqual([ingame_icons.ENTRY.unpack_from(data, 32 + 64 * i)[3] for i in range(2)], [160, 224])
+        with self.assertRaises(ValueError):
+            ingame_icons.build([('An item whose name is much too long', self.icons()[0][1])])
+        with self.assertRaises(ValueError):
+            ingame_icons.build(self.icons()[:1] * 31)
+
+    def test_damaged_files_are_refused(self):
+        good = ingame_icons.build(self.icons())
+
+        def changed(offset, value, layout='<I'):
+            data = bytearray(good)
+            struct.pack_into(layout, data, offset, value)
+            return bytes(data)
+        for what, data in [('magic', b'XTIC' + good[4:]), ('version', changed(4, 2, '<H')), ('size', good + bytes(16)),
+                           ('count', changed(12, 31)), ('misaligned', changed(32 + 40, 168)),
+                           ('past the end', changed(96 + 40, 272)), ('swizzle', changed(32 + 56, 6, '<B')),
+                           ('format', changed(32 + 60, 0x2D02)), ('one item twice', good[:96] + good[32:64] + good[128:]),
+                           ('truncated', good[:100])]:
+            with self.subTest(what), self.assertRaises(ValueError):
+                ingame_icons.parse(data)
+
+    def test_the_grids_icons_carry_the_names_the_module_knows(self):
+        grid = (REPOSITORY / 'ingame_tracker' / 'src' / 'grid.c').read_text(encoding='utf-8')
+        icons = ingame_icons.grid_icons()
+        self.assertLessEqual(len(icons), ingame_icons.MAX_ICONS)
+        for item, _ in icons:
+            self.assertIn('{ "%s",' % item, grid)
+        self.assertIn(('Megaton Hammer', 'Item_Hammer_PouchIcon'), icons)
+
+    def test_the_icons_the_game_has_in_the_grids_order(self):
+        asked = []
+
+        def read_picture(name):
+            asked.append(name)
+            if name == 'Weapon_Range_Bow':
+                raise KeyError(name)
+            return synthetic_bntx(tile_mode=1 if name == 'Item_Hookshot' else 0)
+        icons = ingame_icons.parse(ingame_icons.icons_file(read_picture))
+        self.assertEqual([item for item, _ in icons],
+                         [item for item, _ in ingame_icons.grid_icons() if item not in ('Bow', 'Progressive Hookshot')])
+        self.assertEqual(asked, [name for _, name in ingame_icons.grid_icons()])
+        self.assertIsNone(ingame_icons.icons_file(missing_picture))
+
+
 class ShippedModuleTests(unittest.TestCase):
     def test_the_module_is_an_nso_with_the_checksum_its_source_note_gives(self):
         module = ingame_bundle.module_binary()
@@ -244,13 +344,13 @@ class InstallTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def attached_artifact(self, root):
+    def attached_artifact(self, root, icons=None):
         helper = ServiceTests('make_artifact')
         helper.make_artifact(root, 'tracked')
         manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
         _, checks, tracking = synthetic_seed()
         files, exefs = {}, {}
-        ingame_bundle.attach(manifest, files, exefs, checks, tracking)
+        ingame_bundle.attach(manifest, files, exefs, checks, tracking, icons)
         for path, data in files.items():
             (root / 'romfs' / path).parent.mkdir(parents=True, exist_ok=True)
             (root / 'romfs' / path).write_bytes(data)
@@ -269,6 +369,14 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(list(manifest['files']), sorted(manifest['files']))
             self.assertEqual(manifest['exefs'], {'subsdk7': {'size': len(FAKE_MODULE),
                                                               'sha256': hashlib.sha256(FAKE_MODULE).hexdigest()}})
+            self.assertNotIn(ingame_icons.ICON_FILE, manifest['files'])
+            read_artifact(Path(directory) / 'seed')
+
+    def test_attach_lists_the_icons_when_given(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = self.attached_artifact(Path(directory) / 'seed', FAKE_ICONS)
+            self.assertEqual(manifest['files'][ingame_icons.ICON_FILE], ingame_bundle.describe(FAKE_ICONS))
+            self.assertEqual(list(manifest['files']), sorted(manifest['files']))
             read_artifact(Path(directory) / 'seed')
 
     def test_verification_catches_a_modified_seed_file_or_module(self):
@@ -434,6 +542,34 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(self.snapshot(root), before)
         self.assertEqual([path.name for path in root.iterdir() if path.name.startswith('.')], [])
 
+    def test_the_games_icons_come_with_the_update_and_stay_without_the_game(self):
+        root, received = self.installed_seed(), []
+        icon_path = 'romfs/' + ingame_icons.ICON_FILE
+
+        def game_icons(nup):
+            received.append(nup)
+            return FAKE_ICONS
+        with patch('oot_rando.randomizer.randomizer_services._game_icons', game_icons):
+            self.assertEqual(update_ingame_tracker(root, nup='game.nup'),
+                             ['romfs/' + ingame_bundle.SEED_FILE, icon_path, 'exefs/subsdk7', 'manifest.json'])
+            self.assertEqual(update_ingame_tracker(root, nup='game.nup'), [])
+        self.assertEqual(received, ['game.nup', 'game.nup'])
+        before = self.snapshot(root)
+        self.assertEqual(before[icon_path], FAKE_ICONS)
+        self.assertEqual(update_ingame_tracker(root), [])
+        self.assertEqual(self.snapshot(root), before)
+        self.assertEqual(read_artifact(root)[0]['files'][ingame_icons.ICON_FILE], ingame_bundle.describe(FAKE_ICONS))
+
+    def test_the_command_takes_the_game_for_the_icons(self):
+        self.installed_seed()
+        received, output = [], io.StringIO()
+        with patch('oot_rando.randomizer.randomizer_services._game_icons', lambda nup: received.append(nup) or FAKE_ICONS), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(command_line(['update-tracker', '--nup', 'game.nup', str(self.mods)]), 0)
+            self.assertEqual(command_line(['update-tracker', str(self.mods), '--nup']), 2)
+        self.assertEqual(received, ['game.nup'])
+        self.assertIn(ingame_icons.ICON_FILE, output.getvalue())
+
     def test_the_command_updates_every_seed_of_a_mods_folder(self):
         root = self.installed_seed()
         for expected in ('Updated ' + str(root), 'Already up to date: ' + str(root)):
@@ -465,6 +601,9 @@ class GenerateTests(unittest.TestCase):
         module = (output / 'exefs' / 'subsdk7').read_bytes()
         self.assertEqual(module, ingame_bundle.module_binary())
         self.assertEqual(manifest['exefs']['subsdk7']['sha256'], hashlib.sha256(module).hexdigest())
+        icons = ingame_icons.parse((output / 'romfs' / ingame_icons.ICON_FILE).read_bytes())
+        self.assertEqual([item for item, _ in icons], [item for item, _ in ingame_icons.grid_icons()])
+        self.assertIn(ingame_icons.ICON_FILE, manifest['files'])
 
     def test_option_leaves_the_tracker_out(self):
         output, manifest = self.generate_seed(ingame_tracker=False)

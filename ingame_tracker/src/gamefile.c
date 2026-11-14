@@ -41,6 +41,22 @@ uint8_t *gamefile_read(const char *path, size_t *size_out)
   return data;
 }
 
+int64_t gamefile_read_at(const char *path, uint64_t offset, void *buf, size_t size, uint64_t *file_size)
+{
+  fs_file_t file;
+  if (fs_open(&file, path, FS_READ) != 0)
+    return -1;
+  int64_t length = 0, got_bytes = -1;
+  if (fs_size(&length, file) == 0 && length >= 0 && offset <= (uint64_t)length) {
+    size_t want = (uint64_t)length - offset < size ? (size_t)((uint64_t)length - offset) : size, got = 0;
+    if (!want || (fs_read(&got, file, (int64_t)offset, buf, want) == 0 && got == want))
+      got_bytes = (int64_t)want;
+    *file_size = (uint64_t)length;
+  }
+  fs_close(file);
+  return got_bytes;
+}
+
 static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 

@@ -10,8 +10,9 @@ from pathlib import Path, PurePosixPath
 from oot_rando.randomizer.randomizer_core import Settings, settings_identity
 from oot_rando.patching.randomize_kokiri import TITLE, BUILD
 from oot_rando.pc_port import is_port_folder
-from oot_rando.tracker import ingame_bundle
+from oot_rando.tracker import ingame_bundle, ingame_icons
 from oot_rando.tracker.ingame_bundle import MODULE_FILE, SEED_FILE
+from oot_rando.tracker.ingame_icons import ICON_FILE
 
 
 def _verify_exefs(directory, manifest):
@@ -243,10 +244,11 @@ def _replace_files(directory, contents):
             raise
 
 
-def update_ingame_tracker(directory, add=False):
+def update_ingame_tracker(directory, add=False, nup=None):
     """Bring a seed's in-game tracker to this version of the application: ``romfs/RandoTracker/seed.trk``,
-    ``exefs/subsdk7`` and their entries in ``manifest.json``. Nothing else in the folder changes. A seed made
-    without the tracker gets it only with ``add``. Returns the files written (none when already up to date)."""
+    ``exefs/subsdk7`` and their entries in ``manifest.json``; with the game's ``nup``, the items' icons too
+    (``romfs/RandoTracker/icons.bin``). Nothing else in the folder changes. A seed made without the tracker
+    gets it only with ``add``. Returns the files written (none when already up to date)."""
     directory = Path(directory).resolve()
     if not (directory / 'manifest.json').is_file():
         raise ValueError('Not a seed folder (no manifest.json): ' + str(directory))
@@ -260,13 +262,15 @@ def update_ingame_tracker(directory, add=False):
     if not has_ingame_tracker(manifest) and not add:
         raise ValueError('This seed was made without the in-game tracker. Ask to add it to update it.')
     tracking = json.loads((directory / 'tracking.json').read_bytes())
+    icons = _game_icons(nup) if nup is not None else None
     updated, files, exefs = copy.deepcopy(manifest), {}, {}
     try:
-        ingame_bundle.attach(updated, files, exefs, catalogue['checks'], tracking)
+        ingame_bundle.attach(updated, files, exefs, catalogue['checks'], tracking, icons)
     except (KeyError, TypeError) as error:
         raise ValueError('This seed\'s tracking data is too old for the in-game tracker: generate it again.') from error
     contents = {}
-    for relative, data in [(Path('romfs', SEED_FILE), files[SEED_FILE]), (Path('exefs', MODULE_FILE), exefs[MODULE_FILE])]:
+    written = [(Path('romfs', name), files[name]) for name in (SEED_FILE, ICON_FILE) if name in files]
+    for relative, data in written + [(Path('exefs', MODULE_FILE), exefs[MODULE_FILE])]:
         path = directory / relative
         if not path.is_file() or path.read_bytes() != data:
             contents[relative] = data
@@ -280,16 +284,29 @@ def update_ingame_tracker(directory, add=False):
     return [relative.as_posix() for relative in contents]
 
 
-def update_ingame_trackers(folder, add=False):
+def _game_icons(nup):
+    """icons.bin from the game file at ``nup`` (a path), or None if it has none of the icons."""
+    from oot_rando.formats.inspect_nup import Nup
+    try:
+        game = Nup(nup)
+    except OSError as error:
+        raise ValueError('Can\'t read the game file: ' + str(error)) from error
+    try:
+        return ingame_icons.icons_file(ingame_icons.nup_reader(game))
+    finally:
+        game.stream.close()
+
+
+def update_ingame_trackers(folder, add=False, nup=None):
     """:func:`update_ingame_tracker` on a seed folder, or on each seed of this application in a mods folder.
     Returns ``[(seed folder, files written)]``."""
     folder = Path(folder)
     if (folder / 'manifest.json').is_file():
-        return [(folder, update_ingame_tracker(folder, add))]
+        return [(folder, update_ingame_tracker(folder, add, nup))]
     seeds = sorted(other for other in folder.iterdir() if is_randomizer_seed(other)) if folder.is_dir() else []
     if not seeds:
         raise ValueError('Neither a seed folder (no manifest.json) nor a mods folder holding a seed: ' + str(folder))
-    return [(seed, update_ingame_tracker(seed, add)) for seed in seeds]
+    return [(seed, update_ingame_tracker(seed, add, nup)) for seed in seeds]
 
 
 class ManualTracker:

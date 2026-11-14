@@ -97,8 +97,8 @@ B goes back to the regions, and B there closes the panel. Opening the panel show
 RomFS through `gamefile.c` the first time the panel is opened (a pause), rasterised with stb_truetype into a glyph atlas, and one draw
 per quad (a glyph or a rectangle), blended over the picture just before the game's present, with no read-back. The sizes are
 sloperinaGZ's: a font pixel is a 360th of the picture's height, so the panel scales with the resolution (560 font pixels wide: 1,680 pixels
-at 1080p, 1,120 at 720p). Top to bottom: title and seed id; status lines (not this seed's save, goal reached); the items, 4 rows of 9 (owned:
-lit in the item's colour, with its level; missing and unknown: dim); the dungeons' keys; the checks' total and the souls; the regions in
+at 1080p, 1,120 at 720p). Top to bottom: title and seed id; status lines (not this seed's save, goal reached); the items, 4 rows of 9, as
+their icons (below) or else their letters (owned: lit in the item's colour, with its level; missing and unknown: dim); the dungeons' keys; the checks' total and the souls; the regions in
 three columns, each `collected/trackable` (green when all, dim when none), the highlighted one on a gold band; a line of hints. With a
 region's list open, the grid and the regions give way to the region's name, its count and which checks are shown, then up to 18 checks:
 a filled green box and a green name when collected, an empty white box and a white name when missing, a dim question mark when the game
@@ -106,13 +106,42 @@ doesn't have the flag.
 
 Quad budget: ocarinaMIDI draws at most 512 quads (a short list). This panel's text is about 1,000 quads at most (35 regions, 36 cells), so
 `MAX_QUADS` in `gpuui.c` is 1,536, the command memory per slot (`overlay.c`) 0x40000 (sloperinaGZ's own size) and the elements 2 x 1,536 x
-256 bytes. Over the budget the rest of the frame is left out, with a log line, not a crash.
+256 bytes. Over the budget the rest of the frame is left out, with a log line, not a crash. The icons add at most 27 quads, and shrinking
+a picture has its own 36 elements per slot.
+
+## The items' icons
+
+`content:/RandoTracker/icons.bin` ([docs/ingame-tracker-format.md](../../docs/ingame-tracker-format.md)), which the randomizer writes on the
+player's PC from their own game: for each item of the grid, the game's picture as its BNTX stores it (ASTC 4x4 blocks in the GPU's
+block-linear layout) and the BNTX's description of that layout. Nothing is decoded on either side: the module gives the bytes to NVN as an
+ASTC 4x4 texture with that packaged layout (`nvnTextureBuilderSetPackagedTextureLayout`), as sloperinaGZ's `gpuui.c` makes textures of the
+game's own pictures (master 5287f64). They are sampled as unorm whatever the BNTX says, as sloperinaGZ does: no sRGB decode, like
+everything else the panel draws.
+
+The pictures are large (up to 704 KB each, about 7 MB for the 27) and the game's heap has little to spare (sloperinaGZ's NATIVE_UI.md and
+FINDINGS.md: it refused allocations past about 10 to 11 MB), so they are not kept. Each is shrunk once, on the GPU, into a 64-pixel slot
+of an icon atlas (384 x 320, RGBA16F, about 1 MB), and only one picture's bytes are held at a time:
+
+1. The first frame the panel is drawn (`trackerui.c`, `icons_start`), the file's header and index are read and checked (`iconfile.c`), the
+   grid's cells are matched with its entries by name, and `gpuui_icons_init` makes the atlas (registered after the glyph atlas) and room
+   for the largest picture.
+2. Then one picture every other frame the panel is drawn (frame slot 0, so the GPU is done with the last one): its bytes are read by offset
+   into that memory, NVN makes a texture of them, and the frame's commands draw it into its slot before the panel. Each atlas pixel is the
+   mean of up to 6 x 6 filtered samples, their premultiplied colours added up by blending, so a 683-pixel picture doesn't alias at a tenth
+   of its size. The cell shows its icon from that frame on, its letters until then.
+3. Once all are in, the picture memory is freed (log: `the icons are in; the pictures' N KiB go back`).
+
+A cell's icon is a square as tall as the cell, in its middle, drawn with premultiplied blending: at full strength when the item is owned,
+dimmed when it is missing or unknown. The atlas is a render target, so its rows run the window's way up: with the lower-left origin it is
+sampled upside down, as sloperinaGZ samples its layer.
 
 ## Failure modes
 
 Each is logged once and leaves the game alone: no `seed.trk` or a damaged one (idle); an unknown build (the panel opens and says so);
 no save data yet (the panel says "Waiting for the game's save data"); the game's font or shader can't be read, or the GPU side can't start
-(no panel; the controls still work); the GPU not finishing a frame's drawing for 5 s (the panel gives up).
+(no panel; the controls still work); the GPU not finishing a frame's drawing for 5 s (the panel gives up); no `icons.bin`, a damaged one,
+an NVN without the functions the icons need, or no memory for them (the items show as their letters); a picture that can't be read or
+that NVN won't take (that item shows as its letters).
 
 ## Known limits
 
@@ -121,5 +150,4 @@ no save data yet (the panel says "Waiting for the game's save data"); the game's
   Kokiri-only mode's "Four-chest house" checks have an em dash).
 - The panel is drawn at the present, over everything, the game's pause screen included.
 - "In logic" (what can be reached now) is not shown: it needs the randomizer's Python logic sweep.
-- Item icons: v1 draws text and coloured boxes. The icons are the game's own (`UI/Tex/Icon/*.bntx.zs`); sloperinaGZ's `gameimage.c` and
-  `astc.c` read them.
+- The icons need the player's game when the seed is made, or `update-tracker --nup`: a seed without `icons.bin` shows the items' letters.

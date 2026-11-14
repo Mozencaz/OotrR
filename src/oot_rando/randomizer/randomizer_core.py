@@ -31,7 +31,7 @@ from oot_rando.game.world_maps import SAFE_CATEGORIES, build_world, effective_me
 from oot_rando.game.resource_allocations import allocation, grow_resources, add_resources
 from oot_rando.formats.byml_writer import patch_strings
 from oot_rando.logic import rando_options
-from oot_rando.tracker import ingame_bundle
+from oot_rando.tracker import ingame_bundle, ingame_icons
 
 GENERATOR_VERSION = '0.8.0'
 ADAPTER_VERSION = 'ap-glitchless-v4'   # v4: short key ring / boss key / regional soul actor names
@@ -588,7 +588,9 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, ingam
                     row['reward'] = reward_label(actor_item(actor, placement.get('folder', '')), actor)
         exefs = {}
         if ingame_tracker:
-            ingame_bundle.attach(manifest, files, exefs, checks['checks'], tracking)
+            report('In-game tracker: the items\' icons from the game…')
+            icons = ingame_icons.icons_file(ingame_icons.nup_reader(nup, d))
+            ingame_bundle.attach(manifest, files, exefs, checks['checks'], tracking, icons)
         tracking_bytes = json.dumps(tracking, ensure_ascii=False, indent=2).encode('utf-8')
         manifest['tracking'] = {'schema_version': 1, 'sha256': sha256(tracking_bytes),
                                 'new_save_required': True, 'mode': 'save'}

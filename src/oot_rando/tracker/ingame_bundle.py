@@ -2,13 +2,15 @@
 
 A seed folder gets ``romfs/RandoTracker/seed.trk`` (spoiler-free: seed and goal markers,
 region and check names, the save flags to observe) and ``exefs/subsdk7``, the prebuilt GPL-3 module
-that reads them while the game runs (R + right stick up). Both are listed in the manifest.
+that reads them while the game runs (R + right stick up), and, made from the player's game, the
+items' icons (``romfs/RandoTracker/icons.bin``, ingame_icons.py). All are listed in the manifest.
 """
 import hashlib
 
 from oot_rando.paths import resource
 from oot_rando.tracker.check_labels import check_labels
 from oot_rando.tracker import ingame_format as fmt
+from oot_rando.tracker.ingame_icons import ICON_FILE
 
 SEED_FILE = 'RandoTracker/seed.trk'
 MODULE_FILE = 'subsdk7'
@@ -63,12 +65,16 @@ def describe(data):
     return {'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
 
 
-def attach(manifest, files, exefs, checks, tracking):
-    """Add the tracker to a seed being generated: its data file to ``files`` (RomFS), the
-    module to ``exefs``, and both to the manifest."""
+def attach(manifest, files, exefs, checks, tracking, icons=None):
+    """Add the tracker to a seed being generated: its data file (and the icons, if given) to
+    ``files`` (RomFS), the module to ``exefs``, and all of them to the manifest."""
     data = seed_file(manifest, checks, tracking)
     files[SEED_FILE] = data
-    manifest['files'] = dict(sorted({**manifest['files'], SEED_FILE: describe(data)}.items()))
+    entries = {SEED_FILE: describe(data)}
+    if icons:
+        files[ICON_FILE] = icons
+        entries[ICON_FILE] = describe(icons)
+    manifest['files'] = dict(sorted({**manifest['files'], **entries}.items()))
     module = module_binary()
     exefs[MODULE_FILE] = module
     manifest['exefs'] = {MODULE_FILE: describe(module)}

@@ -12,6 +12,9 @@
 
 /* the whole file, in a block from aligned_alloc (free it with free()); NULL if it can't be read */
 uint8_t *gamefile_read(const char *path, size_t *size_out);
+/* up to `size` bytes at `offset` into buf (fewer at the file's end): how many, or -1 if the file can't be read;
+ * its size in *file_size */
+int64_t gamefile_read_at(const char *path, uint64_t offset, void *buf, size_t size, uint64_t *file_size);
 /* a .zs file decompressed (zstd, with the game's dictionary when the frame asks for one); NULL on error */
 uint8_t *gamefile_read_zs(const char *path, size_t *size_out);
 /* free what gamefile_read_zs keeps between calls (the zstd dictionaries) */

@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
 REAL_SEED = FIXTURES / "real-seed.trk"
-SOURCES = ["trkfile.c", "tracker.c", "gamedata.c", "grid.c", "text.c", "controls.c", "browse.c"]
+SOURCES = ["trkfile.c", "tracker.c", "gamedata.c", "grid.c", "text.c", "controls.c", "browse.c", "iconfile.c"]
 
 
 def find_compiler():

@@ -52,15 +52,25 @@ void free(void *p);                             /* from main */
 #define DEFAULT_DESCRIPTOR_SIZE 32
 #define DEFAULT_RESERVED_ID 256
 #define MAX_DESCRIPTOR_SIZE 256
+#define ICON_PX 64            /* an icon's slot in the icon atlas */
+#define ICON_COLS 6
+#define ICON_ROWS 5
+#define ICONS_W (ICON_PX * ICON_COLS)
+#define ICONS_H (ICON_PX * ICON_ROWS)
+#define ICON_TAPS_MAX 6       /* a picture is shrunk as the mean of up to 6 x 6 filtered samples per icon pixel */
+#define BAKE_QUADS (ICON_TAPS_MAX * ICON_TAPS_MAX)
+#define ID_ICONS 1            /* after the glyph atlas: the icon atlas, then the picture being shrunk */
+#define ID_PICTURE 2
 
 /* NVN values */
 enum {
   STAGE_VERTEX = 0, STAGE_FRAGMENT = 1, STAGES_GRAPHICS = 0xFF,
   BLEND_ONE = 2, BLEND_SRC_ALPHA = 5, BLEND_ONE_MINUS_SRC_ALPHA = 6, BLEND_ADD = 1,
   FACE_NONE = 0, PRIM_TRIANGLE_STRIP = 5,
-  FMT_RG8 = 0x0D, FMT_RG32F = 0x16, TARGET_2D = 1,
+  FMT_RG8 = 0x0D, FMT_RG32F = 0x16, FMT_RGBA16F = 0x29, FMT_ASTC_4X4 = 0x79, TARGET_2D = 1,
   SWIZZLE_R = 2, SWIZZLE_G = 3, FILTER_LINEAR = 1, WRAP_CLAMP_TO_EDGE = 7,
   BARRIER_ORDER_PRIMITIVES = 1, BARRIER_ORDER_FRAGMENTS = 2, BARRIER_INVALIDATE_TEXTURE = 0x10,
+  BARRIER_INVALIDATE_TEXTURE_DESCRIPTOR = 0x40, TEXTURE_COMPRESSIBLE = 0x8, CLEAR_ALL_CHANNELS = 0xF,
   INFO_TEXTURE_DESCRIPTOR_SIZE = 0xF, INFO_SAMPLER_DESCRIPTOR_SIZE = 0x10, INFO_RESERVED_TEXTURES = 0x11,
   INFO_RESERVED_SAMPLERS = 0x12,
 };
@@ -167,6 +177,20 @@ _Static_assert(sizeof(g_names) / sizeof(*g_names) == sizeof(g) / sizeof(void *),
 /* optional: NVN's own sizes of the descriptors, else NVN 2's */
 static void (*device_integer)(const nvn_device_t *, int, int *);
 
+/* only for the icons (gpuui_icons_init): without them, the items show as their letters */
+static struct {
+  void (*tb_packaged_layout)(void *, const void *);
+  void (*pool_flush)(const nvn_obj_t *, ptrdiff_t, size_t);
+  void (*pool_finalize)(nvn_obj_t *);
+  void (*texture_finalize)(void *);
+  void (*cmd_clear_colour)(nvn_obj_t *, int, const float *, int);
+} gi;
+static const char *const gi_names[] = {
+  "nvnTextureBuilderSetPackagedTextureLayout", "nvnMemoryPoolFlushMappedRange", "nvnMemoryPoolFinalize",
+  "nvnTextureFinalize", "nvnCommandBufferClearColor",
+};
+_Static_assert(sizeof(gi_names) / sizeof(*gi_names) == sizeof(gi) / sizeof(void *), "gpuui icon functions");
+
 /* --- objects and memory ------------------------------------------------------------------------------ */
 
 static bool ready;
@@ -178,6 +202,8 @@ static nvn_addr_t data_gpu;
 static nvn_obj_t programs[UI_PROGRAMS];
 static shader_data_t shader_data[UI_PROGRAMS][2];
 static nvn_obj_t blend, colour, channels, multisample, polygon, depth;
+static nvn_obj_t blend_premultiplied; /* the icons: their atlas holds premultiplied colours */
+static nvn_obj_t blend_accumulate;    /* shrinking a picture: the samples' premultiplied colours add up */
 static _Alignas(16) uint8_t attribs[2 * 4]; /* NVN 2's vertex attribute state is 4 bytes (the game's stride) */
 static _Alignas(16) uint8_t streams[8];     /* ... its vertex stream state 8 */
 static nvn_obj_t atlas_builder, atlas, sampler_builder, sampler, texture_pool, sampler_pool;
@@ -196,8 +222,8 @@ static int device_info(int item, int fallback, int most)
 }
 
 /* the data pool's layout */
-static size_t off_vertices, off_view, off_shadow, off_material, off_textures, off_samplers, off_elements, off_staging,
-  off_atlas, data_size;
+static size_t off_vertices, off_view, off_shadow, off_material, off_icon_view, off_textures, off_samplers, off_elements,
+  off_bake, off_staging, off_atlas, data_size;
 
 static size_t round_up(size_t n, size_t to) { return (n + to - 1) / to * to; }
 
@@ -250,6 +276,14 @@ static void make_states(void)
   g.blend_target(&blend, 0);
   g.blend_func(&blend, BLEND_SRC_ALPHA, BLEND_ONE_MINUS_SRC_ALPHA, BLEND_ONE, BLEND_ONE_MINUS_SRC_ALPHA);
   g.blend_equation(&blend, BLEND_ADD, BLEND_ADD);
+  g.blend_defaults(&blend_premultiplied);
+  g.blend_target(&blend_premultiplied, 0);
+  g.blend_func(&blend_premultiplied, BLEND_ONE, BLEND_ONE_MINUS_SRC_ALPHA, BLEND_ONE, BLEND_ONE_MINUS_SRC_ALPHA);
+  g.blend_equation(&blend_premultiplied, BLEND_ADD, BLEND_ADD);
+  g.blend_defaults(&blend_accumulate);
+  g.blend_target(&blend_accumulate, 0);
+  g.blend_func(&blend_accumulate, BLEND_SRC_ALPHA, BLEND_ONE, BLEND_ONE, BLEND_ONE);
+  g.blend_equation(&blend_accumulate, BLEND_ADD, BLEND_ADD);
   g.colour_defaults(&colour);
   g.colour_blend_enable(&colour, 0, true);
   g.channel_defaults(&channels);
@@ -298,16 +332,18 @@ static void plan_data(size_t atlas_size, size_t atlas_align)
   off_view = at, at += UNIFORM_SIZE * SLOTS;
   off_shadow = at, at += UNIFORM_SIZE;
   off_material = at, at += UNIFORM_SIZE;
+  off_icon_view = at, at += UNIFORM_SIZE;
   at = round_up(at, PAGE);
   texture_descriptor = device_info(INFO_TEXTURE_DESCRIPTOR_SIZE, DEFAULT_DESCRIPTOR_SIZE, MAX_DESCRIPTOR_SIZE);
   sampler_descriptor = device_info(INFO_SAMPLER_DESCRIPTOR_SIZE, DEFAULT_DESCRIPTOR_SIZE, MAX_DESCRIPTOR_SIZE);
-  our_texture_id = device_info(INFO_RESERVED_TEXTURES, DEFAULT_RESERVED_ID, POOL_ENTRIES - 2); /* then the atlas */
+  our_texture_id = device_info(INFO_RESERVED_TEXTURES, DEFAULT_RESERVED_ID, POOL_ENTRIES - 1 - ID_PICTURE); /* then the atlas */
   our_sampler_id = device_info(INFO_RESERVED_SAMPLERS, DEFAULT_RESERVED_ID, POOL_ENTRIES - 1);
   off_textures = at, at += (size_t)POOL_ENTRIES * texture_descriptor;
   at = round_up(at, PAGE);
   off_samplers = at, at += (size_t)POOL_ENTRIES * sampler_descriptor;
   at = round_up(at, PAGE);
   off_elements = at, at += (size_t)SLOTS * MAX_QUADS * ELEMENT_SIZE;
+  off_bake = at, at += (size_t)SLOTS * BAKE_QUADS * ELEMENT_SIZE;
   off_staging = at, at += (size_t)ATLAS_STRIDE * ATLAS_H;
   at = round_up(at, atlas_align);
   off_atlas = at, at += atlas_size;
@@ -361,6 +397,9 @@ static bool load_functions(void)
     }
   }
   device_integer = nvn_proc("nvnDeviceGetInteger");
+  void **optional = (void **)&gi;
+  for (unsigned i = 0; i < sizeof(gi_names) / sizeof(*gi_names); i++)
+    optional[i] = nvn_proc(gi_names[i]);
   return true;
 }
 
@@ -512,12 +551,15 @@ static const atlas_slot_t *atlas_glyph_shadowed(gf_face_t face, int em, uint32_t
 
 /* --- a frame ----------------------------------------------------------------------------------------- */
 
+/* what a quad samples: nothing, the glyph atlas, the icon atlas, the picture being shrunk into it */
+enum { QUAD_SOLID, QUAD_GLYPH, QUAD_ICON, QUAD_PICTURE };
+
 typedef struct {
   float m[12];         /* row-major 3x4 */
   gpu_colour_t c[4];
   float w, h;
   float st[8];         /* the corners' texture coordinates */
-  bool textured;
+  uint8_t source;
 } quad_t;
 
 static quad_t quads[MAX_QUADS];
@@ -526,6 +568,22 @@ static nvn_texture_t *frame_target;
 static nvn_rect_t frame_area;
 static int frame_texture_height, frame_slot;
 static bool frame_lower_left;
+
+/* The items' icons (below), one picture at a time: read into `picture_mem` (a pool the CPU writes through its
+ * cache), made a texture in its packaged layout (the game's own, as sloperinaGZ's gpuui.c makes the game's
+ * pictures: 5287f64), then shrunk into its slot of the atlas (a render target, as its lines' layer is) by one
+ * draw per sample. The picture's memory is reused only in frames on slot 0, whose fence has passed since the
+ * last picture was shrunk. */
+static struct {
+  enum { ICONS_OFF, ICONS_ON, ICONS_FAILED } state;
+  uint8_t *atlas_mem, *picture_mem;
+  size_t atlas_size, picture_size;
+  nvn_obj_t builder, atlas_pool, atlas, picture_pool, picture;
+  nvn_handle_t atlas_handle, picture_handle;
+  bool atlas_made, picture_made, cleared, descriptors_new, staging_taken;
+  bool ready[GPUUI_ICONS];
+  int bake_slot, taps; /* the icon this frame shrinks a picture into (-1: none), from taps x taps samples a pixel */
+} icons = { .bake_slot = -1 };
 
 bool gpuui_atlas_resetting(void)
 {
@@ -540,6 +598,7 @@ void gpuui_begin(nvn_texture_t *target, nvn_rect_t area, int texture_height, boo
   frame_texture_height = texture_height;
   frame_lower_left = origin_lower_left;
   frame_slot = slot % SLOTS;
+  icons.staging_taken = false;
   gamefont_begin_draw();
   if (atlas_full) {
     atlas_reset();
@@ -578,7 +637,7 @@ void gpuui_rect(float x, float y, float w, float h, const gpu_colour_t corners[4
   memcpy(q->c, corners, sizeof(q->c));
   q->w = w;
   q->h = h;
-  q->textured = false;
+  q->source = QUAD_SOLID;
 }
 
 void gpuui_fill(float x, float y, float w, float h, gpu_colour_t colour)
@@ -602,7 +661,7 @@ static void textured_quad(const atlas_slot_t *s, float x, float y, gpu_colour_t 
   float s1 = (float)(s->x + s->w) / ATLAS_W, t1 = (float)(s->y + s->h) / ATLAS_H;
   float st[8] = { s0, t0, s1, t0, s0, t1, s1, t1 };
   memcpy(q->st, st, sizeof(st));
-  q->textured = true;
+  q->source = QUAD_GLYPH;
 }
 
 float gpuui_glyph_shadowed(gf_face_t face, int em, uint32_t cp, float x, float baseline, gpu_colour_t colour)
@@ -621,6 +680,175 @@ float gpuui_glyph_shadowed(gf_face_t face, int em, uint32_t cp, float x, float b
   return s->advance;
 }
 
+/* --- the items' icons -------------------------------------------------------------------------------- */
+
+static void describe_texture(nvn_obj_t *builder, int format, int w, int h, int flags)
+{
+  g.tb_device(builder, nvn_device());
+  g.tb_defaults(builder);
+  g.tb_target(builder, TARGET_2D);
+  g.tb_format(builder, format);
+  g.tb_size(builder, w, h);
+  g.tb_levels(builder, 1);
+  g.tb_flags(builder, flags);
+}
+
+/* what gpuui_icons_init made, given back (nothing of it has gone to the GPU yet) */
+static void icons_drop(void)
+{
+  if (icons.atlas_made)
+    gi.texture_finalize(&icons.atlas);
+  if (icons.atlas_mem) {
+    gi.pool_finalize(&icons.atlas_pool);
+    free(icons.atlas_mem);
+  }
+  free(icons.picture_mem);
+  icons.atlas_mem = icons.picture_mem = 0;
+  icons.atlas_made = false;
+}
+
+static bool make_icon_atlas(void)
+{
+  describe_texture(&icons.builder, FMT_RGBA16F, ICONS_W, ICONS_H, TEXTURE_COMPRESSIBLE);
+  size_t align = g.tb_storage_align(&icons.builder);
+  align = align < PAGE ? PAGE : align;
+  icons.atlas_size = round_up(g.tb_storage_size(&icons.builder), align);
+  icons.atlas_mem = aligned_alloc(align, icons.atlas_size);
+  if (!icons.atlas_mem)
+    return false;
+  if (!nvn_make_pool(&icons.atlas_pool, icons.atlas_mem, icons.atlas_size,
+                     NVN_POOL_CPU_NO_ACCESS | NVN_POOL_GPU_CACHED | NVN_POOL_COMPRESSIBLE)) {
+    free(icons.atlas_mem);
+    icons.atlas_mem = 0;
+    return false;
+  }
+  g.tb_storage(&icons.builder, &icons.atlas_pool, 0);
+  if (!g.texture_init(&icons.atlas, &icons.builder))
+    return false;
+  icons.atlas_made = true;
+  g.texture_pool_register(&texture_pool, our_texture_id + ID_ICONS, &icons.atlas, 0);
+  icons.atlas_handle = g.texture_handle(nvn_device(), our_texture_id + ID_ICONS, our_sampler_id);
+  return true;
+}
+
+bool gpuui_icons_init(size_t largest)
+{
+  if (icons.state != ICONS_OFF)
+    return icons.state == ICONS_ON;
+  icons.state = ICONS_FAILED;
+  if (!ready || !largest)
+    return false;
+  void *const *optional = (void *const *)&gi;
+  for (unsigned i = 0; i < sizeof(gi_names) / sizeof(*gi_names); i++) {
+    if (!optional[i]) {
+      log_printf("gpu drawing: NVN has no %s; the items show as their letters", gi_names[i]);
+      return false;
+    }
+  }
+  icons.picture_size = round_up(largest, PAGE);
+  bool atlas = make_icon_atlas();
+  icons.picture_mem = atlas ? aligned_alloc(PAGE, icons.picture_size) : 0;
+  if (!icons.picture_mem || !nvn_make_pool(&icons.picture_pool, icons.picture_mem, icons.picture_size,
+                                           NVN_POOL_CPU_CACHED | NVN_POOL_GPU_CACHED)) {
+    log_printf("gpu drawing: no memory for the icons (%u KiB and %u KiB); the items show as their letters",
+               (unsigned)(icons.atlas_size / 1024), (unsigned)(icons.picture_size / 1024));
+    icons_drop();
+    return false;
+  }
+  float view[16] = { 2.0f / ICONS_W, 0, 0, 0, 0, -2.0f / ICONS_H, 0, 0, 0, 0, 1, 0, -1, 1, 0, 1 };
+  memcpy(data_mem + off_icon_view, view, sizeof(view)); /* the atlas's pixels, y down, to clip space */
+  icons.descriptors_new = true;
+  icons.state = ICONS_ON;
+  log_printf("gpu drawing: icon atlas %dx%d (%u KiB), %u KiB for a picture while they go in", ICONS_W, ICONS_H,
+             (unsigned)(icons.atlas_size / 1024), (unsigned)(icons.picture_size / 1024));
+  return true;
+}
+
+uint8_t *gpuui_icon_staging(void)
+{
+  if (icons.state != ICONS_ON || !icons.picture_mem || icons.staging_taken || frame_slot != 0)
+    return 0;
+  icons.staging_taken = true;
+  return icons.picture_mem;
+}
+
+bool gpuui_icon_bake(int slot, const gpuui_picture_t *picture)
+{
+  if (icons.state != ICONS_ON || !icons.staging_taken || icons.bake_slot >= 0 || slot < 0 || slot >= GPUUI_ICONS ||
+      picture->width <= 0 || picture->height <= 0 || !picture->size || picture->size > icons.picture_size)
+    return false;
+  gi.pool_flush(&icons.picture_pool, 0, picture->size); /* it came in through the CPU's cache */
+  if (icons.picture_made) {
+    gi.texture_finalize(&icons.picture);
+    icons.picture_made = false;
+  }
+  describe_texture(&icons.builder, FMT_ASTC_4X4, picture->width, picture->height, 0);
+  g.tb_swizzle(&icons.builder, picture->swizzle[0], picture->swizzle[1], picture->swizzle[2], picture->swizzle[3]);
+  gi.tb_packaged_layout(&icons.builder, picture->layout);
+  g.tb_storage(&icons.builder, &icons.picture_pool, 0);
+  if (g.tb_storage_size(&icons.builder) > picture->size || !g.texture_init(&icons.picture, &icons.builder))
+    return false;
+  icons.picture_made = true;
+  g.texture_pool_register(&texture_pool, our_texture_id + ID_PICTURE, &icons.picture, 0);
+  icons.picture_handle = g.texture_handle(nvn_device(), our_texture_id + ID_PICTURE, our_sampler_id);
+  icons.descriptors_new = true;
+  int side = picture->width > picture->height ? picture->width : picture->height;
+  int taps = (side + ICON_PX - 1) / ICON_PX;
+  icons.taps = taps < 1 ? 1 : taps > ICON_TAPS_MAX ? ICON_TAPS_MAX : taps;
+  icons.bake_slot = slot;
+  icons.ready[slot] = true; /* this frame's drawing comes after it */
+  return true;
+}
+
+bool gpuui_icons_done(void)
+{
+  if (!icons.picture_mem)
+    return true;
+  if (icons.bake_slot >= 0 || icons.staging_taken || frame_slot != 0) /* slot 0: the last picture's frame is done */
+    return false;
+  if (icons.picture_made)
+    gi.texture_finalize(&icons.picture);
+  icons.picture_made = false;
+  gi.pool_finalize(&icons.picture_pool);
+  free(icons.picture_mem);
+  icons.picture_mem = 0;
+  log_printf("gpu drawing: the icons are in; the pictures' %u KiB go back", (unsigned)(icons.picture_size / 1024));
+  return true;
+}
+
+bool gpuui_icon_ready(int slot)
+{
+  return icons.state == ICONS_ON && slot >= 0 && slot < GPUUI_ICONS && icons.ready[slot];
+}
+
+/* where pixel row y (y down) of the atlas is in texture coordinates: a render target's rows run the window's way
+ * up, as sloperinaGZ samples its layer */
+static float icon_t(float y)
+{
+  return frame_lower_left ? 1 - y / ICONS_H : y / ICONS_H;
+}
+
+void gpuui_icon(int slot, float x, float y, float w, float h, gpu_colour_t colour)
+{
+  if (!gpuui_icon_ready(slot) || w <= 0 || h <= 0)
+    return;
+  quad_t *q = new_quad();
+  if (!q)
+    return;
+  set_translate(q, x, y);
+  gpu_colour_t c = { colour.r * colour.a, colour.g * colour.a, colour.b * colour.a, colour.a }; /* premultiplied */
+  for (int i = 0; i < 4; i++)
+    q->c[i] = c;
+  q->w = w;
+  q->h = h;
+  float px = (float)(slot % ICON_COLS * ICON_PX), py = (float)(slot / ICON_COLS * ICON_PX), half = 0.5f;
+  float s0 = (px + half) / ICONS_W, s1 = (px + ICON_PX - half) / ICONS_W;
+  float t0 = icon_t(py + half), t1 = icon_t(py + ICON_PX - half);
+  float st[8] = { s0, t0, s1, t0, s0, t1, s1, t1 };
+  memcpy(q->st, st, sizeof(st));
+  q->source = QUAD_ICON;
+}
+
 static void write_element(uint8_t *at, const quad_t *q)
 {
   float e[ELEMENT_WORDS] = { 0 };
@@ -633,7 +861,7 @@ static void write_element(uint8_t *at, const quad_t *q)
   }
   e[28] = q->w;
   e[29] = q->h;
-  if (q->textured)
+  if (q->source != QUAD_SOLID)
     memcpy(&e[32], q->st, sizeof(q->st));
   e[40] = 1; /* the texture matrix: identity */
   e[43] = 1;
@@ -681,20 +909,69 @@ static void write_view(size_t view_at)
   memcpy(data_mem + view_at, view, sizeof(view));
 }
 
+/* this frame's picture, shrunk into its icon's slot: the mean of taps x taps filtered samples a pixel, their
+ * premultiplied colours added up in half floats */
+static void record_bake(nvn_obj_t *cmd)
+{
+  nvn_texture_t *target = (nvn_texture_t *)&icons.atlas;
+  g.cmd_targets(cmd, 1, &target, 0, 0, 0);
+  g.cmd_viewport(cmd, 0, 0, ICONS_W, ICONS_H);
+  g.cmd_scissor(cmd, 0, 0, ICONS_W, ICONS_H);
+  if (!icons.cleared) {
+    static const float clear[4] = { 0, 0, 0, 0 };
+    gi.cmd_clear_colour(cmd, 0, clear, CLEAR_ALL_CHANNELS);
+    icons.cleared = true;
+  }
+  int slot = icons.bake_slot, n = icons.taps;
+  icons.bake_slot = -1;
+  if (slot >= 0) {
+    bind_frame(cmd, off_icon_view);
+    g.cmd_blend(cmd, &blend_accumulate);
+    g.cmd_program(cmd, &programs[UI_PROGRAM_TEXTURE], STAGES_GRAPHICS);
+    g.cmd_texture(cmd, STAGE_FRAGMENT, 8, icons.picture_handle);
+    float x = (float)(slot % ICON_COLS * ICON_PX), y = (float)(slot / ICON_COLS * ICON_PX);
+    gpu_colour_t weight = { 1, 1, 1, 1.0f / (float)(n * n) };
+    size_t elements = off_bake + (size_t)frame_slot * BAKE_QUADS * ELEMENT_SIZE;
+    for (int i = 0; i < n * n; i++) {
+      quad_t q = { .c = { weight, weight, weight, weight }, .w = ICON_PX, .h = ICON_PX, .source = QUAD_PICTURE };
+      set_translate(&q, x, y);
+      /* the sample's place in the pixel, in the picture's coordinates (a pixel is 1 / ICON_PX of it) */
+      float du = (((float)(i % n) + 0.5f) / (float)n - 0.5f) / ICON_PX;
+      float dv = (((float)(i / n) + 0.5f) / (float)n - 0.5f) / ICON_PX;
+      float st[8] = { du, dv, 1 + du, dv, du, 1 + dv, 1 + du, 1 + dv };
+      memcpy(q.st, st, sizeof(st));
+      size_t at = elements + (size_t)i * ELEMENT_SIZE;
+      write_element(data_mem + at, &q);
+      g.cmd_storage(cmd, STAGE_VERTEX, 6, data_gpu + at, ELEMENT_SIZE);
+      g.cmd_draw(cmd, PRIM_TRIANGLE_STRIP, 0, 4);
+    }
+  }
+  g.cmd_barrier(cmd, BARRIER_ORDER_PRIMITIVES | BARRIER_ORDER_FRAGMENTS | BARRIER_INVALIDATE_TEXTURE);
+}
+
 /* the frame's quads, each one draw with its element bound; stops when command memory runs short */
 static void draw_quads(nvn_obj_t *cmd, size_t elements)
 {
-  int program = -1;
+  int program = -1, texture = QUAD_GLYPH; /* bind_frame bound the glyph atlas and the straight blending */
+  bool premultiplied = false;
   for (int i = 0; i < n_quads; i++) {
     if (g.cmd_free(cmd) < CMD_RESERVE) {
       log_printf("gpu drawing: out of command memory in a frame of %d quads; the rest left out", n_quads);
       return;
     }
     const quad_t *q = &quads[i];
-    int wanted = q->textured ? UI_PROGRAM_TEXTURE : UI_PROGRAM_SOLID;
+    int wanted = q->source == QUAD_SOLID ? UI_PROGRAM_SOLID : UI_PROGRAM_TEXTURE;
     if (wanted != program) {
       g.cmd_program(cmd, &programs[wanted], STAGES_GRAPHICS);
       program = wanted;
+    }
+    if (q->source != QUAD_SOLID && q->source != texture) {
+      g.cmd_texture(cmd, STAGE_FRAGMENT, 8, q->source == QUAD_ICON ? icons.atlas_handle : atlas_handle);
+      texture = q->source;
+    }
+    if ((q->source == QUAD_ICON) != premultiplied) {
+      premultiplied = q->source == QUAD_ICON;
+      g.cmd_blend(cmd, premultiplied ? &blend_premultiplied : &blend);
     }
     size_t at = elements + (size_t)i * ELEMENT_SIZE;
     write_element(data_mem + at, q);
@@ -705,13 +982,20 @@ static void draw_quads(nvn_obj_t *cmd, size_t elements)
 
 bool gpuui_end(nvn_obj_t *cmd, const void *game_texture_pool, const void *game_sampler_pool)
 {
-  if (!ready || !n_quads)
+  bool baking = icons.state == ICONS_ON && (icons.bake_slot >= 0 || !icons.cleared);
+  if (!ready || (!n_quads && !baking))
     return false;
   upload_atlas(cmd);
+  if (icons.descriptors_new) { /* the icons' descriptors, read afresh */
+    g.cmd_barrier(cmd, BARRIER_INVALIDATE_TEXTURE_DESCRIPTOR);
+    icons.descriptors_new = false;
+  }
   size_t view_at = off_view + (size_t)frame_slot * UNIFORM_SIZE;
   write_view(view_at);
   int vy = frame_lower_left ? frame_texture_height - frame_area.y - frame_area.h : frame_area.y;
   g.cmd_render_enable(cmd, true);
+  if (baking)
+    record_bake(cmd);
   g.cmd_targets(cmd, 1, &frame_target, 0, 0, 0);
   g.cmd_viewport(cmd, frame_area.x, vy, frame_area.w, frame_area.h);
   g.cmd_scissor(cmd, frame_area.x, vy, frame_area.w, frame_area.h);

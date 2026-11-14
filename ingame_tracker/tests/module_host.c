@@ -1,5 +1,5 @@
 /* The module's logic on the PC, for tests/test_module.py: the seed file's parser, the tracker's state, the game-data
- * reader over a fake GameData in memory, the controls and the browsing. `module_host --list` names the tests; `module_host NAME
+ * reader over a fake GameData in memory, the controls, the browsing and the icons file's index. `module_host --list` names the tests; `module_host NAME
  * [FIXTURE]` runs one (FIXTURE: a seed file for the tests that read one) and exits 0 if it passes. */
 #define _CRT_SECURE_NO_WARNINGS
 #include <stdint.h>
@@ -11,6 +11,7 @@
 #include "../src/controls.h"
 #include "../src/gamedata.h"
 #include "../src/grid.h"
+#include "../src/iconfile.h"
 #include "../src/npad.h"
 #include "../src/text.h"
 #include "../src/tracker.h"
@@ -850,6 +851,101 @@ static int test_text_helpers(void)
   return 0;
 }
 
+/* --- the icons file's index ------------------------------------------------------------------- */
+
+#define ICONS_BYTES 4288 /* a 64 x 64 bow (4096 bytes) and an 8 x 4 hookshot (32), after the header and 2 entries */
+
+static uint8_t icons[ICONS_BYTES];
+
+static void put_icon(int i, const char *name, uint32_t width, uint32_t height, uint32_t offset, uint32_t size)
+{
+  uint8_t *e = icons + ICONFILE_HEADER + i * ICONFILE_ENTRY;
+  memset(e, 0, ICONFILE_ENTRY);
+  memcpy(e, name, strlen(name));
+  put32(e + 32, width);
+  put32(e + 36, height);
+  put32(e + 40, offset);
+  put32(e + 44, size);
+  for (int b = 0; b < 8; b++)
+    e[48 + b] = (uint8_t)(b == 0 ? 4 : 0);
+  e[56] = 2, e[57] = 3, e[58] = 4, e[59] = 5;
+  put32(e + 60, i ? 0x2D06 : 0x2D01);
+}
+
+static void synthetic_icons(void)
+{
+  memset(icons, 0, sizeof(icons));
+  memcpy(icons, "RTIC", 4);
+  put16(icons + 4, ICONFILE_VERSION);
+  put16(icons + 6, ICONFILE_HEADER);
+  put32(icons + 8, ICONS_BYTES);
+  put32(icons + 12, 2);
+  put32(icons + 16, ICONFILE_HEADER);
+  put32(icons + 20, ICONFILE_ENTRY);
+  put32(icons + 24, ICONFILE_HEADER + 2 * ICONFILE_ENTRY);
+  put_icon(0, "Bow", 64, 64, 160, 4096);
+  put_icon(1, "Hookshot", 8, 4, 4256, 32);
+}
+
+static bool icons_parse(icon_index_t *index, size_t size)
+{
+  const char *why = "";
+  return iconfile_parse(index, icons, size, ICONS_BYTES, &why);
+}
+
+static int test_icons_index_reads_every_entry(void)
+{
+  icon_index_t index;
+  synthetic_icons();
+  CHECK(icons_parse(&index, sizeof(icons)));
+  CHECK(index.count == 2 && index.largest == 4096);
+  const icon_entry_t *bow = &index.entries[0], *hookshot = &index.entries[1];
+  CHECK(!strcmp(bow->name, "Bow") && bow->width == 64 && bow->height == 64 && bow->offset == 160 && bow->size == 4096);
+  CHECK(bow->format == 0x2D01 && bow->layout[0] == 4 && bow->swizzle[0] == 2 && bow->swizzle[3] == 5);
+  CHECK(!strcmp(hookshot->name, "Hookshot") && hookshot->format == 0x2D06 && hookshot->offset == 4256);
+  CHECK(icons_parse(&index, ICONFILE_HEADER + 2 * ICONFILE_ENTRY)); /* the head is enough */
+  return 0;
+}
+
+static int test_icons_index_refuses_damage(void)
+{
+  struct { const char *what; size_t at; uint32_t value; int bytes; } damage[] = {
+    { "magic", 0, 0x58585858, 4 },        { "version", 4, 2, 2 },               { "header size", 6, 64, 2 },
+    { "file size", 8, 100, 4 },           { "count 0", 12, 0, 4 },              { "count 31", 12, 31, 4 },
+    { "index place", 16, 64, 4 },         { "entry size", 20, 48, 4 },          { "data place", 24, 176, 4 },
+    { "reserved", 28, 1, 4 },             { "an empty name", 32, 0, 1 },        { "width 0", 64, 0, 4 },
+    { "width 5000", 64, 5000, 4 },        { "height 0", 68, 0, 4 },             { "a misaligned offset", 72, 168, 4 },
+    { "an offset in the index", 72, 144, 4 }, { "a size under its blocks", 76, 4080, 4 },
+    { "a size over 4 MiB", 76, (4u << 20) + 16, 4 }, { "a swizzle", 88, 6, 1 }, { "the format", 92, 0x2D02, 4 },
+    { "a picture past the end", 136, 4272, 4 },
+  };
+  icon_index_t index;
+  for (unsigned i = 0; i < sizeof(damage) / sizeof(*damage); i++) {
+    synthetic_icons();
+    if (damage[i].bytes == 4)
+      put32(icons + damage[i].at, damage[i].value);
+    else if (damage[i].bytes == 2)
+      put16(icons + damage[i].at, damage[i].value);
+    else
+      icons[damage[i].at] = (uint8_t)damage[i].value;
+    if (icons_parse(&index, sizeof(icons))) {
+      snprintf(failure, sizeof(failure), "a damaged %s was accepted", damage[i].what);
+      return 1;
+    }
+  }
+  synthetic_icons();
+  memset(icons + ICONFILE_HEADER, 'A', ICONFILE_NAME); /* a name without its NUL */
+  CHECK(!icons_parse(&index, sizeof(icons)));
+  synthetic_icons();
+  put_icon(1, "Bow", 8, 4, 4256, 32); /* two icons of one item */
+  CHECK(!icons_parse(&index, sizeof(icons)));
+  synthetic_icons();
+  CHECK(!icons_parse(&index, ICONFILE_HEADER + ICONFILE_ENTRY) && !icons_parse(&index, ICONFILE_HEADER - 1));
+  const char *why = "";
+  CHECK(!iconfile_parse(&index, icons, sizeof(icons), ICONS_BYTES + 16, &why) && why[0]);
+  return 0;
+}
+
 /* --- driver ----------------------------------------------------------------------------------- */
 
 typedef struct { const char *name; int (*run)(void); int (*run_with_file)(const char *); } test_t;
@@ -885,6 +981,8 @@ static const test_t tests[] = {
   { "a_list_opens_scrolls_and_goes_back", test_a_list_opens_scrolls_and_goes_back, 0 },
   { "grid_names_and_labels", test_grid_names_and_labels, 0 },
   { "text_helpers", test_text_helpers, 0 },
+  { "icons_index_reads_every_entry", test_icons_index_reads_every_entry, 0 },
+  { "icons_index_refuses_damage", test_icons_index_refuses_damage, 0 },
 };
 
 int main(int argc, char **argv)
