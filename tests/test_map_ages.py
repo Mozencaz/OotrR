@@ -4,6 +4,7 @@ from collections import Counter
 import unittest
 
 from oot_rando.game.extra_sources import scan_map_sources
+from oot_rando.game.remake_world import source_age
 from oot_rando.logic import rando_options
 from oot_rando.logic.world import World
 from oot_rando.randomizer.full_randomizer import prepare, tracker_checks, vname
@@ -86,6 +87,11 @@ class MapAgeTests(unittest.TestCase):
         self.assertEqual(names[KF_ADULT], 'Rock 2 (adult)')
         self.assertEqual(names[KF_BOTH], 'Rock 3')
         self.assertEqual(names[HF_ADULT], 'Rock 5 (adult)')
+
+    def test_event_flows_have_no_age(self):
+        # NPC gifts: an event flow named after a child NPC is not a child map.
+        self.assertIsNone(source_age([{'resource': 'Event/EventFlow/Npc_SkullKid_Child_02.bfevfl.zs'}]))
+        self.assertEqual(source_age([{'resource': KF.format('Child')}]), 'child')
 
 
 if __name__ == '__main__':

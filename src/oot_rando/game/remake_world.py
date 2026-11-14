@@ -319,15 +319,15 @@ def scan_maps(nup, dictionaries, members, progress=None):
 
 
 def map_age(path):
-    """Age of a remake map file (None: not a map, or a map both ages share)."""
-    if not path.startswith('Banc/'):
-        return None
+    """Age of a remake map file (None: a map both ages share)."""
     return 'child' if '_Child_' in path else 'adult' if '_Adult_' in path else None
 
 
 def source_age(variants):
-    """'child' or 'adult' when every copy of a source is on that age's maps, else None."""
-    ages = {map_age(v['resource']) for v in variants}
+    """'child' or 'adult' when every copy of a source is on that age's maps, else None.
+
+    Event flows (NPC gifts) are not maps, even when named after a child or adult NPC."""
+    ages = {map_age(v['resource']) if v['resource'].startswith('Banc/') else None for v in variants}
     return ages.pop() if len(ages) == 1 else None
 
 
