@@ -39,6 +39,16 @@ class Units(unittest.TestCase):
         self.assertEqual(form_actor('Item_Soul_Keese', 'world'), 'Obj_Rando_Item_Soul_Keese')
         self.assertTrue(can_take('Item_Longshot', 'world'))
 
+    def test_ocarinas_never_get_the_hold_up_pose(self):
+        # Chests, NPC hand-overs and shops play the item-get pose: it crashes with an ocarina.
+        for ocarina in ('Item_Ocarina_Fairy', 'Item_Ocarina_Time'):
+            self.assertFalse(can_take(ocarina, 'chest'))
+            self.assertFalse(can_take(ocarina, 'shop'))
+            self.assertFalse(can_take(ocarina, 'event', ['GC Rolling Goron as Child']))
+            self.assertTrue(can_take(ocarina, 'event', ['LW Gift from Saria']))
+            self.assertTrue(can_take(ocarina, 'event', ['HF Ocarina of Time Item']))
+            self.assertTrue(can_take(ocarina, 'world'))
+
     def test_scan_map_sources(self):
         maps = {'Banc/KokiriForest/KokiriForest_Child_Static.bcett.byml.zs': {'root': {'Actors': [
             {'Gyaml': 'Enemy_Skulltula_Gold', 'Hash': 1},
@@ -74,7 +84,10 @@ class Units(unittest.TestCase):
         self.assertEqual((rock['before'], rock['vanilla'], rock['form'], rock['reason']),
                          (None, 'Rupee (1)', 'world', None))
         self.assertEqual(rock['variants'][0]['before'], None)
-        self.assertEqual(set(entries), {'HyruleField#rocks#1'})  # drop tables, no parameter, pots: untouched
+        # Empty pots and crates take a drop too (Discord 14/11); drop tables and
+        # actors without the instance parameter stay untouched.
+        self.assertEqual(set(entries), {'HyruleField#rocks#1', 'HyruleField#pots#4'})
+        self.assertEqual(entries['HyruleField#pots#4']['vanilla'], 'Rupee (1)')
 
     def test_category_options(self):
         values = rando_options.defaults()

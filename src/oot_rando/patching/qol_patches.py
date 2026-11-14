@@ -1595,6 +1595,51 @@ KOKIRI_SHOP_PACKS = tuple(f'Pack/Actor/{name}.pack.zs' for name in (
     'Npc_Kokiri_001_Shop_Child', 'Npc_Kokiri_001_Shop_Adult', 'Npc_Kokiri_001_Shop_Child_ShortStock'))
 
 
+# Mido guards the way to the Deku Tree. His air wall (KokiriForest_Child_Dynamic,
+# FldObj_AirWall_Player_GenerateNavMesh, Presence = MIDO_WALL_FLAG, saved, default
+# True) is only lowered by his "sword and shield" talk (DC0_TT, default schedule).
+# His AIScheduleParam lists story states, the last true ConditionFlag winning (they
+# stay true for the rest of the game). Meeting Zelda first, which vanilla never
+# allows, selects the last one (Goto_HyruleCastle_IsCompleted_Exp): Mido walks away
+# without that talk and the wall stays forever (issue #16).
+#
+# While the wall stands he now keeps his post: a copy of the default schedule
+# conditioned by the wall flag, then the guard schedule (MIDO_GUARD_FLAG, set while
+# the player is in the zone of KokiriForest_Child_Level_All_02_35ae and the wall
+# stands), both after every story state. In vanilla both flags are only true before
+# his talk, when no story state is: the order changes nothing there.
+MIDO_SCHEDULE = 'Component/AIScheduleParam/Npc_Kokiri_Mido_Child.game__component__AIScheduleParam.bgyml'
+MIDO_WALL_FLAG = 'KokiriForest_Npc_Kokiri_Mido_Child_Blocker'
+MIDO_GUARD_FLAG = 'KokiriForest_Npc_Kokiri_Blocker'
+MIDO_PASS_TALK = 'Work/Event/EventSetting/Npc_Kokiri_Mido_Child_DC0_TT.engine__event__EventSettingParam.gyml'
+
+
+def keep_mido_at_post(raw):
+    """Mido keeps guarding the Deku Tree path until his talk lowers the wall.
+
+    Returns (new BYML bytes, summary)."""
+    from oot_rando.formats import byml_codec
+    document = byml_codec.load(raw)
+    root = document['root']
+    states = root['ConditionalSchedule']
+    flags = [state['ConditionFlag'] for state in states]
+    if MIDO_WALL_FLAG in flags:
+        raise ValueError("Mido's schedule is already patched.")
+    if flags.count(MIDO_GUARD_FLAG) != 1 or flags[0] != MIDO_GUARD_FLAG:
+        raise ValueError("Unexpected Mido schedule: guard state not first.")
+    default = root['DefaultSchedule']
+    if [e.get('EventName') for e in default.get('EventEntry', [])] != [MIDO_PASS_TALK]:
+        raise ValueError("Unexpected Mido default schedule: pass talk missing.")
+    post = copy.deepcopy(default)
+    post['ConditionFlag'] = MIDO_WALL_FLAG
+    root['ConditionalSchedule'] = states[1:] + [post, states[0]]
+    result = byml_codec.dump(document)
+    check = [s['ConditionFlag'] for s in byml_codec.load(result)['root']['ConditionalSchedule']]
+    if check != flags[1:] + [MIDO_WALL_FLAG, MIDO_GUARD_FLAG]:
+        raise ValueError("Mido's schedule wrongly rewritten.")
+    return result, {'file': MIDO_SCHEDULE, 'order': check}
+
+
 def release_kokiri_shop_goods(pack_raw):
     """Clear the Deku Tree "Release" condition of every good in the shop's ShopParam.
 
