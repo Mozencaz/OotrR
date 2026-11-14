@@ -74,6 +74,23 @@ def escape_name(name):
     return re.sub(r"['()\[\]-]", '', name.replace(' ', '_'))
 
 
+# A virtual location member ``<prefix><AP location>`` counts only when that age can do
+# the location (``is_child`` / ``is_adult`` true in a region reached at that age).
+AGE_MEMBER_PREFIXES = {'child': 'Child|', 'adult': 'Adult|'}
+
+
+def age_member(age, location):
+    return AGE_MEMBER_PREFIXES[age] + location
+
+
+def split_age_member(member):
+    """``(age, AP location)`` of a virtual location member; age None: either age."""
+    for age, prefix in AGE_MEMBER_PREFIXES.items():
+        if member.startswith(prefix):
+            return age, member[len(prefix):]
+    return None, member
+
+
 class State:
     __slots__ = ('counts', 'reached', 'tod')
 
@@ -503,8 +520,9 @@ class Logic:
     def accessible(self, state, location):
         if location.startswith('Souls|'):
             return all(state.counts.get(item, 0) >= 1 for item in location.split('|')[1:])
+        only, location = split_age_member(location)
         for region_name, rule in self.location_rules.get(location, ()):
-            for age in ('child', 'adult'):
+            for age in (only,) if only else ('child', 'adult'):
                 if region_name in state.reached[age] and rule(state, state.counts, age):
                     return True
         return False

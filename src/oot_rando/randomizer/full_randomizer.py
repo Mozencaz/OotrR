@@ -7,11 +7,11 @@ from collections import Counter, defaultdict
 import hashlib
 from types import SimpleNamespace
 
-from oot_rando.logic.rules import Logic, vanilla_placements
+from oot_rando.logic.rules import Logic, age_member, vanilla_placements
 from oot_rando.logic import rando_options
 from oot_rando.game.remake_world import (PROGRESSIVE, BASE_REQUIRED, STATIC_TIER_SOURCES, item_actor,
                           match_locations, coverage_summary, FOLDER_DUNGEON,
-                          ZONE_LABELS, TRACKED_TYPES, location_zone, zone_label)
+                          ZONE_LABELS, TRACKED_TYPES, location_zone, source_age, zone_label)
 from oot_rando.game.item_forms import can_take, form_actor
 from oot_rando.game.extra_sources import match_sources, area_locations
 from oot_rando.patching.soul_adapter import plan_souls, chest_requirements, soul_label
@@ -306,7 +306,8 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
 
     # Area fallbacks only keep members the logic can reach with every item.
     everything = Counter({item: 9 for item in relevant})
-    _, reachable_all, _ = logic.sweep({l: None for l in logic.location_names()}, logic.new_state(everything))
+    everything_state, reachable_all, _ = logic.sweep({l: None for l in logic.location_names()},
+                                                     logic.new_state(everything))
     for gid, entry in matches.items():
         if entry['kind'] == 'area':
             members = [l for l in entry['ap'] if l in reachable_all]
@@ -333,6 +334,27 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
                 logic.virtual.pop(vname(gid), None)
                 if gid not in shuffled:
                     base.pop(vname(gid), None)
+    # A source found only on the child maps or only on the adult maps is collected at
+    # that age: every member that age can ever do must be done at that age.
+    for gid, entry in matches.items():
+        age, name = source_age(entry['variants']), vname(gid)
+        if age is None or name not in logic.virtual:
+            continue
+        members = [age_member(age, m) if not m.startswith('Souls|')
+                   and logic.accessible(everything_state, age_member(age, m)) else m
+                   for m in logic.virtual[name]]
+        if members != logic.virtual[name]:
+            logic.virtual[name] = members
+            continue
+        # Nothing of it is ever done at that age: no proof the age reaches it, filler only.
+        if entry['kind'] == 'area':
+            entry['ap'] = []
+        else:
+            for location in entry['ap']:
+                base[location] = None
+        entry.update(kind='junk', reason='no_reliable_ap_match')
+        logic.virtual.pop(name, None)
+        base.pop(name, None)
     # --- item pool ------------------------------------------------------------
     pool = []
     for gid, entry in shuffled.items():
@@ -807,8 +829,13 @@ def tracker_checks(data, matches, shuffled):
             covered.update(entry['ap'])
         label = SOURCE_LABELS.get(source, source)
         zone = _entry_zone(data, entry, gid)
-        name = entry['ap'][0] if entry['kind'] == 'exact' and entry['ap'] else (
-            f'{zone_label(zone)} {label} {str(entry["hash"])[-6:]}' if entry.get('hash') else gid)
+        if entry['kind'] == 'exact' and entry['ap']:
+            name = entry['ap'][0]
+        else:
+            name = f'{zone_label(zone)} {label} {str(entry["hash"])[-6:]}' if entry.get('hash') else gid
+            age = source_age(entry['variants'])
+            if age:
+                name += f' ({age})'   # only on that age's maps
         checks.append({'id': gid, 'zone': zone, 'region': zone_label(zone),
                        'category': 'full_' + ('chests' if source == 'chest' else source), 'name': name,
                        'randomized': gid in shuffled, 'repeatable': source in REPEATABLE,

@@ -299,7 +299,7 @@ def scan_maps(nup, dictionaries, members, progress=None):
         for actor_index, actor in enumerate(root.get('Actors', [])):
             name = actor.get('Gyaml', '')
             if BLAST_WALL.match(name) and isinstance(actor.get('Translate'), list):
-                walls[folder].append((_map_age(path), actor['Translate']))
+                walls[folder].append((map_age(path), actor['Translate']))
             if type(actor.get('Hash')) is not int:
                 continue
             dynamic = actor.get('Dynamic') if isinstance(actor.get('Dynamic'), dict) else {}
@@ -318,12 +318,21 @@ def scan_maps(nup, dictionaries, members, progress=None):
     return maps, dict(groups), enemies
 
 
-def _map_age(path):
+def map_age(path):
+    """Age of a remake map file (None: a map both ages share)."""
     return 'child' if '_Child_' in path else 'adult' if '_Adult_' in path else None
 
 
+def source_age(variants):
+    """'child' or 'adult' when every copy of a source is on that age's maps, else None.
+
+    Event flows (NPC gifts) are not maps, even when named after a child or adult NPC."""
+    ages = {map_age(v['resource']) if v['resource'].startswith('Banc/') else None for v in variants}
+    return ages.pop() if len(ages) == 1 else None
+
+
 def _behind_wall(variant, walls):
-    position, age = variant.get('position'), _map_age(variant['resource'])
+    position, age = variant.get('position'), map_age(variant['resource'])
     if not isinstance(position, list) or len(position) != 3:
         return False
     return any((wall_age is None or age is None or wall_age == age) and len(point) == 3

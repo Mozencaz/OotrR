@@ -112,6 +112,13 @@ the dialogue box stayed empty and blocked the game. A new save is required.
 - Skulltulas, stalls: conservative group per zone. The remake puts Lake Hylia and
   Lon Lon Ranch in the Hyrule Field maps; the matching accounts for it.
 - Pots, bushes, rocks, crates, beehives, lying rupees: rule of the **whole zone**.
+- A source found only in the child maps (`*_Child_*`) or only in the adult maps
+  (`*_Adult_*`) is collected at that age: each of its AP locations that this age can
+  ever reach must be reachable **at that age** (`Child|`/`Adult|` members, the AP
+  `is_child`/`is_adult` rules). Being adult needs `Time Travel` (Door of Time: Song
+  of Time, which the child gets for the three spiritual stones). A source with no
+  such location only receives filler. Its tracker name ends in `(child)`/`(adult)`;
+  an object on both maps under one hash is one check for either age.
 - NPCs: exact AP location; for the man on the roof (adult only in the remake) and
   the lake lab (child only), the age rule is added.
 - A group holding a location that the AP rules never reach only receives filler.
@@ -133,9 +140,10 @@ the dialogue box stayed empty and blocked the game. A new save is required.
 | `Song from Saria` | Zelda's Letter | learnt during the Fire stone quest (after Darunia) | letter + Darunia's chamber as child |
 | `here(...)` with `can_plant_bean` | current age | the child plants, the adult uses | becomes `at(<region>, ...)` |
 
-Kokiri Forest positions (`extra_sources.kokiri_spot`): copies in the child map, in
-the village (before Mido, outside the grotto) are reachable at start; adult-only
-copies after time travel; bean platform rupees use `KF Bean Platform Red Rupee`.
+Kokiri Forest positions (`extra_sources.kokiri_spot`): copies in the village (before
+Mido, outside the grotto) use `KF Links House Pot`, at the age of their maps (child
+copies at start, adult-only copies once the adult reaches the forest); bean platform
+rupees use `KF Bean Platform Red Rupee`.
 Mido's house: the 4 grouped chests are matched to Mido's 4 AP chests.
 
 ## Mechanism cutscenes are never skippable

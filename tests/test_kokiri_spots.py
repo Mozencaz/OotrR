@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from oot_rando.game.extra_sources import KF_ANCHOR_ADULT, KF_ANCHOR_BEAN, KF_ANCHOR_CHILD, kokiri_spot
+from oot_rando.game.extra_sources import KF_ANCHOR_BEAN, KF_ANCHOR_VILLAGE, kokiri_spot
 from oot_rando.game.remake_world import KNOWN_CHEST_GROUPS
 
 CHILD = 'Banc/KokiriForest/KokiriForest_Child_Dynamic.bcett.byml.zs'
@@ -18,14 +18,13 @@ def entry(source, *variants, folder='KokiriForest'):
 
 class KokiriSpotTests(unittest.TestCase):
     def test_village_pot_is_reachable_at_start(self):
-        self.assertEqual(kokiri_spot(entry('pots', (CHILD, [6.0, 110.0, 21.0]))), KF_ANCHOR_CHILD)
+        self.assertEqual(kokiri_spot(entry('pots', (CHILD, [6.0, 110.0, 21.0]))), KF_ANCHOR_VILLAGE)
 
-    def test_child_copy_is_enough(self):
+    def test_both_ages_and_one_age_share_the_village_anchor(self):
+        # The age of the maps is added by the planner (test_map_ages).
         self.assertEqual(kokiri_spot(entry('freestanding', (ADULT, [-87, 119, 19]), (CHILD, [-87, 119, 19]))),
-                         KF_ANCHOR_CHILD)
-
-    def test_adult_only_object_needs_time_travel(self):
-        self.assertEqual(kokiri_spot(entry('freestanding', (ADULT, [-10, 112, 19]))), KF_ANCHOR_ADULT)
+                         KF_ANCHOR_VILLAGE)
+        self.assertEqual(kokiri_spot(entry('freestanding', (ADULT, [-10, 112, 19]))), KF_ANCHOR_VILLAGE)
 
     def test_bean_platform_needs_the_platform(self):
         self.assertEqual(kokiri_spot(entry('freestanding', (ADULT, [21, 117, -14]))), KF_ANCHOR_BEAN)

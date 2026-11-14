@@ -28,7 +28,7 @@ from collections import defaultdict
 
 from oot_rando.game.item_forms import WORLD_CANONICAL
 from oot_rando.game.randomizer_categories import candidate_category
-from oot_rando.game.remake_world import FOLDER_AREAS, FOLDER_DUNGEON, actor_item
+from oot_rando.game.remake_world import FOLDER_AREAS, FOLDER_DUNGEON, actor_item, map_age
 
 GIVE_PARAMS = ('ActorName', 'ReveiveItem', 'ReceiveItem', 'TakenRewardActor', 'Actor')
 ENVIRONMENT = ('pots', 'bushes', 'rocks', 'crates', 'beehives')
@@ -340,8 +340,9 @@ def scan_event_sources(members, read_event, gifts):
     return entries
 
 
-# Kokiri Forest spots, from remake coordinates (x, y, z). Objects of the child
-# map in the village are reachable at the start; their AP "anchor" proves it.
+# Kokiri Forest spots, from remake coordinates (x, y, z). Objects in the village
+# are reachable from the start; their AP "anchor" proves it (the planner adds the
+# age of the maps holding them, see ``full_randomizer.prepare``).
 # Mido stands at x = 26 on the path to the Deku Tree (x = 103); the storms
 # grotto lies underground around (-60, 104, -63); the bean platform rupees
 # circle (21.5, 117, -14) and only exist in the adult map.
@@ -349,8 +350,7 @@ KF_SPOT_SOURCES = ('pots', 'freestanding', 'rocks', 'bushes', 'crates')
 KF_MIDO_GATE_X = 26.0
 KF_GROTTO = ((-60.0, 104.0, -63.0), 16.0)
 KF_BEAN_PLATFORM = ((21.5, 117.0, -14.0), 4.0)
-KF_ANCHOR_CHILD = ('KF Links House Pot',)
-KF_ANCHOR_ADULT = ('KF Links House Pot', 'Master Sword Pedestal')
+KF_ANCHOR_VILLAGE = ('KF Links House Pot',)
 KF_ANCHOR_BEAN = ('KF Bean Platform Red Rupee',)
 
 
@@ -367,17 +367,14 @@ def kokiri_spot(entry):
     positions = [v.get('position') for v in entry['variants']]
     if not positions or any(not isinstance(p, (list, tuple)) or len(p) != 3 for p in positions):
         return None
-    resources = {v['resource'] for v in entry['variants']}
-    if not all('_Adult_' in r or '_Child_' in r for r in resources):
+    ages = {map_age(v['resource']) for v in entry['variants']}
+    if None in ages:
         return None
-    # One reward for both ages: the child copy is enough to collect it.
-    child = any('_Child_' in r for r in resources)
-    adult = not child
     if all(_near(p, KF_BEAN_PLATFORM) for p in positions):
-        return KF_ANCHOR_BEAN if adult else None
+        return KF_ANCHOR_BEAN if ages == {'adult'} else None
     if any(_near(p, KF_GROTTO) or p[0] >= KF_MIDO_GATE_X for p in positions):
         return None
-    return KF_ANCHOR_CHILD if child else KF_ANCHOR_ADULT
+    return KF_ANCHOR_VILLAGE
 
 
 def match_sources(entries, data, logic, used=()):
