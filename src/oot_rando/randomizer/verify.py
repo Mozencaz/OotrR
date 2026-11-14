@@ -41,6 +41,13 @@ from oot_rando.randomizer.randomizer_core import save_marker
 QOL_MAPS = {MAP, STATIC}
 
 
+
+def _seed_lazy(actor):
+    """IsCheckLazy of a once-only source: lazy since 0.5.3, immediate in earlier seeds."""
+    value = ((actor or {}).get('Presence') or {}).get('IsCheckLazy')
+    return value if isinstance(value, bool) else True
+
+
 def _flow_events(raw):
     from oot_rando.patching.event_patch import _flow
     return _flow(raw).flowchart.events
@@ -277,6 +284,10 @@ def verify(nup_path, seed_dir):
                 if actor is None or actor != gift['actor'] or (manifest.get('tracking') and flags != [gift['flag']]):
                     raise ValueError('Item given after the cutscene differs from the spoiler: ' + path)
                 original = give_gift_after(original, gift['after'], actor, gift['flag'])[0]
+            from oot_rando.patching.qol_patches import SCRUB_FLOW, keep_one_scrub_good
+            if path == SCRUB_FLOW and skips.get('scrub_goods'):
+                original = keep_one_scrub_good(original)[0]
+                report['comfort_flows'] = report.get('comfort_flows', 0) + 1
             from oot_rando.patching import ap_mailbox
             if path == ap_mailbox.FLOW_PATH and skips.get('ap_mailbox'):
                 # Archipelago reception: the item-get entry the global sequence starts.
@@ -341,9 +352,11 @@ def verify(nup_path, seed_dir):
                             link[key] = ident
                 if isinstance(fallback.get('Phive', {}).get('Placement'), dict):
                     fallback['Phive']['Placement']['ID'] = ident
-                fallback['Presence'] = {'FlagName': record['flag'], 'IsNegation': False, 'IsCheckLazy': False}
+                fallback['Presence'] = {'FlagName': record['flag'], 'IsNegation': False, 'IsCheckLazy': None}
                 expected_fallbacks[ident] = fallback
             actual_fallbacks = {a['Hash']: a for a in after['Actors'] if a.get('Hash') in expected_fallbacks}
+            for ident, fallback in expected_fallbacks.items():
+                fallback['Presence']['IsCheckLazy'] = _seed_lazy(actual_fallbacks.get(ident))
             if actual_fallbacks != expected_fallbacks:
                 raise ValueError('Return to the original loot does not match: ' + path)
             after = dict(after, Actors=[a for a in after['Actors'] if a.get('Hash') not in expected_fallbacks])
@@ -382,7 +395,7 @@ def verify(nup_path, seed_dir):
                 report['skulltulas_always_present'] = report.get('skulltulas_always_present', 0) + 1
             if index in repeat_first.get(path, {}):
                 record = repeat_first[path][index]
-                a2['Presence'] = {'FlagName': record['flag'], 'IsNegation': True, 'IsCheckLazy': False}
+                a2['Presence'] = {'FlagName': record['flag'], 'IsNegation': True, 'IsCheckLazy': _seed_lazy(b2)}
             for field, actor in edits.get(index, {}).items():
                 if field == 'Gyaml':
                     a2['Gyaml'] = actor

@@ -1702,6 +1702,197 @@ def free_bomb_lift(pack_raw):
     return byml_codec.build_sarc(files), 1
 
 
+# Business scrubs selling refills (up to three goods): ``Unopened_Check`` hides each
+# good Link cannot use yet (seeds without the slingshot, arrows without the bow, the
+# scrub seed without bombs, potions without a bottle, the magic jar without magic),
+# then the choice is shown without them. In the vanilla order Link always holds one;
+# items found in any order can hide all three: the choice is empty and Link stays
+# stuck. When the three are hidden, the first good is shown again (the purchase still
+# runs the vanilla checks, such as the room left in the pouch).
+SCRUB_FLOW = 'Event/EventFlow/Enemy_Scrub_Business_Common.bfevfl.zs'
+SCRUB_HIDDEN = ('Enemy_Scrub_Business_Unopened01', 'Enemy_Scrub_Business_Unopened02',
+                'Enemy_Scrub_Business_Unopened03')
+
+
+def keep_one_scrub_good(raw):
+    """Never an empty choice at a refill scrub. Returns (bytes, report)."""
+    from evfl.event import ActionEvent, Event, SwitchEvent
+    from evfl.util import make_index, make_rindex
+    from oot_rando.patching.event_patch import _flow, _snapshot
+    flow = _flow(raw)
+    chart = flow.flowchart
+    expected = _snapshot(flow)
+    if any(e.name.startswith('RandoScrubGood') for e in chart.events):
+        raise ValueError('Scrub flow already modified.')
+    named = {e.name: e for e in chart.events}
+    # The third check of each good list goes on with the choice (Event119).
+    lasts = [e for e in chart.events if isinstance(e.data, ActionEvent) is False
+             and getattr(e.data, 'entry_point_name', None) == 'Unopened_Check'
+             and not e.data.res_flowchart_name and e.data.params is not None
+             and e.data.params.data.get('GameDate_Unopend') == SCRUB_HIDDEN[2]]
+    targets = {e.data.nxt.v.name for e in lasts if e.data.nxt is not None}
+    if len(lasts) != 2 or len(targets) != 1:
+        raise ValueError('Unexpected refill scrub checks.')
+    choice = named[targets.pop()]
+    # Templates: a GameData Bool query and a GameData Bool write of this flow.
+    query = next(e for e in chart.events if isinstance(e.data, SwitchEvent)
+                 and str(e.data.actor.v.identifier) == 'GameDataActor'
+                 and e.data.actor_query.v.v == 'EventQueryIsGameDataBool')
+    write = next(e for e in chart.events if isinstance(e.data, ActionEvent)
+                 and str(e.data.actor.v.identifier) == 'GameDataActor'
+                 and e.data.actor_action.v.v == 'EventTriggerSetGameDataBool')
+
+    def add(name, data, params):
+        from evfl.container import Container
+        data.params = Container()
+        data.params.data = dict(params)
+        event = Event()
+        event.name, event.data = name, data
+        chart.events.append(event)
+        expected[name] = dict(params)
+        return event
+
+    show = ActionEvent()
+    show.actor, show.actor_action = make_rindex(write.data.actor.v), make_rindex(write.data.actor_action.v)
+    show = add('RandoScrubGoodShowFirst', show, {'Index': -1, 'GameDataName': SCRUB_HIDDEN[0], 'Value': False})
+    show.data.nxt = make_index(choice)
+    following = show
+    # All three hidden (true, true, true): show the first; any shown: the vanilla choice.
+    for position in (2, 1, 0):
+        test = SwitchEvent()
+        test.actor, test.actor_query = make_rindex(query.data.actor.v), make_rindex(query.data.actor_query.v)
+        test.cases = {0: make_index(following), 1: make_index(choice)}
+        following = add(f'RandoScrubGoodHidden{position + 1}', test,
+                        {'Index': -1, 'GameDataName': SCRUB_HIDDEN[position]})
+    for event in lasts:
+        event.data.nxt = make_index(following)
+    stream = io.BytesIO()
+    flow.write(stream)
+    result = stream.getvalue()
+    checked = _flow(result)
+    if _snapshot(checked) != expected:
+        raise ValueError('The refill scrub guard changed other parameters.')
+    written = {e.name: e for e in checked.flowchart.events}
+    for event in lasts:
+        if written[event.name].data.nxt.v.name != 'RandoScrubGoodHidden1':
+            raise ValueError('Refill scrub guard wrongly chained.')
+    return result, {'choice': choice.name, 'checks': sorted(e.name for e in lasts)}
+
+
+# Dodongo's Cavern boulder (child Death Mountain Trail). The map's logic module starts
+# the cutscene that breaks it (Get_StoneOfFire_DodongoCavernOpne, node 2) when a bomb
+# flower fruit is seen in one of three areas around the boulder (observers 1, 19, 18,
+# joined by the OR node 5) and the flower allows its performance (AND node 14). The
+# module also holds an Item_Bomb observer of the same three areas (node 20), left
+# unconnected: Link's own bombs never break the boulder. The patch connects it: node 5
+# watches the fruit in two areas (1, 19) and Link's bombs in all three (20, in place of
+# the fruit in the third area, 18), and the cutscene follows node 5 directly. The
+# patch is made in place (same size): the ainb library does not write this module back
+# identically.
+DC_BOULDER_MODULE = 'Logic/DeathMountainTrail_Child_Prefab_ffa7.logic.module.ainb'
+_AINB_NODE_TABLE, _AINB_NODE_SIZE = 0x74, 0x3c
+
+
+def _boulder_wiring(document):
+    """The nodes of the boulder module as the patch expects them (raises otherwise)."""
+    nodes = document['Nodes']
+    if (document['Version'] != 0x408 or document['Category'] != 'Logic' or document['Commands']
+            or len(nodes) != 44):
+        raise ValueError('Unexpected Dodongo boulder logic module.')
+    names = {2: 'ActorLogicEventRequestActor', 5: 'OperateOR', 14: 'OperateAND', 18: 'HoldActorObserverBySensorHitInfo',
+             20: 'HoldActorObserverBySensorHitInfo'}
+    if any(nodes[i]['Name'] != name for i, name in names.items()):
+        raise ValueError('Unexpected Dodongo boulder logic nodes.')
+    actor = {i: next(p['Default Value'] for p in nodes[i]['Parameters']['Inputs']['String'] if p['Name'] == 'ActorName')
+             for i in (18, 20)}
+    if actor != {18: 'BombFruit', 20: 'Item_Bomb'}:
+        raise ValueError('Unexpected Dodongo boulder observers.')
+    return nodes
+
+
+def let_bombs_break_dc_boulder(raw):
+    """Link's bombs break the Dodongo's Cavern boulder too. Returns (bytes, report)."""
+    import copy
+    import struct
+    import ainb
+    original = ainb.AINB.from_binary(raw).as_dict()
+    nodes = _boulder_wiring(original)
+    trigger = nodes[2]['Parameters']['Inputs']['Bool'][0]
+    multi = nodes[5]['Parameters']['Inputs']['Bool'][0]['Sources']
+    if ((trigger['Name'], trigger['Node Index'], trigger['Output Index']) != ('EventRequestTrigger', 14, 1)
+            or [(s['Node Index'], s['Output Index']) for s in multi] != [(1, 0), (19, 0), (18, 0)]
+            or nodes[2]['Queries'] != [14] or nodes[5]['Queries'] != [1, 19, 18]
+            or nodes[2]['Plugs'] != {'Generic': [{'Node Index': 14, 'Name': 'EventRequestTrigger'}]}
+            or [o['Is Output'] for o in nodes[20]['Parameters']['Outputs']['Bool']] != [False, False]
+            or not all('Is Query' in n['Flags'] for n in nodes)):
+        raise ValueError('Unexpected Dodongo boulder wiring.')
+    header = struct.unpack_from('<29I', raw, 0)
+    strings, io_offset, multi_offset, query_offset = header[9], header[13], header[14], header[19]
+    result = bytearray(raw)
+
+    def node_field(index, offset, fmt):
+        return struct.unpack_from(fmt, raw, _AINB_NODE_TABLE + index * _AINB_NODE_SIZE + offset)[0]
+
+    def bool_io(index):
+        """(first input, first output) indices of the node's Bool parameters."""
+        block = node_field(index, 0x14, '<I') + 0x30 + 16 * 1
+        base_in, _, base_out, _ = struct.unpack_from('<4I', raw, block)
+        return base_in, base_out
+
+    def query_slot(index, position):
+        return query_offset + (node_field(index, 0x24, '<H') + position) * 4
+
+    bool_inputs, bool_outputs = struct.unpack_from('<2I', raw, io_offset + 8 * 1)
+    for index in (2, 5, 20):
+        if node_field(index, 2, '<h') != index:
+            raise ValueError('Dodongo boulder node table misread.')
+    # 1. The cutscene follows the OR of the observers (node 5, output True).
+    trigger_at = bool_inputs + bool_io(2)[0] * 0x10
+    if struct.unpack_from('<hh', raw, trigger_at + 4) != (14, 1):
+        raise ValueError('Dodongo boulder trigger misread.')
+    struct.pack_into('<hh', result, trigger_at + 4, 5, 1)
+    # 2. Its query and its plug name node 5 instead of node 14.
+    slot = query_slot(2, 0)
+    if struct.unpack_from('<H', raw, slot)[0] != 14:
+        raise ValueError('Dodongo boulder query misread.')
+    struct.pack_into('<H', result, slot, 5)
+    params = node_field(2, 0x14, '<I')
+    generic_count, generic_base = struct.unpack_from('<BB', raw, params + 0x90)   # (count, base) per plug type
+    plug_at = struct.unpack_from('<I', raw, params + 0xa4 + generic_base * 4)[0]
+    if generic_count != 1 or struct.unpack_from('<i', raw, plug_at)[0] != 14:
+        raise ValueError('Dodongo boulder plug misread.')
+    struct.pack_into('<i', result, plug_at, 5)
+    # 3. Node 5 watches Link's bombs (node 20) in place of the fruit in the third area.
+    window = -100 - struct.unpack_from('<h', raw, bool_inputs + bool_io(5)[0] * 0x10 + 4)[0]
+    entry = multi_offset + (window + 2) * 8
+    if struct.unpack_from('<hh', raw, entry) != (18, 0):
+        raise ValueError('Dodongo boulder observer misread.')
+    struct.pack_into('<hh', result, entry, 20, 0)
+    slot = query_slot(5, 2)
+    if struct.unpack_from('<H', raw, slot)[0] != 18:
+        raise ValueError('Dodongo boulder observer query misread.')
+    struct.pack_into('<H', result, slot, 20)
+    # 4. Output flags: node 20's IsHit is now read, node 18's no longer.
+    for index, used in ((20, True), (18, False)):
+        at = bool_outputs + bool_io(index)[1] * 4
+        flags = struct.unpack_from('<I', raw, at)[0]
+        struct.pack_into('<I', result, at, (flags | 1 << 31) if used else (flags & ~(1 << 31)))
+    result = bytes(result)
+    expected = copy.deepcopy(original)
+    changed = expected['Nodes']
+    changed[2]['Parameters']['Inputs']['Bool'][0]['Node Index'] = 5
+    changed[2]['Queries'] = [5]
+    changed[2]['Plugs']['Generic'][0]['Node Index'] = 5
+    changed[5]['Parameters']['Inputs']['Bool'][0]['Sources'][2]['Node Index'] = 20
+    changed[5]['Queries'] = [1, 19, 20]
+    changed[20]['Parameters']['Outputs']['Bool'][0]['Is Output'] = True
+    changed[18]['Parameters']['Outputs']['Bool'][0]['Is Output'] = False
+    if ainb.AINB.from_binary(result).as_dict() != expected or len(result) != len(raw) or strings != header[9]:
+        raise ValueError('The Dodongo boulder patch changed more than its wiring.')
+    return result, {'module': DC_BOULDER_MODULE, 'cutscene_trigger': 'OR of observers (node 5)',
+                    'bomb_observer': 20, 'replaced_fruit_observer': 18}
+
+
 # Gold skulltulas shown only at night carry ``Enemy_Skulltula_Gold_Nocturnal: true``
 # on their map instance (30 skulltulas in 18 maps, v131072). Setting it to false makes
 # them behave like the other skulltulas: present day and night.

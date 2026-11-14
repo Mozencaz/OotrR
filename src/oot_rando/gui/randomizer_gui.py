@@ -1043,7 +1043,8 @@ class Application:
             values = rando_options.validate(self.full_values())
             name = filedialog.asksaveasfilename(defaultextension='.yaml', filetypes=[('Archipelago YAML', '*.yaml')])
             if name:
-                Path(name).write_text(rando_options.to_ap_yaml(values), encoding='utf-8')
+                Path(name).write_text(rando_options.to_ap_yaml(values, open_forest=self.options['open_forest'].get()),
+                                      encoding='utf-8')
                 self.status.set('Archipelago YAML exported.')
         except Exception as error:
             self.error(error)

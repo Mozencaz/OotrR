@@ -89,6 +89,49 @@ class NupTests(unittest.TestCase):
     def read(self, path):
         return self.nup.read(self.members[path])
 
+    def test_refill_scrub_always_offers_a_good(self):
+        from oot_rando.formats.inspect_resources import decompress, dictionaries
+        from oot_rando.patching.event_patch import _flow
+        raw = decompress(self.read(self.q.SCRUB_FLOW), dictionaries(self.nup))
+        patched, report = self.q.keep_one_scrub_good(raw)
+        self.assertEqual(report['checks'], ['Event192', 'Event334'])
+        events = {e.name: e for e in _flow(patched).flowchart.events}
+
+        def run(hidden):
+            """Event reached after the third check, Unopened0n flags as given."""
+            event, shown = events['Event192'].data.nxt.v, set()
+            while event.name != report['choice']:
+                params = event.data.params.data
+                if event.name == 'RandoScrubGoodShowFirst':
+                    shown.add(params['GameDataName'])
+                    event = event.data.nxt.v
+                else:
+                    event = event.data.cases[0 if params['GameDataName'] in hidden else 1].v
+            return shown
+        three = set(self.q.SCRUB_HIDDEN)
+        self.assertEqual(run(three), {self.q.SCRUB_HIDDEN[0]})        # all hidden: the first comes back
+        self.assertEqual(run(three - {self.q.SCRUB_HIDDEN[1]}), set())  # one shown: vanilla choice
+        self.assertEqual(run(set()), set())
+        self.assertIs(events['Event334'].data.nxt.v, events['Event192'].data.nxt.v)
+        with self.assertRaisesRegex(ValueError, 'already modified'):
+            self.q.keep_one_scrub_good(patched)
+
+    def test_bombs_break_the_dodongo_cavern_boulder(self):
+        import ainb
+        raw = self.read(self.q.DC_BOULDER_MODULE)
+        patched, report = self.q.let_bombs_break_dc_boulder(raw)
+        self.assertEqual(len(patched), len(raw))
+        self.assertEqual(sum(a != b for a, b in zip(raw, patched)), 7)
+        nodes = ainb.AINB.from_binary(patched).as_dict()['Nodes']
+        trigger = nodes[2]['Parameters']['Inputs']['Bool'][0]
+        self.assertEqual((trigger['Name'], trigger['Node Index'], trigger['Output Index']), ('EventRequestTrigger', 5, 1))
+        sources = [s['Node Index'] for s in nodes[5]['Parameters']['Inputs']['Bool'][0]['Sources']]
+        self.assertEqual(sources, [1, 19, 20])
+        self.assertTrue(nodes[20]['Parameters']['Outputs']['Bool'][0]['Is Output'])
+        self.assertEqual(report['bomb_observer'], 20)
+        with self.assertRaisesRegex(ValueError, 'wiring'):
+            self.q.let_bombs_break_dc_boulder(patched)   # never applied twice
+
     def test_every_disable_skip_is_removed(self):
         from oot_rando.formats.inspect_resources import Byml
         files, report = self.q.cutscene_files(self.read)

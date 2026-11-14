@@ -27,8 +27,30 @@ REPEATABLE = frozenset(('pots', 'bushes', 'rocks', 'crates', 'beehives'))
 EVENT_PACK = 'Pack/AI.Global.Product.111.pack.zs'
 EVENT_MEMBER = 'AI/PouchContent.event.root.ainb'
 LARGE_GET_TYPE = 1746592023
+# Short get (the game's own for gold tokens, heart pieces and the gold rupee on the
+# ground): the get event still runs, so the check flag is written, without the
+# long held-up pose. Used for the minor rewards of repeatable sources.
+MEDIUM_GET_TYPE = 1027255402
+MINOR_PREFIXES = ('TBox_Rupee_', 'TBox_ArrowBundle_', 'TBox_DekuNutBundle', 'TBox_DekuSeedBundle',
+                  'Item_BombBundle_', 'Item_DekuStickBundle_', 'Item_BombchuBundle_', 'Tbox_MagicJar_',
+                  'Item_ScrubBusinessSeed')
+MINOR_ACTORS = frozenset(('Obj_Heart',))   # recovery heart (not a piece nor a container)
 SHOP_ONCE_PREFIX = 'Shop_RandoOnce_'
 SHOP_AI_MEMBER = 'AI/Shop_Item_Base.root.ainb'
+# Presence of the shuffled source and of its vanilla copy, checked lazily (on area
+# load, as the game removes its Tektites once the Goron ruby is got): the vanilla
+# copy no longer appears the moment the check is collected (a pot respawned at
+# once), only when the area is loaded again.
+PRESENCE_LAZY = True
+
+
+def is_minor_reward(canonical):
+    """Rupees, ammunition and recovery hearts: picked up with the short get."""
+    return canonical in MINOR_ACTORS or canonical.startswith(MINOR_PREFIXES)
+
+
+def get_type(canonical):
+    return MEDIUM_GET_TYPE if is_minor_reward(canonical) else LARGE_GET_TYPE
 
 
 def _guid(text):
@@ -392,7 +414,7 @@ def build_repeatable_packs(records, read_pack, read_raw, tables):
         components = document['root']['Components']
         pouch_path = components['PouchContentRef'][1:]
         pouch = byml_codec.load(files[pouch_path])
-        pouch['root'].update({'PlayGetEventManyTimes': True, 'GetType': byml_codec.U32(LARGE_GET_TYPE),
+        pouch['root'].update({'PlayGetEventManyTimes': True, 'GetType': byml_codec.U32(get_type(record['canonical'])),
                               'IsAutoSaveAfterPlayGet': True})
         # The PouchActor remains the canonical reward: no unique inventory item
         # or duplicate bundle is introduced just to track a check.
@@ -547,7 +569,7 @@ def patch_repeatable_sources(records, maps, raw_maps):
                 continue
             if first.get('Presence') or original.get('Presence'):
                 raise ValueError('Presence already modified on a repeatable source.')
-            first['Presence'] = {'FlagName': record['flag'], 'IsNegation': True, 'IsCheckLazy': False}
+            first['Presence'] = {'FlagName': record['flag'], 'IsNegation': True, 'IsCheckLazy': PRESENCE_LAZY}
             fallback = copy.deepcopy(original)
             used = {int(actor['Hash']) for actor in actors if 'Hash' in actor}
             ident = variant['fallback_hash']
@@ -560,7 +582,7 @@ def patch_repeatable_sources(records, maps, raw_maps):
                         link[key] = byml_codec.U64(ident)
             if isinstance(fallback.get('Phive', {}).get('Placement'), dict):
                 fallback['Phive']['Placement']['ID'] = byml_codec.U64(ident)
-            fallback['Presence'] = {'FlagName': record['flag'], 'IsNegation': False, 'IsCheckLazy': False}
+            fallback['Presence'] = {'FlagName': record['flag'], 'IsNegation': False, 'IsCheckLazy': PRESENCE_LAZY}
             actors.append(fallback)
     for record in records:
         for shelf in record.get('shelves', []):

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oot-rando"
-version = "0.5.2"
+version = "0.6.0"
 description = "Randomizer for the Ocarina of Time remake (RomFS mods for Hookshot / emulator)"
 readme = "README.md"
 license = "MIT"
