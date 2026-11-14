@@ -15,6 +15,7 @@ from oot_rando.game.remake_world import (PROGRESSIVE, BASE_REQUIRED, STATIC_TIER
 from oot_rando.game.item_forms import can_take, form_actor
 from oot_rando.game.extra_sources import match_sources, area_locations
 from oot_rando.patching.soul_adapter import plan_souls, chest_requirements, soul_label
+from oot_rando.patching.song_adapter import POSE_AFTER_CUTSCENE, is_song_actor, song_allowed
 
 FILLER_PRIORITY = ('Rupee (1)', 'Rupees (5)', 'Deku Nuts (5)', 'Deku Stick (1)', 'Arrows (5)', 'Bombs (5)',
                    'Rupees (20)', 'Arrows (10)', 'Deku Seeds (30)', 'Bombchus (5)', 'Arrows (30)',
@@ -75,7 +76,8 @@ def enabled_sources(options):
                                 ('bushes', 'shuffle_bushes', False), ('rocks', 'shuffle_rocks', False),
                                 ('npc', 'shuffle_npc_gifts', False), ('boss', 'shuffle_boss_rewards', False),
                                 ('bossheart', 'shuffle_boss_rewards', False), ('fairy', 'shuffle_great_fairies', False),
-                                ('quest', 'shuffle_quest_rewards', False), ('scrub', 'shuffle_scrubs', 'off')):
+                                ('quest', 'shuffle_quest_rewards', False), ('scrub', 'shuffle_scrubs', 'off'),
+                                ('song', 'shuffle_song_items', 'song')):
         value = options.get(option, off)
         if value != off:
             result[source] = value if value in ('dungeons', 'overworld') else 'all'
@@ -420,7 +422,12 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             return False
         if rule == 'overworld' and folder_dungeon[gid] is not None:
             return False
-        return can_take(canonical(item, gid), shuffled[gid]['form'], shuffled[gid].get('ap', ()))
+        actor = canonical(item, gid)
+        if not song_allowed(options.get('shuffle_song_items', 'song'), shuffled[gid]['source'], actor):
+            return False
+        if is_song_actor(actor) and set(shuffled[gid].get('ap', ())) & set(POSE_AFTER_CUTSCENE):
+            return False   # given back in game with a pose (qol_patches.give_gift_after), not text-only
+        return can_take(actor, shuffled[gid]['form'], shuffled[gid].get('ap', ()))
 
     # OoTR/AP vanilla-key compensation: with vanilla Fire Temple keys the logic
     # starts with one extra key (the vanilla layout expects the hammer door order).
@@ -876,7 +883,7 @@ def _is_reward(item):
 SOURCE_LABELS = {'chest': 'chest', 'skulltula': 'skulltula', 'shop': 'shop', 'freestanding': 'freestanding',
                  'npc': 'NPC', 'boss': 'dungeon reward', 'bossheart': 'boss heart container',
                  'fairy': 'great fairy', 'quest': 'quest reward', 'scrub': 'business scrub', 'pots': 'pot', 'bushes': 'bush', 'rocks': 'rock', 'crates': 'crate',
-                 'beehives': 'beehive'}
+                 'beehives': 'beehive', 'song': 'song'}
 
 
 def _patches(entry):

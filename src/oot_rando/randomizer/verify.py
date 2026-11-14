@@ -184,7 +184,6 @@ def verify(nup_path, seed_dir):
             if path == ACTION_GUIDE_FLOW and skips.get('key_items'):
                 # Key rings / dungeon boss keys, rebuilt from the spoiler alone.
                 from oot_rando.patching.key_adapter import add_key_hook, key_records
-                from oot_rando.patching.key_adapter import is_key_actor
                 from oot_rando.patching.ap_mailbox import key_items as mailbox_key_items
                 # Plus the keys received from other worlds (same actors, same hook).
                 received = set(mailbox_key_items((skips.get('ap_mailbox') or {}).get('items', [])))
@@ -229,6 +228,20 @@ def verify(nup_path, seed_dir):
             if path == ap_mailbox.FLOW_PATH and skips.get('ap_mailbox'):
                 # Archipelago reception: the item-get entry the global sequence starts.
                 original = ap_mailbox.add_entries(original, skips['ap_mailbox']['items'])
+            if skips.get('big_poes'):
+                from oot_rando.patching import big_poes
+                if path in {f'Event/EventFlow/{big_poes.FLOW}.bfevfl.zs', f'Event/EventFlow/{big_poes.FLOW}.110.bfevfl.zs'}:
+                    if skips['big_poes'] != ((manifest.get('settings') or {}).get('full') or {}).get('big_poe_count'):
+                        raise ValueError('Big Poe count differs from the settings.')
+                    original = big_poes.patch_flow(original, skips['big_poes'])
+                    report['big_poes'] = skips['big_poes']
+            song_flows = skips.get('songs') or {}
+            if path in song_flows:
+                # Songs: text-only gets and cutscenes without their melody teaching.
+                from oot_rando.patching.song_adapter import check_song_ops, patch_flow as patch_song_flow
+                check_song_ops({path: song_flows[path]}, event_edits)
+                original = patch_song_flow(original, song_flows[path])
+                report['song_flows'] = report.get('song_flows', 0) + 1
             if path in chest_flows:
                 from oot_rando.patching.chest_flags import add_entries
                 original = add_entries(original, chest_flows[path])

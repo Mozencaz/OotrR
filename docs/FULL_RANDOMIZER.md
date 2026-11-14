@@ -20,7 +20,9 @@ and logic are checked statically (`python -m oot_rando verify`); items marked
 | **Pots, crates, beehives, bushes, rocks** | explicit-drop objects (rupee, heart); empty rocks (≈ 195, no drop table) | existing `Drop__DropActor`, or added on rocks whose pack declares it as an instance parameter |
 | **Business Scrubs** (`shuffle_scrubs`) | single-sale remake scrubs only: stick upgrade (`LW Deku Scrub Near Bridge`), nut upgrade (`LW Deku Scrub Grotto Front`), field and crater heart pieces | `ActorName` and `Price` of each `SimpleShopSub_Scrub_Business_OneTime` call in `Enemy_Scrub_Business_Common` |
 
-Never changed: the whole adult trade quest up to the Biggoron Sword, songs, the
+| **Songs** (`shuffle_song_items`) | the 12 song cutscenes (`Dm_MelodyGet_*`) | silent add of the cutscene (`GetPouchContentByActorName`); see *Songs* below |
+
+Never changed: the whole adult trade quest up to the Biggoron Sword, the
 child trade (egg, letter, masks), cows, the Gerudo card, beans, the lake Fire
 Arrows. Repeatable sources (pots, crates, beehives, bushes, rocks) give their
 shuffled reward only once (`repeatable_adapter.py`), then go back to their vanilla loot.
@@ -30,8 +32,8 @@ shuffled reward only once (`repeatable_adapter.py`), then go back to their vanil
 * **Starting inventory** (`start_inventory_from_pool`, AP name): items held from the
   start, given silently at the end of the opening (`event_patch.add_pouch_items`). A
   copy found in the item pool is replaced by rupees; progressive copies take the
-  lowest tiers of their family. Songs, tunics and trade items have no pouch actor
-  yet. In a multiworld, the apworld's own `start_inventory_from_pool` is used.
+  lowest tiers of their family. Songs are given the same way (`Item_Melody_*`);
+  tunics and trade items have no pouch actor yet. In a multiworld, the apworld's own `start_inventory_from_pool` is used.
 * **Item pool** (`item_pool_value`): plentiful (one extra copy of each major
   non-progressive item, replacing filler), scarce (at most 3 bottles, half the
   hearts), minimal (one bottle, no hearts, double defense or capacity upgrades). The
@@ -52,6 +54,41 @@ shuffled reward only once (`repeatable_adapter.py`), then go back to their vanil
   `qol_patches.NOCTURNAL_SKULLTULA_MAPS`). The logic is unchanged (it still expects
   the night or Sun's Song), so the game is only more permissive. **Not validated in game.**
 * **Fast chests** (`fast_chests`): same patch as the "chests without cutscene" skip.
+
+## Songs (`song_adapter.py`)
+
+Songs are pouch actors (`Item_Melody_<song>`, a rupee model as placeholder). Each
+song cutscene teaches its melody through `Dm_SY_Ocarina/LearningOcarina*` (the NPC
+plays it, the player plays it back, then `LearningOcarinaPlayAuto`/`…ForSeek` adds
+the melody of the current `MelodyType`) and also adds it silently
+(`GetPouchContent/GetPouchContentByActorName`).
+
+* **Modes**: vanilla; shuffled among the song locations; song locations and
+  dungeon rewards; anywhere a cutscene can give them (song locations, dungeon
+  rewards, great fairies, story rewards; the matching options must be on). Never in
+  chests, pickups, shops or NPC gifts: those show the item in Link's hands. Never at
+  Queen Gohma either (her gift is given back after the cutscene with a pose).
+* **Text only**: a song is given by the silent add followed by
+  `GetPouchContent/DisplayGetByActorName`, the game's get window without pose
+  ("You learned Saria's Song!" and its caption; the same call Saria's ocarina gift
+  uses). A pose-based get (`Dm_SY_GetInEvent/*`, great fairies) becomes the silent
+  add. A source that already has its own display call (Ocarina of Time, Ruto's
+  sapphire) gets no second window. Received from another world: same hand-over.
+* **Song location giving another item**: every `LearningOcarina*` call of the
+  cutscene becomes a one-frame wait (no wrong melody taught or added), the placed
+  item is added silently and its get window shown. Sheik in Crater's direct write of
+  `IsGet.Item_Melody_FireBolero` follows the placed song (or is removed). The NPC's
+  lines still speak of the vanilla song.
+* **Windmill**: the adult windmill man plays the Song of Storms cutscene only while
+  `IsGet.Item_Melody_StormSong` is false; his four checks read the check's own
+  collection flag instead. The other song cutscenes start from quest steps.
+* **Not validated in game.**
+
+## Big Poes to bring back (`big_poes.py`)
+
+`big_poe_count` (1 to 10): the collector (`Npc_Hylia_048_BottleShop`) compares the
+points held before a sale (100 per Big Poe): `Event70` against 100 × (N − 1)
+instead of 900, `Event265` lets those points through. **Not validated in game.**
 
 ## Item forms and derived actors (`item_forms.py`)
 
@@ -177,6 +214,11 @@ outside the maps are not covered (except chest events).
 8. **Great fairy / quest**: the right item is given; a replaced Saria ocarina does
    not also add the vanilla ocarina.
 9. **Boss heart container**: the placed item (visible on entering the room) can be picked up.
+10. **Songs**: a song cutscene giving another song shows only its text and adds the
+    right song (menu, playable); one giving an item does not teach its melody; a song
+    at a great fairy or a dungeon reward shows its text, nothing held; the windmill
+    still plays its cutscene once Song of Storms was found elsewhere.
+11. **Big Poes**: with 3 to bring back, the collector rewards the third sale.
 
 Known limits: some NPCs decide "already given" from the vanilla item (e.g. silver
 scale for the diving game) and can give their new item again; shop texts of

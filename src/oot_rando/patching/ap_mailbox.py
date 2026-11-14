@@ -75,6 +75,7 @@ def records(remote):
 # (Dm_Kokiri_0155 Event68/Event77): added to the pouch, then the get display
 # GetPouchContent/DisplayGetByActorName, without the pose.
 DISPLAY_ONLY = ('Item_Ocarina_Fairy', 'Item_Ocarina_Time')
+# Songs (``Item_Melody_*``, model of a rupee) are handed over the same way: their text only.
 DISPLAY_FLOW, DISPLAY_ENTRY = 'GetPouchContent', 'DisplayGetByActorName'
 
 
@@ -203,7 +204,8 @@ def add_entries(raw, items):
 
     def give_events(name, actor):
         """(first event, last event, sub-flow events) handing ``actor`` over."""
-        if actor in DISPLAY_ONLY:
+        from oot_rando.patching.song_adapter import is_song_actor
+        if actor in DISPLAY_ONLY or is_song_actor(actor):   # songs: text only, nothing in Link's hands
             add = action_event(name, 'PouchSystemActor', 'EventTriggerAddOrRemovePouchContent', {
                 'Num': 1, 'IsEquipDIrect': False, 'IsSetMessageTargetActorName': True, 'Actor': actor,
                 'IsGetEvent': False})

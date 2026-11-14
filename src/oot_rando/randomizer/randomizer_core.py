@@ -377,6 +377,14 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
             if start_values:
                 check_start_values(extra_raw[GAMEDATA], start_values)
                 extra_raw[opening] = add_start_values(extra_raw[opening], 'RandoCollected_Event3', start_values)
+            # Big Poes to bring back: the collector's reward threshold (patching/big_poes.py).
+            from oot_rando.patching import big_poes
+            poe_count = settings.full.get('big_poe_count', big_poes.VANILLA_COUNT)
+            if poe_count != big_poes.VANILLA_COUNT:
+                from oot_rando.game.extra_sources import event_paths
+                for path in event_paths(members, big_poes.FLOW):
+                    extra_raw[path] = big_poes.patch_flow(
+                        extra_raw[path] if path in extra_raw else decompress(read(path), d), poe_count)
         skips = {}
         if settings.full is not None:
             skips['ocarina_guide'] = ocarina_guide
@@ -385,6 +393,10 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
             skips['sword_chest'] = sword_chest
             if full.get('gift_get'):
                 skips['gift_get'] = full['gift_get']
+            if full.get('song_flows'):
+                skips['songs'] = full['song_flows']
+            if settings.full.get('big_poe_count', 10) != 10:
+                skips['big_poes'] = settings.full['big_poe_count']
         current_flow = lambda path: extra_raw[path] if path in extra_raw else decompress(read(path), d)
         if settings.skip_locked_cutscenes:
             report('Skippable area presentations…')
@@ -741,10 +753,13 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
     from oot_rando.patching.event_patch import add_collection_markers
     from oot_rando.game.tracking_metadata import GAMEDATA, add_saved_flags
     markers, saved_flags = defaultdict(dict), {}
+    shuffled_ids = {p['id'] for p in plan['placements']}
     for gid, entry in sorted(plan['matches'].items()):
         event_variants = [v for v in entry['variants'] if 'event' in v]
         if not event_variants:
             continue
+        if entry.get('source') == 'song' and gid not in shuffled_ids:
+            continue   # vanilla songs: flows left untouched (they keep their skip windows)
         if entry.get('native_flag'):
             # Business scrubs save their own flag once the purchase succeeded
             # (a marker after the sub-flow would also fire on "No").
@@ -764,6 +779,25 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
         if raw is None:
             raw = decompress(read(resource), dictionaries_)
         modified[resource], plan['collection_markers'][resource] = add_collection_markers(raw, events)
+    # Songs: text-only gets, song cutscenes without their melody teaching, windmill
+    # trigger on the check's own flag (patching/song_adapter.py).
+    from oot_rando.game.extra_sources import event_paths
+    from oot_rando.patching.song_adapter import patch_flow as patch_song_flow, plan_song_flows, site_kind
+    song_inputs = [{'source': p['source'], 'ap': p['ap_locations'], 'before': p['before'], 'after': p['after'],
+                    'variants': [{'resource': x['resource'], 'event': x['event']} for x in p['patches']
+                                 if 'event' in x and 'after' not in x]}
+                   for p in plan['placements'] if p['form'] == 'event']
+    song_flags = {e['ap'][0]: e['tracking_flag'] for e in plan['matches'].values()
+                  if e.get('source') == 'song' and e.get('tracking_flag') and e['ap']}
+    plan['song_flows'] = plan_song_flows(song_inputs, song_flags, settings.full.get('shuffle_song_items'),
+                                         lambda stem: event_paths(members, stem),
+                                         lambda resource, event: site_kind(decompress(read(resource), dictionaries_),
+                                                                           event))
+    for resource, ops in plan['song_flows'].items():
+        raw = modified.get(resource)
+        if raw is None:
+            raw = decompress(read(resource), dictionaries_)
+        modified[resource] = patch_song_flow(raw, ops)
     # Cutscene gifts: the shuffled item is given (and shown in Link's hands) once back
     # in game, after the cutscene (pilot flows only).
     from oot_rando.patching.qol_patches import GIFT_AFTER_CUTSCENE, bypass_cutscene_gift, give_gift_after

@@ -65,7 +65,7 @@ OPTION_COPY = {
     'shuffle_npc_gifts': ('Character gifts and minigames', 'Shuffles the supported rewards of characters and minigames.'),
     'shuffle_boss_rewards': ('Boss and dungeon rewards', 'Shuffles spiritual stones, medallions and heart containers. The game scenes are kept.'),
     'shuffle_great_fairies': ('Great fairy rewards', 'Shuffles spells, magic and defense upgrades.'),
-    'shuffle_quest_rewards': ('Main quest rewards', 'Includes the ocarinas, Zelda\'s Letter, the Light Arrows and the Biggoron Sword. Songs stay in place.'),
+    'shuffle_quest_rewards': ('Main quest rewards', 'Includes the ocarinas, Zelda\'s Letter, the Light Arrows and the Biggoron Sword.'),
     'shuffle_pots': ('Pots', 'The first reward is shuffled. Once picked up, the pot goes back to its vanilla loot.'),
     'shuffle_crates': ('Crates', 'The first reward is shuffled. Later pickups use the vanilla loot.'),
     'shuffle_beehives': ('Beehives', 'The first reward is shuffled. Later pickups use the vanilla loot.'),
@@ -74,7 +74,7 @@ OPTION_COPY = {
     'shuffle_enemy_spawns': ('Enemy souls', 'Find souls to make the matching enemies appear. A new game is required.'),
     'start_inventory_from_pool': ('Starting inventory', 'Items held from the start, separated by commas, '
                                   'with a count if needed: "Hover Boots, Progressive Hookshot x2, Heart Container x3". '
-                                  'Songs and tunics are not available yet.'),
+                                  'Songs by name ("Sarias Song"). Tunics are not available yet.'),
     'item_pool_value': ('Item pool', 'Plentiful: an extra copy of the major items. Scarce: at most 3 bottles '
                         'and half the hearts. Minimal: one bottle and no extra hearts.'),
     'logic_no_night_tokens_without_suns_song': ("Night skulltulas need Sun's Song",

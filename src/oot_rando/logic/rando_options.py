@@ -63,7 +63,7 @@ PILOT = ('Adapter built and checked statically; in-game behaviour still to be co
 NO_EVENT = 'Event or NPC: reward adapter still to be written and proven in game.'
 GENERIC_KEYS = 'Remake keys are generic (credited to the current dungeon): impossible outside the dungeon.'
 # Items that can be held from the start (silent pouch add at the end of the opening).
-# Songs, tunics, trade items and dungeon items have no pouch actor of their own yet.
+# Tunics, trade items and dungeon items have no pouch actor of their own yet.
 STARTABLE_ITEMS = (
     'Kokiri Sword', 'Biggoron Sword', 'Deku Shield', 'Hylian Shield', 'Mirror Shield',
     'Slingshot', 'Bow', 'Boomerang', 'Progressive Hookshot', 'Megaton Hammer', 'Lens of Truth',
@@ -73,6 +73,9 @@ STARTABLE_ITEMS = (
     'Bottle with Milk', 'Zeldas Letter', 'Stone of Agony', 'Heart Container', 'Piece of Heart',
     'Gold Skulltula Token', 'Kokiri Emerald', 'Goron Ruby', 'Zora Sapphire', 'Forest Medallion',
     'Fire Medallion', 'Water Medallion', 'Spirit Medallion', 'Shadow Medallion', 'Light Medallion',
+    'Zeldas Lullaby', 'Eponas Song', 'Sarias Song', 'Suns Song', 'Song of Time', 'Song of Storms',
+    'Minuet of Forest', 'Bolero of Fire', 'Serenade of Water', 'Requiem of Spirit', 'Nocturne of Shadow',
+    'Prelude of Light',
 )
 MAX_START_COUNT = 100
 KEY_RING_DUNGEONS = ('Forest Temple', 'Fire Temple', 'Water Temple', 'Shadow Temple', 'Spirit Temple',
@@ -141,7 +144,14 @@ OPTIONS = [
     Option('progressive_strict', 'Items', 'Strict order: the higher level requires the previous one',
            ((False, OK), (True, OK)), False, 'More constraining; may need several attempts.', kind='bool'),
     Option('shuffle_song_items', 'Items', 'Songs',
-           (('song', 'Vanilla', OK), ('dungeon', 'Dungeon rewards', NO_EVENT), ('any', 'Anywhere', NO_EVENT)), 'song'),
+           (('song', 'Vanilla', OK), ('shuffled', 'Shuffled among song locations', OK),
+            ('dungeon', 'Song locations and dungeon rewards', OK),
+            ('any', 'Anywhere a cutscene can give them', OK)), 'song',
+           'A song is given with its text only ("You learned …"), nothing in Link\'s hands; '
+           'the song cutscenes no longer teach their melody when they give another item. '
+           '"Anywhere": song locations, dungeon rewards, great fairies and story rewards (the '
+           'matching options must be on). Not validated in game.',
+           experimental=('shuffled', 'dungeon', 'any')),
     Option('shopsanity', 'Items', 'Shops (items shuffled per shop)',
            (('off', 'Vanilla', OK), ('1', '1 item per shop', OK), ('2', '2 items', OK),
             ('3', '3 items', OK), ('4', '4 items', OK), ('random', '1 to 4 random items', OK)), 'off',
@@ -203,7 +213,7 @@ OPTIONS = [
     Option('shuffle_frog_song_rupees', 'Items', 'Frog song rupees', ((False, OK), (True, NO_EVENT)), False, kind='bool'),
     Option('start_inventory_from_pool', 'Items', 'Starting inventory',
            None, {}, 'Items held from the start (copies taken out of the item pool). Hearts: '
-           '"Heart Container" or "Piece of Heart". Songs and tunics are not available yet.', kind='items'),
+           '"Heart Container" or "Piece of Heart"; songs by name ("Sarias Song"). Tunics are not available yet.', kind='items'),
     Option('item_pool_value', 'Items', 'Item pool',
            (('balanced', 'Balanced', OK), ('plentiful', 'Plentiful (one extra copy of the major items)', OK),
             ('scarce', 'Scarce (fewer bottles and hearts)', OK),
@@ -264,8 +274,9 @@ OPTIONS = [
            'Same patch as "Chests without cutscene" in the setup: the lid opens and Link holds the item up.',
            kind='bool'),
     Option('free_scarecrow', 'Quality of life', 'Free scarecrow', ((False, OK), (True, NO_EVENT)), False, kind='bool'),
-    Option('big_poe_count', 'Quality of life', 'Big Poes to bring back', None, 10, kind='int', minimum=1, maximum=10,
-           supported_ints=(10,)),
+    Option('big_poe_count', 'Quality of life', 'Big Poes to bring back', None, 10,
+           'The collector gives his reward after this many Big Poes. Not validated in game.',
+           kind='int', minimum=1, maximum=10, supported_ints=tuple(range(1, 11)), experimental=tuple(range(1, 10))),
     Option('chicken_count', 'Quality of life', 'Cuccos to bring back', None, 7, kind='int', minimum=0, maximum=7,
            supported_ints=(7,)),
 ]

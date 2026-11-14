@@ -22,13 +22,14 @@ class OptionTests(unittest.TestCase):
         self.assertEqual(items, {'Hover Boots': 1, 'Progressive Hookshot': 2, 'Heart Container': 3, 'Bow': 1})
         self.assertEqual(rando_options.parse_items(rando_options.format_items(items)), items)
         self.assertEqual(rando_options.parse_items('  '), {})
+        self.assertEqual(rando_options.parse_items('zeldas lullaby'), {'Zeldas Lullaby': 1})
         with self.assertRaises(ValueError):
-            rando_options.parse_items('Zeldas Lullaby')
+            rando_options.parse_items('Goron Tunic')
 
     def test_validate_items(self):
         values = rando_options.validate({'start_inventory_from_pool': {'Bow': 2}}, supported_only=True)
         self.assertEqual(values['start_inventory_from_pool'], {'Bow': 2})
-        for bad in ({'Bow': 0}, {'Minuet of Forest': 1}, ['Bow'], {'Bow': True}):
+        for bad in ({'Bow': 0}, {'Goron Tunic': 1}, ['Bow'], {'Bow': True}):
             with self.assertRaises(ValueError):
                 rando_options.validate({'start_inventory_from_pool': bad})
 
@@ -49,8 +50,9 @@ class OptionTests(unittest.TestCase):
 
     def test_ap_start_inventory_is_imported(self):
         imported, ignored = rando_options.from_ap_yaml(
-            'game: Ocarina of Time\nOcarina of Time:\n  start_inventory:\n    Bow: 1\n    Minuet of Forest: 1\n')
-        self.assertEqual(imported['start_inventory_from_pool'], {'Bow': 1})
+            'game: Ocarina of Time\nOcarina of Time:\n  start_inventory:\n    Bow: 1\n    Minuet of Forest: 1\n'
+            '    Goron Tunic: 1\n')
+        self.assertEqual(imported['start_inventory_from_pool'], {'Bow': 1, 'Minuet of Forest': 1})
         self.assertEqual(len(ignored), 1)
 
     def test_newly_supported_values(self):

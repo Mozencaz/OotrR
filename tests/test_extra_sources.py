@@ -116,13 +116,14 @@ class Units(unittest.TestCase):
         npc = {l for ap, _, _, _ in NPC_GIFTS for l in ap}
         seen = set()
         for source, ap, _, sites in EVENT_GIFTS:
-            self.assertIn(source, ('boss', 'fairy', 'quest'))
+            self.assertIn(source, ('boss', 'fairy', 'quest', 'song'))
             self.assertFalse(set(ap) & (npc | seen))
             seen.update(ap)
             # Every site of one reward gives the same AP item.
             self.assertEqual(len({actor_item(actor, '') for _, _, actor in sites}), 1, ap)
         self.assertEqual(sum(s == 'boss' for s, *_ in EVENT_GIFTS), 9)
         self.assertEqual(sum(s == 'fairy' for s, *_ in EVENT_GIFTS), 6)
+        self.assertEqual(sum(s == 'song' for s, *_ in EVENT_GIFTS), 12)
         self.assertEqual(len(BOSS_HEARTS), 8)
         for category, option in (('boss_rewards', 'shuffle_boss_rewards'), ('fairies', 'shuffle_great_fairies'),
                                  ('quest_rewards', 'shuffle_quest_rewards')):

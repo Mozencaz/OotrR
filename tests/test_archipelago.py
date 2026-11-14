@@ -332,7 +332,7 @@ class WithGame(unittest.TestCase):
             'Options.py': (
                 'class Toggle: pass\nclass DefaultOnToggle(Toggle): pass\nclass Choice: pass\n'
                 'class OptionError(Exception): pass\nclass StartInventoryPool: pass\n'
-                'class PerGameCommonOptions: pass\n'),
+                'class PerGameCommonOptions: pass\nclass OptionSet: pass\n'),
             'worlds/__init__.py': '',
             'worlds/AutoWorld.py': 'class World: pass\n',
         }

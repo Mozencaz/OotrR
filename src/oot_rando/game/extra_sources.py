@@ -19,6 +19,8 @@ Every source becomes an *entry* with the same fields as a chest group of
 * ``boss`` (spiritual stones and medallions), ``fairy`` (great fairy rewards)
   and ``quest`` (story rewards: ocarinas, Zelda's letter, light arrows,
   Biggoron's sword): the item parameter of their giving cutscene, event form;
+* ``song`` (the 12 song cutscenes): their silent add, event form; the melody
+  teaching and the text-only get are handled by ``song_adapter``;
 * ``bossheart`` (boss heart containers): ``Gyaml`` of the placed container,
   world form.
 
@@ -139,6 +141,9 @@ EVENT_GIFTS = (
     ('quest', ('ToT Light Arrows Cutscene',), (), (('Dm_TimeTemple_0130', 'Event85', 'Item_Arrow_Light'),)),
     ('quest', ('DMT Biggoron',), (), (('Npc_Goron_Biggoron_Adult', 'Event123', 'Item_Sword_Biggoron'),)),
 )
+# Song locations: the silent add of each song cutscene (see patching/song_adapter.py).
+from oot_rando.patching.song_adapter import song_gifts as _song_gifts  # noqa: E402
+EVENT_GIFTS = EVENT_GIFTS + _song_gifts()
 # One-time business scrubs (``Enemy_Scrub_Business_Common``): the item sold is the
 # ``ActorName`` of each ``SimpleShopSub_Scrub_Business_OneTime`` call (one per
 # branch: e.g. medium or large bag depending on the pouch), the price its
@@ -166,7 +171,7 @@ SCRUB_LOW_PRICE = 10
 CHILD_WALLET = 200
 # Highest 'random' scrub price: kept at 99 so existing seeds replay identically.
 SCRUB_RANDOM_MAX = 99
-EVENT_SOURCES = ('npc', 'boss', 'fairy', 'quest', 'scrub')
+EVENT_SOURCES = ('npc', 'boss', 'fairy', 'quest', 'scrub', 'song')
 # Boss heart container of each dungeon map (one placed Obj_Heart_Container each).
 BOSS_HEARTS = {
     'InsideTheDekuTree': 'Deku Tree Queen Gohma Heart', 'DodongoCavern': 'Dodongos Cavern King Dodongo Heart',

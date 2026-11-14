@@ -156,6 +156,13 @@ ACTOR_ITEMS = {
     'Item_Ocarina_Fairy': 'Ocarina', 'Item_Ocarina_Time': 'Ocarina',
     'Item_ZeldaLetter': 'Zeldas Letter', 'Item_Arrow_Light': 'Light Arrows',
     'Item_Sword_Biggoron': 'Biggoron Sword',
+    # Songs (pouch actors given by the song cutscenes, see patching/song_adapter.py).
+    'Item_Melody_ZeldaLullaby': 'Zeldas Lullaby', 'Item_Melody_EponaSong': 'Eponas Song',
+    'Item_Melody_SariaSong': 'Sarias Song', 'Item_Melody_SunSong': 'Suns Song',
+    'Item_Melody_TimeSong': 'Song of Time', 'Item_Melody_StormSong': 'Song of Storms',
+    'Item_Melody_ForestMinuet': 'Minuet of Forest', 'Item_Melody_FireBolero': 'Bolero of Fire',
+    'Item_Melody_WaterSerenade': 'Serenade of Water', 'Item_Melody_SpiritRequiem': 'Requiem of Spirit',
+    'Item_Melody_ShadowNocturne': 'Nocturne of Shadow', 'Item_Melody_LightPrelude': 'Prelude of Light',
     # Remake-only items with no AP equivalent: never part of the logic.
     'Tbox_MagicJar_Large': 'Remake: Magic Jar', 'Item_ScrubBusinessSeed': 'Remake: Scrub Seed',
 }
