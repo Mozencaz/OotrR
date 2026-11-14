@@ -484,6 +484,9 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
             for record in records:
                 full['matches'][record['id']]['tracking_flag'] = record['flag']
             skips['chest_flags'] = {'records': records, 'skipped': skipped, 'analyzed_rows': analyzed}
+            # Meeting Zelda before the Deku Tree must not send Mido away from his wall.
+            from oot_rando.patching.qol_patches import MIDO_SCHEDULE, keep_mido_at_post
+            plain_raw[MIDO_SCHEDULE], skips['mido_post'] = keep_mido_at_post(read(MIDO_SCHEDULE))
         growths = {}
         for path, raw in sorted(raw_maps.items()):
             source = read(path)

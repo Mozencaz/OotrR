@@ -13,6 +13,10 @@
    "rule": "is_adult and at('Lost Woods', can_plant_bean)",
    "why": "The only Lost Woods chest (purple rupee) is not in a grotto: it stands on a ledge of the stick-scrub room that only the adult bean platform of the soil near the bridge reaches (Obj_SmallFarm_A_03 → DestinationAnchor at 2.9 m)."
   },
+  "Market Lost Dog": {
+   "rule": "is_child and at_night and 'Kakariko Village Gate Open'",
+   "why": "Richard only runs away once the Kakariko gate guard has read Zelda's Letter (Logic/Market_Child_Prefab_f3a2: RunningRichard needs Npc_Hylia_Soldier_003_GateOpen); before that he stays home with his owner (14/11, Discord report)."
+  },
   "Song from Saria": {
    "rule": "is_child and Zeldas_Letter and at('GC Darunias Chamber', is_child)",
    "why": "Saria teaches her song during the Fire Stone quest (Challenge Get_StoneOfFire, step SariaMelodyGet), only after Darunia asked for music in his chamber (11/11: Kokiri Sword behind the Skull Kid)."

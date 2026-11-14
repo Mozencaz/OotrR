@@ -72,8 +72,23 @@ def form_actor(canonical, form, airborne=False):
     raise ValueError('Forme inconnue : ' + form)
 
 
-def can_take(canonical, form):
-    """Whether an item can be given by a location of ``form`` (statically)."""
+# The ocarinas are the accessory Link plays, not a holdable reward: their packs have
+# no Item_EventObject_Base parent, ASInfo/Item_GetDemo or AnimationParam, so the
+# item-get pose of chests, NPC hand-overs and shops crashes the game (issue #15:
+# rolling Goron; Discord 14/11: Dodongo's Cavern compass chest; AP test 13/11).
+# Vanilla only hands them out in cutscenes, through the get display without pose
+# (Dm_Kokiri_0155, Dm_MelodyGet_Time): those two sites, and world pickups (own
+# Obj_Rando_ get event, validated 11/11), are the only places they may go.
+OCARINAS = ('Item_Ocarina_Fairy', 'Item_Ocarina_Time')
+OCARINA_SITES = ('LW Gift from Saria', 'HF Ocarina of Time Item')
+
+
+def can_take(canonical, form, ap=()):
+    """Whether an item can be given by a location of ``form`` (statically).
+
+    ``ap``: AP locations of the location (only needed for the ocarinas)."""
+    if canonical in OCARINAS:
+        return form == 'world' or (form == 'event' and any(l in OCARINA_SITES for l in ap))
     if canonical.startswith('Shop_'):
         return form == 'shop'           # shop-only purchases (bottle contents, refills…)
     if canonical.startswith('Item_AP_'):
