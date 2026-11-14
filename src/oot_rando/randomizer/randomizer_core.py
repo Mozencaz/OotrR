@@ -513,7 +513,7 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
             # sub-flow completion above: its own row lists what it calls.
             report('Archipelago item reception…')
             from oot_rando.patching import ap_mailbox
-            from oot_rando.patching.event_info import flow_path as mailbox_flow_path
+            from oot_rando.patching.event_info import GAME_ANALYZED_EVENT_INFO, flow_path as mailbox_flow_path
             current_raw = lambda path: extra_raw[path] if path in extra_raw else decompress(read(path), d)
             extra_raw[ap_mailbox.FLOW_PATH] = ap_mailbox.add_entries(current_raw(ap_mailbox.FLOW_PATH), mailbox_items)
             mailbox_flows = lambda name: (extra_raw[ap_mailbox.FLOW_PATH] if name == ap_mailbox.FLOW

@@ -67,3 +67,28 @@ class SettingsTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class GeneratorNamesTests(unittest.TestCase):
+    def test_every_name_the_generator_reads_is_defined(self):
+        """A name read in generate() is imported or assigned in it, or exists at module level.
+        Branches no seed test reaches (Archipelago item reception) must not fail with NameError."""
+        import ast
+        import builtins
+        import inspect
+        from oot_rando.randomizer import randomizer_core
+        function = ast.parse(inspect.getsource(randomizer_core.generate)).body[0]
+        defined = set(dir(builtins)) | set(vars(randomizer_core))
+        for node in ast.walk(function):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+                defined.add(node.id)
+            elif isinstance(node, ast.arg):
+                defined.add(node.arg)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                defined.update((alias.asname or alias.name).split('.')[0] for alias in node.names)
+            elif isinstance(node, (ast.FunctionDef, ast.Lambda, ast.comprehension, ast.ExceptHandler)):
+                name = getattr(node, 'name', None)
+                if isinstance(name, str):
+                    defined.add(name)
+        read = {node.id for node in ast.walk(function) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
+        self.assertEqual(sorted(read - defined), [])
