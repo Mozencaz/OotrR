@@ -26,8 +26,10 @@ commit it, then run `make ship` (it builds, copies the binary there and prints i
 with the commit that holds the change and the printed values, and commit them (the application's tests check the checksum).
 
 The build embeds `PACKAGE_VERSION`, by default the version in `VERSION` and `git describe` of the repository (it appears in the log's
-`loaded ...` line). The shipped 0.1.0 binary was built with `make PACKAGE_VERSION="0.1.0 (565cb4e)"`; the same flag rebuilds it
-byte for byte, provided the sources are unchanged and the build path is the one named below.
+`loaded ...` line). The shipped 0.1.0 binary was built with `make PACKAGE_VERSION="0.1.0 (565cb4e)"` in the module's earlier
+standalone checkout (`/c/dev/ootr-ingame-tracker`). Built from another folder with the same flag, its code and data are the same but
+its build id is not, because the build id hashes the debug information and that names the source folder. So the sha256 and the size
+(by a byte or so, from the compression) differ too.
 
 ## Checking a build loads
 

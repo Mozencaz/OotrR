@@ -10,7 +10,8 @@ version 3 or later (the text is in `LICENSE` here), built from [ocarinaMIDI](htt
 
 - Source: the `ingame_tracker/` folder of this repository (GPL-3, with its own `LICENSE`)
 - Commit: `d403cc1` (module version 0.1.0; it was `565cb4e` in the repository the module lived in before)
-- Built with devkitA64: `make PACKAGE_VERSION="0.1.0 (565cb4e)"` in `ingame_tracker/` (see its `docs/BUILDING.md`)
+- Built with devkitA64: `make PACKAGE_VERSION="0.1.0 (565cb4e)"` in the module's earlier checkout; built from `ingame_tracker/`
+  it has the same code and data and only its build id differs (see `docs/BUILDING.md` there)
 - sha256 of `subsdk7`: `054734cd8690585a1be78ac76296f9e33daeb94fd3b0ea559346a4faa3b70d8e` (66,723 bytes)
 
 The source of this exact binary is that folder at the commit above. To change the module, change it there, run `make ship` in that
