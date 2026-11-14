@@ -120,7 +120,8 @@ class Settings:
                 raise ValueError('The full randomizer handles every chest: disable the four Kokiri '
                                  'chests and the Ordinary chests category.')
             overlap = [CATEGORIES[name] for name, option, off in (
-                ('pots', 'shuffle_pots', 'off'), ('bushes', 'shuffle_bushes', False), ('rocks', 'shuffle_rocks', False))
+                ('pots', 'shuffle_pots', 'off'), ('bushes', 'shuffle_bushes', False), ('rocks', 'shuffle_rocks', False),
+                ('trees', 'shuffle_trees', False))
                 if self.categories.get(name) and self.full.get(option, off) != off]
             if overlap:
                 raise ValueError('These categories are already shuffled as checks by the full randomizer: '

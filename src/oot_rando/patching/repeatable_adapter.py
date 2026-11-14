@@ -21,7 +21,7 @@ from oot_rando.game.item_forms import (WORLD_CANONICAL, WORLD_PREFIX, SHOP_PREFI
                         is_derived, add_rsdb_rows)
 from oot_rando.patching.soul_adapter import FLAG_PREFIX as SOUL_FLAG_PREFIX, murmur3
 
-REPEATABLE = frozenset(('pots', 'bushes', 'rocks', 'crates', 'beehives'))
+REPEATABLE = frozenset(('pots', 'bushes', 'rocks', 'crates', 'beehives', 'trees'))
 EVENT_PACK = 'Pack/AI.Global.Product.111.pack.zs'
 EVENT_MEMBER = 'AI/PouchContent.event.root.ainb'
 LARGE_GET_TYPE = 1746592023

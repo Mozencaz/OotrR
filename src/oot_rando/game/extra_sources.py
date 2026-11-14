@@ -8,10 +8,12 @@ Every source becomes an *entry* with the same fields as a chest group of
 * ``shop`` (shelf items): ``Gyaml`` of the shelf actor, shop form;
 * ``freestanding`` (heart pieces, rupees and hearts placed in the world):
   ``Gyaml`` of the pickup, world form;
-* ``pots``/``bushes``/``rocks``/``crates``/``beehives``: explicit native
+* ``pots``/``bushes``/``rocks``/``crates``/``beehives``/``trees``: explicit native
   ``Drop__DropActor`` of the object, world form (these objects respawn).
   Empty rocks (no drop field at all) receive a new ``Drop__DropActor`` when
-  their pack declares it as an instance parameter;
+  their pack declares it as an instance parameter. Trees (``Obj_Tree_*``) have none either
+  and receive one the same way; trees whose drop table is explicitly ``None``
+  stay vanilla. Colossus palms are left out (drop never observed);
 * ``npc`` (NPC and minigame gifts): the item parameter of the giving event,
   event form. Trade items, songs, cows and masks are never touched;
 * ``scrub`` (one-time business scrubs: upgrades and heart pieces): the item
@@ -33,7 +35,7 @@ from oot_rando.game.randomizer_categories import candidate_category
 from oot_rando.game.remake_world import FOLDER_AREAS, FOLDER_DUNGEON, actor_item
 
 GIVE_PARAMS = ('ActorName', 'ReveiveItem', 'ReceiveItem', 'TakenRewardActor', 'Actor')
-ENVIRONMENT = ('pots', 'bushes', 'rocks', 'crates', 'beehives')
+ENVIRONMENT = ('pots', 'bushes', 'rocks', 'crates', 'beehives', 'trees')
 FREESTANDING_JUNK = ('Obj_Rupee_Green', 'Obj_Rupee_Blue', 'Obj_Rupee_Red', 'Obj_Rupee_Purple',
                      'Obj_Rupee_Gold', 'Obj_Heart')
 ENV_DROPS = FREESTANDING_JUNK
@@ -42,7 +44,7 @@ ENV_DROPS = FREESTANDING_JUNK
 # crates too (Discord 14/11: Kakariko's 30 Obj_Pot_A_08 and every Hyrule Castle pot
 # and crate were left out; Obj_Pot_A_01/A_08 and Obj_BrokenBox_A_01 expose
 # Drop__DropActor per instance). Pots/crates with a random drop table stay vanilla.
-EMPTY_SOURCES = ('rocks', 'pots', 'crates')
+EMPTY_SOURCES = ('rocks', 'pots', 'crates', 'trees')
 EMPTY_VANILLA = 'Rupee (1)'
 SKIP_FOLDERS = ('DreamWorld', 'SageRoom')
 

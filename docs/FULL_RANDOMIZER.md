@@ -18,13 +18,14 @@ and logic are checked statically (`python -m oot_rando verify`); items marked
 | **Great Fairies** (`shuffle_great_fairies`) | Din, Farore, Nayru, magic, double magic, double defense | `ActorName` of the fairy cutscene |
 | **Quest rewards** (`shuffle_quest_rewards`) | Saria's ocarina, Ocarina of Time, Zelda's Letter, Light Arrows, Biggoron Sword | `ActorName` of the cutscene; ocarinas: also the silent pouch add |
 | **Pots, crates, beehives, bushes, rocks** | explicit-drop objects (rupee, heart); empty rocks (≈ 195, no drop table) | existing `Drop__DropActor`, or added on rocks whose pack declares it as an instance parameter |
+| **Trees** (`shuffle_trees`) | 52 `Obj_Tree_*` (Hyrule Field 39, Kokiri Forest 8, castle, Kakariko, market); trees with an explicit `None` drop table and Colossus palms stay vanilla | `Drop__DropActor` added (instance parameter of the tree pack); falls when Link rolls into the tree |
 | **Business Scrubs** (`shuffle_scrubs`) | single-sale remake scrubs only: stick upgrade (`LW Deku Scrub Near Bridge`), nut upgrade (`LW Deku Scrub Grotto Front`), field and crater heart pieces | `ActorName` and `Price` of each `SimpleShopSub_Scrub_Business_OneTime` call in `Enemy_Scrub_Business_Common` |
 
 | **Songs** (`shuffle_song_items`) | the 12 song cutscenes (`Dm_MelodyGet_*`) | silent add of the cutscene (`GetPouchContentByActorName`); see *Songs* below |
 
 Never changed: the whole adult trade quest up to the Biggoron Sword, the
 child trade (egg, letter, masks), cows, the Gerudo card, beans, the lake Fire
-Arrows. Repeatable sources (pots, crates, beehives, bushes, rocks) give their
+Arrows. Repeatable sources (pots, crates, beehives, bushes, rocks, trees) give their
 shuffled reward only once (`repeatable_adapter.py`), then go back to their vanilla loot.
 
 ## Starting inventory, item pool, removed keys
@@ -139,7 +140,7 @@ the dialogue box stayed empty and blocked the game. A new save is required.
   locations are reachable.
 - Skulltulas, stalls: conservative group per zone. The remake puts Lake Hylia and
   Lon Lon Ranch in the Hyrule Field maps; the matching accounts for it.
-- Pots, bushes, rocks, crates, beehives, lying rupees: rule of the **whole zone**.
+- Pots, bushes, rocks, crates, beehives, trees, lying rupees: rule of the **whole zone**.
 - NPCs: exact AP location; for the man on the roof (adult only in the remake) and
   the lake lab (child only), the age rule is added.
 - A group holding a location that the AP rules never reach only receives filler.

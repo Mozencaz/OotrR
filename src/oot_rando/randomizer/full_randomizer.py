@@ -74,6 +74,7 @@ def enabled_sources(options):
                                 ('shop', 'shopsanity', 'off'), ('pots', 'shuffle_pots', 'off'),
                                 ('crates', 'shuffle_crates', 'off'), ('beehives', 'shuffle_beehives', False),
                                 ('bushes', 'shuffle_bushes', False), ('rocks', 'shuffle_rocks', False),
+                                ('trees', 'shuffle_trees', False),
                                 ('npc', 'shuffle_npc_gifts', False), ('boss', 'shuffle_boss_rewards', False),
                                 ('bossheart', 'shuffle_boss_rewards', False), ('fairy', 'shuffle_great_fairies', False),
                                 ('quest', 'shuffle_quest_rewards', False), ('scrub', 'shuffle_scrubs', 'off'),
@@ -816,7 +817,7 @@ def _result(data, logic, options, matches, shuffled, placed, tiers, sphere_of, s
                 'virtual': {name: list(members) for name, members in logic.virtual.items()}}}
 
 
-REPEATABLE = ('pots', 'bushes', 'rocks', 'crates', 'beehives')
+REPEATABLE = ('pots', 'bushes', 'rocks', 'crates', 'beehives', 'trees')
 
 
 def _entry_zone(data, entry, gid):
@@ -883,7 +884,7 @@ def _is_reward(item):
 SOURCE_LABELS = {'chest': 'chest', 'skulltula': 'skulltula', 'shop': 'shop', 'freestanding': 'freestanding',
                  'npc': 'NPC', 'boss': 'dungeon reward', 'bossheart': 'boss heart container',
                  'fairy': 'great fairy', 'quest': 'quest reward', 'scrub': 'business scrub', 'pots': 'pot', 'bushes': 'bush', 'rocks': 'rock', 'crates': 'crate',
-                 'beehives': 'beehive', 'song': 'song'}
+                 'beehives': 'beehive', 'song': 'song', 'trees': 'tree'}
 
 
 def _patches(entry):

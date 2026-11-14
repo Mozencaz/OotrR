@@ -11,7 +11,7 @@ from oot_rando.game.tracking_metadata import reward_label
 SPOILER_TEXT = 'spoiler.txt'
 KIND_LABELS = {
     'chest': 'Chest', 'skulltula': 'Gold Skulltula', 'freestanding': 'Freestanding item', 'shop': 'Shop',
-    'pots': 'Pot', 'crates': 'Crate', 'beehives': 'Beehive', 'bushes': 'Bush', 'rocks': 'Rock',
+    'pots': 'Pot', 'crates': 'Crate', 'beehives': 'Beehive', 'bushes': 'Bush', 'rocks': 'Rock', 'trees': 'Tree',
     'npc': 'NPC', 'boss': 'Dungeon reward', 'bossheart': 'Boss heart container',
     'fairy': 'Great fairy', 'quest': 'Quest reward', 'scrub': 'Business scrub',
 }

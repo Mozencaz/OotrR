@@ -64,7 +64,7 @@ stay visible; a manual fallback mark is possible without revealing the reward.
 Old seeds still open, but must be regenerated to get the newer metadata. The
 tracker refuses a save that does not carry the new-game marker of the selected seed.
 
-For pots, crates, beehives, bushes and rocks shuffled by the full mode, the
+For pots, crates, beehives, bushes, rocks and trees shuffled by the full mode, the
 randomized reward is limited to the first pickup. A private get event sets a
 persistent flag, then the source goes back to its native loot (a rock without
 vanilla loot gives nothing again). A guard forbids a second randomized reward

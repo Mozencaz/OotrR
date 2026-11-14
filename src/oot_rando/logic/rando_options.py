@@ -210,6 +210,9 @@ OPTIONS = [
            experimental=(True,)),
     Option('shuffle_rocks', 'Items', 'Rocks and stones (as checks)', ((False, OK), (True, OK)), False,
            PILOT, kind='bool', experimental=(True,)),
+    Option('shuffle_trees', 'Items', 'Trees (as checks)', ((False, OK), (True, OK)), False,
+           PILOT + ' About 50 trees without a drop of their own (Hyrule Field, Kokiri Forest, castle, Kakariko): '
+           'the first reward falls when Link rolls into the tree.', kind='bool', experimental=(True,)),
     Option('shuffle_frog_song_rupees', 'Items', 'Frog song rupees', ((False, OK), (True, NO_EVENT)), False, kind='bool'),
     Option('start_inventory_from_pool', 'Items', 'Starting inventory',
            None, {}, 'Items held from the start (copies taken out of the item pool). Hearts: '
@@ -365,7 +368,7 @@ PRESETS = {
         'tokensanity': 'all', 'shopsanity': '4', 'shuffle_freestanding_items': 'all', 'shuffle_npc_gifts': True,
         'shuffle_boss_rewards': True, 'shuffle_great_fairies': True, 'shuffle_quest_rewards': True,
         'shuffle_pots': 'all', 'shuffle_crates': 'all', 'shuffle_beehives': True, 'shuffle_bushes': True,
-        'shuffle_rocks': True, 'shuffle_scrubs': 'low'}},
+        'shuffle_rocks': True, 'shuffle_trees': True, 'shuffle_scrubs': 'low'}},
     'prudent': {'label': 'Prudent (chests except keys, no souls)', 'values': {
         'shuffle_chests': True, 'shuffle_kokiri_sword': False, 'shuffle_mapcompass': 'vanilla',
         'shuffle_smallkeys': 'vanilla', 'shuffle_bosskeys': 'vanilla', 'shuffle_enemy_spawns': 'off'}},
@@ -449,7 +452,7 @@ def from_ap_yaml(text):
 
 
 REMAKE_ONLY = ('shuffle_chests', 'chest_matching', 'shuffle_remake_items', 'progressive_order',
-               'progressive_strict', 'shuffle_enemy_spawns', 'shuffle_npc_gifts', 'shuffle_bushes', 'shuffle_rocks',
+               'progressive_strict', 'shuffle_enemy_spawns', 'shuffle_npc_gifts', 'shuffle_bushes', 'shuffle_rocks', 'shuffle_trees',
                'shuffle_boss_rewards', 'shuffle_great_fairies', 'shuffle_quest_rewards')
 
 
@@ -487,6 +490,7 @@ CATEGORY_OPTIONS = {
     'bushes': (('shuffle_bushes', True, False),),
     'crates': (('shuffle_crates', 'all', 'off'),),
     'rocks': (('shuffle_rocks', True, False),),
+    'trees': (('shuffle_trees', True, False),),
     'beehives': (('shuffle_beehives', True, False),),
     'npc_gifts': (('shuffle_npc_gifts', True, False),),
     'minigames': (('shuffle_npc_gifts', True, False),),
