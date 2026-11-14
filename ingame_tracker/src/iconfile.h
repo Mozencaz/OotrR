@@ -12,7 +12,7 @@
 #define ICONFILE_VERSION 1
 #define ICONFILE_HEADER  32
 #define ICONFILE_ENTRY   64
-#define ICONFILE_MAX     30          /* the icon atlas's slots (gpuui.c) */
+#define ICONFILE_MAX     40          /* the icon atlas's slots (gpuui.c) */
 #define ICONFILE_NAME    32          /* an item's name, with its NUL */
 #define ICONFILE_HEAD_MAX (ICONFILE_HEADER + ICONFILE_MAX * ICONFILE_ENTRY) /* the most a reader needs to parse */
 #define ICONFILE_PICTURE_MAX (4u << 20) /* one picture's most bytes */

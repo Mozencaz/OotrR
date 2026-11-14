@@ -106,8 +106,8 @@ doesn't have the flag.
 
 Quad budget: ocarinaMIDI draws at most 512 quads (a short list). This panel's text is about 1,000 quads at most (35 regions, 36 cells), so
 `MAX_QUADS` in `gpuui.c` is 1,536, the command memory per slot (`overlay.c`) 0x40000 (sloperinaGZ's own size) and the elements 2 x 1,536 x
-256 bytes. Over the budget the rest of the frame is left out, with a log line, not a crash. The icons add at most 27 quads, and shrinking
-a picture has its own 36 elements per slot.
+256 bytes. Over the budget the rest of the frame is left out, with a log line, not a crash. The icons add at most 60 quads (36 cells and
+three per dungeon in the keys row, which then draws fewer letters), and shrinking a picture has its own 36 elements per slot.
 
 ## The items' icons
 
@@ -118,9 +118,10 @@ ASTC 4x4 texture with that packaged layout (`nvnTextureBuilderSetPackagedTexture
 master 5287f64) makes textures of the game's controller pictures; sloperinaGZ decodes its icons on the CPU instead (`astc.c`). They are
 sampled as unorm whatever the BNTX says, as sloperinaGZ's `gameimage.c` does: no sRGB decode, like everything else the panel draws.
 
-The pictures are large (up to 704 KB each, about 7 MB for the 27) and the game's heap has little to spare (sloperinaGZ's NATIVE_UI.md and
+The pictures are large (up to 704 KB each, about 7.3 MB for the 38) and the game's heap has little to spare (sloperinaGZ's NATIVE_UI.md and
 FINDINGS.md: it refused allocations past about 10 to 11 MB), so they are not kept. Each is shrunk once, on the GPU, into a 64-pixel slot
-of an icon atlas (384 x 320, RGBA16F, about 1 MB), and only one picture's bytes are held at a time:
+of an icon atlas (512 x 320, 40 slots, RGBA16F: 1.25 MiB, kept; the 38 icons of the game of 13/11 use 38), and only one picture's bytes
+are held at a time (688 KiB at most, freed once they are in):
 
 1. The first frame the panel is drawn (`trackerui.c`, `icons_start`), the file's header and index are read and checked (`iconfile.c`), the
    grid's cells are matched with its entries by name, and `gpuui_icons_init` makes the atlas (registered after the glyph atlas) and room
@@ -132,7 +133,11 @@ of an icon atlas (384 x 320, RGBA16F, about 1 MB), and only one picture's bytes 
 3. Once all are in, the picture memory is freed (log: `the icons are in; the pictures' N KiB go back`).
 
 A cell's icon is a square as tall as the cell, in its middle, drawn with premultiplied blending: at full strength when the item is owned,
-dimmed when it is missing or unknown. The atlas is a render target, so its rows run the window's way up: with the lower-left origin it is
+dimmed when it is missing, fainter still when it is unknown (the game has none of its flags), which also gets a small `?` at the cell's
+right. The stones and medallions use the file select's pictures (`DataFileImportantIcon_00` to `_08`). In the keys row each temple is
+labelled by its medallion's icon (Bottom of the Well, Gerudo Training Ground and Ganon's Castle, which have none, keep their letters),
+then the small key's icon and `found/total`, then the boss key's icon, dimmed until it is held; without the icons, the letters and a `B`
+as before. The atlas is a render target, so its rows run the window's way up: with the lower-left origin it is
 sampled upside down, as sloperinaGZ samples its layer.
 
 ## Failure modes

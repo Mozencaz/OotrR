@@ -12,9 +12,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from oot_rando.game.tracking_metadata import inventory_rules
+from oot_rando.patching.soul_adapter import murmur3
 from oot_rando.randomizer.randomizer_core import Settings, generate
-from oot_rando.randomizer.randomizer_services import (generate_in_mods, read_artifact, update_ingame_tracker,
-                                                      update_ingame_trackers)
+from oot_rando.randomizer.randomizer_services import (_key_actors, generate_in_mods, read_artifact,
+                                                      update_ingame_tracker, update_ingame_trackers)
 from oot_rando.__main__ import main as command_line
 from oot_rando.paths import resource
 from oot_rando.tracker import ingame_bundle, ingame_format as fmt, ingame_icons
@@ -183,7 +185,25 @@ class ExportTests(unittest.TestCase):
 
     def test_items_keep_every_rule_of_an_item(self):
         parsed = fmt.parse(ingame_bundle.seed_file(*synthetic_seed()))
-        self.assertEqual(parsed['items'], [('Bow', [(11, 1), (12, 2)]), ('Boomerang', [(13, 1)])])
+        self.assertEqual(parsed['items'][:2], [('Bow', [(11, 1), (12, 2)]), ('Boomerang', [(13, 1)])])
+
+    def test_items_no_chest_leads_to_are_added_once(self):
+        # The Lens, the strength upgrades and the Fire Arrows had no rule in seeds of 13/11: shown as unknown.
+        manifest, checks, tracking = synthetic_seed()
+        items = dict(fmt.parse(ingame_bundle.seed_file(manifest, checks, tracking))['items'])
+        self.assertEqual(items['Lens of Truth'], [(murmur3('IsGet.Armor_GlassTruth'), 1)])
+        self.assertEqual(items['Fire Arrows'], [(murmur3('IsGet.Item_Arrow_Fire'), 1)])
+        self.assertEqual(items['Progressive Strength Upgrade'],
+                         [(murmur3('IsGet.Armor_Child_Gauntlet_Goron'), 1), (murmur3('IsGet.Armor_Adult_Gauntlet_Silver'), 2),
+                          (murmur3('IsGet.Armor_Adult_Gauntlet_Gold'), 3)])
+        tracking['inventory'] = inventory_rules(tracking['inventory'])
+        self.assertEqual(dict(fmt.parse(ingame_bundle.seed_file(manifest, checks, tracking))['items']), items)
+
+    def test_extra_rules_only_for_the_flags_the_game_saves(self):
+        lens = {'item': 'Lens of Truth', 'hash': str(murmur3('IsGet.Armor_GlassTruth')), 'count': 1}
+        rules = inventory_rules([lens], known={murmur3('IsGet.Armor_GlassTruth'), murmur3('IsGet.Item_Arrow_Fire')})
+        self.assertEqual(rules, [lens, {'item': 'Fire Arrows', 'hash': str(murmur3('IsGet.Item_Arrow_Fire')), 'count': 1}])
+        self.assertEqual(inventory_rules(None, known=set()), [])
 
     def test_dungeon_keys(self):
         keys = fmt.parse(ingame_bundle.seed_file(*synthetic_seed()))['keys']
@@ -191,6 +211,29 @@ class ExportTests(unittest.TestCase):
                                    'total': 5, 'found': 21, 'held': 22, 'ring': 23, 'boss': 24})
         self.assertEqual(keys[1], {'name': 'Bottom of the Well', 'flags': fmt.KEY_SMALL | fmt.KEY_SMALL_ALL,
                                    'total': 3, 'found': 31, 'held': 32, 'ring': 0, 'boss': 0})
+
+    def test_key_items_are_owned_once_obtained(self):
+        # Saves of 13/11: Ganon's Castle's ring obtained (IsGet.Item_KeyRing_Ganon) but not applied by the get
+        # hook (RandoKeyRing.InsideGanonCastle, SmallKeyNum); the tracker showed 0/2.
+        manifest, checks, tracking = synthetic_seed()
+        tracking['keys'] = [{'folder': 'InsideGanonCastle', 'dungeon': "Ganon's Castle",
+                             'small': {'total': 2, 'found': '41', 'held': '42', 'all': False,
+                                       'ring': str(murmur3('RandoKeyRing.InsideGanonCastle'))},
+                             'boss': {'hash': str(murmur3('DungeonInfo.InsideGanonCastle.IsGetBossKey')), 'all': False}}]
+        old = fmt.parse(ingame_bundle.seed_file(manifest, checks, tracking))['keys'][0]
+        self.assertEqual((old['ring'], old['boss']), (murmur3('IsGet.Item_KeyRing_Ganon'),
+                                                      murmur3('DungeonInfo.InsideGanonCastle.IsGetBossKey')))
+        new = fmt.parse(ingame_bundle.seed_file(manifest, checks, tracking, {'Item_BossKey_Ganon'}))['keys'][0]
+        self.assertEqual(new['boss'], murmur3('IsGet.Item_BossKey_Ganon'))
+
+    def test_the_seeds_key_actors_come_from_its_folder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            actors = Path(directory) / 'romfs' / 'Pack' / 'Actor'
+            actors.mkdir(parents=True)
+            for name in ('Item_KeyRing_Ganon', 'Item_BossKey_ForestTemple', 'Item_Soul_Stalfos'):
+                (actors / (name + '.pack.zs')).write_bytes(b'')
+            self.assertEqual(_key_actors(directory), {'Item_KeyRing_Ganon', 'Item_BossKey_ForestTemple'})
+            self.assertEqual(_key_actors(Path(directory) / 'romfs'), set())
 
     def test_a_seed_without_keys_data_still_exports(self):
         manifest, checks, tracking = synthetic_seed()
@@ -218,7 +261,7 @@ class ExportTests(unittest.TestCase):
         self.assertEqual({name: len(c) for name, c in parsed['regions']}, by_region)
         self.assertEqual(parsed['seed_marker'], int(tracking['seed_marker']))
         self.assertEqual(parsed['goal_marker'], int(tracking['goal_marker']))
-        self.assertEqual(sum(len(rules) for _, rules in parsed['items']), len(tracking['inventory']))
+        self.assertEqual(sum(len(rules) for _, rules in parsed['items']), len(inventory_rules(tracking['inventory'])))
         self.assertEqual({kind for _, c in parsed['regions'] for kind, _, _ in c}, {fmt.KIND_BOOL, fmt.KIND_BOOL64})
         data = ingame_bundle.seed_file(manifest, checks, tracking)
         rewards = {r['reward'] for r in tracking['checks'].values() if r['reward']} - {name for name, _ in parsed['items']}
@@ -245,6 +288,35 @@ def synthetic_bntx(width=8, height=8, texture_format=0x2D01, tile_mode=0, levels
         at = 0x200 + level * len(data)
         struct.pack_into('<Q', out, 0x100 + 8 * level, at)
         out[at:at + len(data)] = data if level == 0 else b'\xEE' * len(data)
+    return bytes(out)
+
+
+def synthetic_archive(textures):
+    """A BNTX of several textures, made here (no game data), as the game's layout archives: ``[(name, data,
+    texture format)]``; the records' table at 0x40, the records from 0x100, their names from 0x800, their
+    levels' tables from 0xC00, the data from 0x1000 in the reverse order of the records."""
+    data_at = 0x1000
+    out = bytearray(data_at)
+    out[0:4] = b'BNTX'
+    struct.pack_into('<I', out, 0x24, len(textures))
+    struct.pack_into('<QQ', out, 0x28, 0x40, data_at)
+    at = data_at
+    for i, (name, data, texture_format) in reversed(list(enumerate(textures))):
+        record, name_at, table = 0x100 + 0x80 * i, 0x800 + 0x40 * i, 0xC00 + 8 * i
+        struct.pack_into('<Q', out, 0x40 + 8 * i, record)
+        out[record:record + 4] = b'BRTI'
+        struct.pack_into('<H', out, record + 0x16, 1)
+        struct.pack_into('<I', out, record + 0x1C, texture_format)
+        struct.pack_into('<II', out, record + 0x24, 8, 8)
+        out[record + 0x34:record + 0x3C] = LAYOUT
+        struct.pack_into('<I', out, record + 0x50, len(data))
+        out[record + 0x58:record + 0x5C] = SWIZZLE
+        struct.pack_into('<QxxxxxxxxQ', out, record + 0x60, name_at, table)
+        struct.pack_into('<H', out, name_at, len(name))
+        out[name_at + 2:name_at + 2 + len(name)] = name.encode()
+        struct.pack_into('<Q', out, table, at)
+        out += data
+        at += len(data)
     return bytes(out)
 
 
@@ -284,7 +356,7 @@ class IconTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ingame_icons.build([('An item whose name is much too long', self.icons()[0][1])])
         with self.assertRaises(ValueError):
-            ingame_icons.build(self.icons()[:1] * 31)
+            ingame_icons.build(self.icons()[:1] * (ingame_icons.MAX_ICONS + 1))
 
     def test_damaged_files_are_refused(self):
         good = ingame_icons.build(self.icons())
@@ -294,7 +366,7 @@ class IconTests(unittest.TestCase):
             struct.pack_into(layout, data, offset, value)
             return bytes(data)
         for what, data in [('magic', b'XTIC' + good[4:]), ('version', changed(4, 2, '<H')), ('size', good + bytes(16)),
-                           ('count', changed(12, 31)), ('misaligned', changed(32 + 40, 168)),
+                           ('count', changed(12, ingame_icons.MAX_ICONS + 1)), ('misaligned', changed(32 + 40, 168)),
                            ('past the end', changed(96 + 40, 272)), ('swizzle', changed(32 + 56, 6, '<B')),
                            ('format', changed(32 + 60, 0x2D02)), ('one item twice', good[:96] + good[32:64] + good[128:]),
                            ('truncated', good[:100])]:
@@ -302,12 +374,34 @@ class IconTests(unittest.TestCase):
                 ingame_icons.parse(data)
 
     def test_the_grids_icons_carry_the_names_the_module_knows(self):
-        grid = (REPOSITORY / 'ingame_tracker' / 'src' / 'grid.c').read_text(encoding='utf-8')
+        source = REPOSITORY / 'ingame_tracker' / 'src'
+        grid, panel = ((source / name).read_text(encoding='utf-8') for name in ('grid.c', 'trackerui.c'))
         icons = ingame_icons.grid_icons()
         self.assertLessEqual(len(icons), ingame_icons.MAX_ICONS)
-        for item, _ in icons:
+        self.assertEqual(icons[-len(ingame_icons.KEY_ICONS):], ingame_icons.KEY_ICONS)
+        for item, _ in icons[:-len(ingame_icons.KEY_ICONS)]:
             self.assertIn('{ "%s",' % item, grid)
+        for item, _ in ingame_icons.KEY_ICONS:
+            self.assertIn('"%s"' % item, panel)
         self.assertIn(('Megaton Hammer', 'Item_Hammer_PouchIcon'), icons)
+        self.assertIn(('Forest Medallion', 'DataFileImportantIcon_04'), icons)
+        self.assertEqual(len({item for item, _ in icons}), len(icons))
+
+    def test_pictures_are_taken_from_an_archive_of_many(self):
+        archive = synthetic_archive([('A', bytes([1]) * 64, 0x2D01), ('B', bytes([2]) * 64, 0x2D06),
+                                     ('C', bytes([3]) * 64, 0x0B01), ('D', bytes([4]) * 64, 0x2D01)])
+        stream = io.BytesIO(archive)
+        found = ingame_icons.archive_textures(stream.read, {'B', 'C', 'Z'})
+        self.assertEqual(set(found), {'B'})                     # C is RGBA8, Z isn't there
+        self.assertEqual(found['B'], {'width': 8, 'height': 8, 'format': 0x2D06, 'layout': LAYOUT,
+                                      'swizzle': SWIZZLE, 'data': bytes([2]) * 64})
+        self.assertEqual(stream.tell(), 0x1000 + 3 * 64)       # read no further than B
+        every = ingame_icons.archive_textures(io.BytesIO(archive).read, {'A', 'B', 'D'})
+        self.assertEqual({name: picture['data'] for name, picture in every.items()},
+                         {'A': bytes([1]) * 64, 'B': bytes([2]) * 64, 'D': bytes([4]) * 64})
+        for what, data in [('magic', b'XNTX' + archive[4:]), ('header', archive[:0x800]), ('data', archive[:-1])]:
+            with self.subTest(what), self.assertRaises(ValueError):
+                ingame_icons.archive_textures(io.BytesIO(data).read, {'A'})
 
     def test_the_icons_the_game_has_in_the_grids_order(self):
         asked = []
@@ -317,10 +411,25 @@ class IconTests(unittest.TestCase):
             if name == 'Weapon_Range_Bow':
                 raise KeyError(name)
             return synthetic_bntx(tile_mode=1 if name == 'Item_Hookshot' else 0)
-        icons = ingame_icons.parse(ingame_icons.icons_file(read_picture))
-        self.assertEqual([item for item, _ in icons],
-                         [item for item, _ in ingame_icons.grid_icons() if item not in ('Bow', 'Progressive Hookshot')])
-        self.assertEqual(asked, [name for _, name in ingame_icons.grid_icons()])
+        layout_asked = []
+
+        def read_layout(names):
+            layout_asked.append(names)
+            return {name: ingame_icons.texture(synthetic_bntx()) for name in names if name != 'DataFileImportantIcon_03'}
+        icons = ingame_icons.parse(ingame_icons.icons_file(read_picture, read_layout))
+        self.assertEqual([item for item, _ in icons], [item for item, _ in ingame_icons.grid_icons()
+                                                       if item not in ('Bow', 'Progressive Hookshot', 'Light Medallion')])
+        stones = set(ingame_icons.LAYOUT_PICTURES)
+        self.assertEqual(asked, [name for item, name in ingame_icons.grid_icons() if item not in stones])
+        self.assertEqual(layout_asked, [set(ingame_icons.LAYOUT_PICTURES.values())])
+
+        def broken_layout(names):
+            raise ValueError('not a BNTX')
+        for layout in (None, broken_layout):   # no archive: the stones and medallions keep their letters
+            with self.subTest(layout):
+                icons = ingame_icons.parse(ingame_icons.icons_file(read_picture, layout))
+                self.assertFalse(stones & {item for item, _ in icons})
+                self.assertIn('Boss Key', {item for item, _ in icons})
         self.assertIsNone(ingame_icons.icons_file(missing_picture))
 
 
@@ -431,12 +540,17 @@ class UpdateTests(unittest.TestCase):
         self.mods = Path(directory.name) / '0400486024DEC000'
         self.mods.mkdir()
 
-    def installed_seed(self, tracker=True):
+    def installed_seed(self, tracker=True, key_actors=()):
         """A seed as generate writes it, whose tracker (if any) came from an older version."""
         root = self.mods / 'seed'
         ServiceTests('make_artifact').make_artifact(root, 'update')
         manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
         root = root.rename(self.mods / ('OoT_Randomizer_' + manifest['seed_id'][:16]))
+        for actor in key_actors:
+            name, data = f'Pack/Actor/{actor}.pack.zs', b'actor ' + actor.encode()
+            (root / 'romfs' / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / 'romfs' / name).write_bytes(data)
+            manifest['files'] = dict(sorted({**manifest['files'], name: ingame_bundle.describe(data)}.items()))
         _, checks, tracking = synthetic_seed()
         tracking.update(seed_id=manifest['seed_id'], schema_version=1)
         tracking_bytes = json.dumps(tracking, ensure_ascii=False, indent=2).encode('utf-8')
@@ -485,6 +599,12 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(len(old_lines), len(new_lines))   # same layout and line endings: only the four values differ
         self.assertEqual(len([1 for a, b in zip(old_lines, new_lines) if a != b]), 4)
         read_artifact(root)
+
+    def test_an_older_seeds_boss_key_items_are_read_from_their_get_flags(self):
+        root = self.installed_seed(key_actors=['Item_BossKey_ForestTemple'])
+        update_ingame_tracker(root)
+        keys = fmt.parse((root / 'romfs' / ingame_bundle.SEED_FILE).read_bytes())['keys']
+        self.assertEqual(keys[0]['boss'], murmur3('IsGet.Item_BossKey_ForestTemple'))
 
     def test_a_second_update_changes_nothing(self):
         root = self.installed_seed()

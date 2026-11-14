@@ -9,14 +9,16 @@ An in-game tracker for the Ocarina of Time (Switch 2, program id `0400486024DEC0
 save has found:
 
 - the items (swords, shields, boots, bow, bombs, hookshot, magic, ocarina, bottles, stones, medallions), with the
-  game's own icons, owned ones lit in their colour and with their level (Hookshot / Longshot, wallet sizes, ...);
-- each dungeon's small keys found out of the total and its boss key;
+  game's own icons, owned ones lit in their colour and with their level (Hookshot / Longshot, wallet sizes, ...),
+  and a `?` on any the game has no flag for;
+- each dungeon's small keys found out of the total and its boss key, with the temple's medallion, the small key and
+  the boss key as icons;
 - the checks found, per region and in total, as `collected / trackable` (a check without a save flag can't be
   observed, so it isn't counted), and the enemy souls if the seed has them;
 - each region's checks by name, ticked when collected, so you can see what's still missing there;
 - the seed's id, a warning when the save isn't from this seed, and "Goal reached".
 
-Version 0.2.0. **Not yet tested in the game**; see [docs/TESTING.md](docs/TESTING.md).
+Version 0.2.1. 0.2.0's icons were seen in the game; the rest is **not yet tested in the game**, see [docs/TESTING.md](docs/TESTING.md).
 
 ## Controls
 

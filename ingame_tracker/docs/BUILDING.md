@@ -28,7 +28,7 @@ with the commit that holds the change and the printed values, and commit them (t
 The build embeds `PACKAGE_VERSION`, by default the version in `VERSION` and `git describe` of the repository (it appears in the log's
 `loaded ...` line). The build id hashes the debug information, which records the folder the module was built in, so the Makefile maps
 that folder to `.` (`-ffile-prefix-map`; devkitPro's MSYS2 records the Windows form of it, `pwd -W`). With the same `PACKAGE_VERSION`
-and the same devkitA64, a build from any folder is byte for byte the same (checked for 0.2.0 from a second folder). A folder whose path
+and the same devkitA64, a build from any folder is byte for byte the same (checked for 0.2.0 and 0.2.1 from a second folder). A folder whose path
 has a space doesn't build (make splits it).
 
 The 0.1.0 binary, built before that, came from the module's earlier standalone checkout (`/c/dev/ootr-ingame-tracker`) with
@@ -41,7 +41,7 @@ In the emulator's log, at boot:
 ```
 ootrTracker: game build:
 ootrTracker: 1.1.1
-ootrTracker: loaded 0.2.0 (...); controller hooks go in at the game's first controller setup
+ootrTracker: loaded 0.2.1 (...); controller hooks go in at the game's first controller setup
 ootrTracker: GetNpadStates style 0 hooked from InitializeNpad: calls the sdk at 0x...
 ...
 ootrTracker: counting frames from reads of controller style 0, NpadIdType 0x0

@@ -35,6 +35,8 @@
 #define CELL_GAP_FP       2
 #define CELL_LEVEL_PAD_FP 3
 #define KEYS_ROW_FP       13
+#define KEY_ICON_FP       11   /* the keys row's icons */
+#define KEY_ICON_GAP_FP   2    /* between the small key's icon and its count */
 #define SUMMARY_ROW_FP    13
 #define REGION_ROW_FP     11
 #define REGION_COLUMNS    BROWSE_REGION_COLUMNS
@@ -64,6 +66,8 @@
 #define COUNT_ROOM       24
 #define HINT_REGIONS     "D-pad: choose a region     A: its checks     B: close"
 #define ICON_FILE        GAME_ROM "/RandoTracker/icons.bin"
+#define SMALL_KEY_ICON   "Small Key" /* the keys' entries in it, after the grid's items */
+#define BOSS_KEY_ICON    "Boss Key"
 _Static_assert(ICONFILE_MAX <= GPUUI_ICONS, "an atlas slot for each icon");
 #define HINT_LIST        "D-pad: scroll (left / right: a page)     B: back to the regions"
 
@@ -114,10 +118,13 @@ static struct {
   uint64_t file_size;
   uint32_t next;                /* the next entry to bring in */
   int8_t cell_icon[GRID_CELLS]; /* each grid cell's icon (its entry and atlas slot), or -1 */
+  int8_t small_key, boss_key;   /* the keys row's, or -1 */
 } icon_ui;
 
 static bool icon_used(uint32_t entry)
 {
+  if ((int8_t)entry == icon_ui.small_key || (int8_t)entry == icon_ui.boss_key)
+    return true;
   int cell = grid_index_of(icon_ui.index.entries[entry].name);
   return cell >= 0 && icon_ui.cell_icon[cell] == (int8_t)entry;
 }
@@ -129,6 +136,7 @@ static void icons_start(void)
   icon_ui.state = ICONS_NONE;
   for (int i = 0; i < GRID_CELLS; i++)
     icon_ui.cell_icon[i] = -1;
+  icon_ui.small_key = icon_ui.boss_key = -1;
   const char *why = "";
   int64_t got = gamefile_read_at(ICON_FILE, 0, head, sizeof(head), &icon_ui.file_size);
   if (got < 0) {
@@ -141,9 +149,12 @@ static void icons_start(void)
   }
   int used = 0;
   for (uint32_t i = 0; i < icon_ui.index.count; i++) {
-    int cell = grid_index_of(icon_ui.index.entries[i].name);
-    if (cell >= 0 && icon_ui.cell_icon[cell] < 0) {
-      icon_ui.cell_icon[cell] = (int8_t)i;
+    const char *name = icon_ui.index.entries[i].name;
+    int cell = grid_index_of(name);
+    int8_t *icon = cell >= 0 ? &icon_ui.cell_icon[cell] : text_equal(name, SMALL_KEY_ICON) ? &icon_ui.small_key
+                 : text_equal(name, BOSS_KEY_ICON) ? &icon_ui.boss_key : 0;
+    if (icon && *icon < 0) {
+      *icon = (int8_t)i;
       used++;
     }
   }
@@ -298,15 +309,20 @@ static float draw_status(const layout_t *l, const content_t *content, float y)
   return y;
 }
 
+/* icon entry `icon` (-1: none) as a square of `side` at (x, y); false if it isn't in (yet) */
+static bool draw_icon_at(int icon, float x, float y, float side, gpu_colour_t colour)
+{
+  if (icon < 0 || (icon_ui.state != ICONS_LOADING && icon_ui.state != ICONS_IN) || !gpuui_icon_ready(icon))
+    return false;
+  gpuui_icon(icon, x, y, side, side, colour);
+  return true;
+}
+
 /* the cell's icon, a square as tall as the cell in its middle; false if it has none (yet) */
 static bool draw_icon(int index, cell_state_t state, float x, float y, float w, float h)
 {
-  int icon = icon_ui.state == ICONS_LOADING || icon_ui.state == ICONS_IN ? icon_ui.cell_icon[index] : -1;
-  if (icon < 0 || !gpuui_icon_ready(icon))
-    return false;
-  gpuui_icon(icon, x + (w - h) / 2, y, h, h,
-             state.status == ITEM_OWNED ? icon_owned : state.status == ITEM_MISSING ? icon_missing : icon_unknown);
-  return true;
+  return draw_icon_at(icon_ui.cell_icon[index], x + (w - h) / 2, y, h,
+                      state.status == ITEM_OWNED ? icon_owned : state.status == ITEM_MISSING ? icon_missing : icon_unknown);
 }
 
 static void draw_cell(const layout_t *l, int index, cell_state_t state, float x, float y, float w, float h)
@@ -319,6 +335,8 @@ static void draw_cell(const layout_t *l, int index, cell_state_t state, float x,
   float baseline = baseline_in(&l->bold, y, h), pad = CELL_LEVEL_PAD_FP * l->fp;
   if (!draw_icon(index, state, x, y, w, h))
     draw_text(&l->bold, cell->abbr, leveled ? x + pad : x + (w - text_width(&l->bold, cell->abbr)) / 2, baseline, colour);
+  if (state.status == ITEM_UNKNOWN) /* the game has none of its flags: not the same as missing */
+    draw_text(&l->body, "?", x + w - pad - text_width(&l->body, "?"), baseline, dim_colour);
   if (leveled) {
     char digit[2] = { (char)('0' + (state.level > 9 ? 9 : state.level)), 0 };
     draw_text(&l->body, digit, x + w - pad - text_width(&l->body, digit), baseline, white);
@@ -335,21 +353,36 @@ static float draw_grid(const layout_t *l, const tracker_state_t *state, float y)
   return y + GRID_ROWS * row + SECTION_GAP_FP * l->fp;
 }
 
+/* a dungeon's keys: its medallion's icon (else its letters), the small key's icon and the keys found, then the boss
+ * key's icon, dim until it is held (without the icons, a "B") */
 static void draw_dungeon_keys(const layout_t *l, const dungeon_keys_t *keys, float x, float y, float row)
 {
   char abbr[ABBR_MAX], line[COUNT_ROOM];
-  grid_dungeon_abbr(keys->name, abbr);
-  float baseline = baseline_in(&l->bold, y, row);
-  x += draw_text(&l->bold, abbr, x, baseline, title_colour) + l->body.em / 2;
+  float baseline = baseline_in(&l->bold, y, row), side = KEY_ICON_FP * l->fp, top = y + (row - side) / 2;
+  float space = l->body.em / 2;
+  const char *medallion = grid_dungeon_medallion(keys->name);
+  int cell = medallion ? grid_index_of(medallion) : -1;
+  if (cell >= 0 && draw_icon_at(icon_ui.cell_icon[cell], x, top, side, icon_owned)) {
+    x += side + space;
+  } else {
+    grid_dungeon_abbr(keys->name, abbr);
+    x += draw_text(&l->bold, abbr, x, baseline, title_colour) + space;
+  }
   if (keys->has_small_keys) {
+    if (draw_icon_at(icon_ui.small_key, x, top, side, icon_owned))
+      x += side + KEY_ICON_GAP_FP * l->fp;
     if (keys->small_keys_known)
       snprintf(line, sizeof(line), "%u/%u", (unsigned)keys->found, (unsigned)keys->total);
     else
       snprintf(line, sizeof(line), "?/%u", (unsigned)keys->total);
-    x += draw_text(&l->body, line, x, baseline, text_colour) + l->body.em / 2;
+    x += draw_text(&l->body, line, x, baseline, text_colour) + space;
   }
-  if (keys->boss != BOSS_KEY_NONE)
-    draw_text(&l->bold, "B", x, baseline, keys->boss == BOSS_KEY_HELD ? white : faint_colour);
+  if (keys->boss == BOSS_KEY_NONE)
+    return;
+  bool held = keys->boss == BOSS_KEY_HELD;
+  if (!draw_icon_at(icon_ui.boss_key, x, top, side,
+                    held ? icon_owned : keys->boss == BOSS_KEY_MISSING ? icon_missing : icon_unknown))
+    draw_text(&l->bold, "B", x, baseline, held ? white : faint_colour);
 }
 
 static float draw_keys(const layout_t *l, const tracker_state_t *state, float y)

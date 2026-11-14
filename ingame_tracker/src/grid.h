@@ -22,5 +22,8 @@ const grid_cell_t *grid_cell(int index);
 int grid_index_of(const char *item);
 /* A dungeon's two-letter label for the keys row ("Fo" for the Forest Temple). */
 void grid_dungeon_abbr(const char *dungeon, char out[ABBR_MAX]);
+/* The medallion of a temple ("Forest Medallion" for the Forest Temple), whose icon labels its keys; NULL for a
+ * dungeon without one (Bottom of the Well, Gerudo Training Ground, Ganon's Castle). */
+const char *grid_dungeon_medallion(const char *dungeon);
 
 #endif

@@ -34,10 +34,11 @@ static const grid_cell_t cells[GRID_CELLS] = {
   { "Light Medallion", "Li", 1, 0xB8A83E },
 };
 
-static const struct { const char *dungeon, *abbr; } dungeon_abbrs[] = {
-  { "Forest Temple", "Fo" }, { "Fire Temple", "Fi" }, { "Water Temple", "Wa" }, { "Shadow Temple", "Sh" },
-  { "Spirit Temple", "Sp" }, { "Bottom of the Well", "BW" }, { "Gerudo Training Ground", "GTG" },
-  { "Ganon's Castle", "GC" },
+static const struct { const char *dungeon, *abbr, *medallion; } dungeon_abbrs[] = {
+  { "Forest Temple", "Fo", "Forest Medallion" }, { "Fire Temple", "Fi", "Fire Medallion" },
+  { "Water Temple", "Wa", "Water Medallion" }, { "Shadow Temple", "Sh", "Shadow Medallion" },
+  { "Spirit Temple", "Sp", "Spirit Medallion" }, { "Bottom of the Well", "BW", 0 },
+  { "Gerudo Training Ground", "GTG", 0 }, { "Ganon's Castle", "GC", 0 },
 };
 
 const grid_cell_t *grid_cell(int index)
@@ -62,4 +63,12 @@ void grid_dungeon_abbr(const char *dungeon, char out[ABBR_MAX])
     }
   }
   text_copy(out, DUNGEON_ABBR_FALLBACK + 1, dungeon);
+}
+
+const char *grid_dungeon_medallion(const char *dungeon)
+{
+  for (unsigned i = 0; i < sizeof(dungeon_abbrs) / sizeof(*dungeon_abbrs); i++)
+    if (text_equal(dungeon_abbrs[i].dungeon, dungeon))
+      return dungeon_abbrs[i].medallion;
+  return 0;
 }

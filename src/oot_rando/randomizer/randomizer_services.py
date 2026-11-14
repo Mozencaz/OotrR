@@ -265,7 +265,7 @@ def update_ingame_tracker(directory, add=False, nup=None):
     icons = _game_icons(nup) if nup is not None else None
     updated, files, exefs = copy.deepcopy(manifest), {}, {}
     try:
-        ingame_bundle.attach(updated, files, exefs, catalogue['checks'], tracking, icons)
+        ingame_bundle.attach(updated, files, exefs, catalogue['checks'], tracking, icons, _key_actors(directory))
     except (KeyError, TypeError) as error:
         raise ValueError('This seed\'s tracking data is too old for the in-game tracker: generate it again.') from error
     contents = {}
@@ -284,6 +284,13 @@ def update_ingame_tracker(directory, add=False, nup=None):
     return [relative.as_posix() for relative in contents]
 
 
+def _key_actors(directory):
+    """The key ring and boss key actors a seed folder adds (``romfs/Pack/Actor/Item_KeyRing_*``…)."""
+    folder = Path(directory) / 'romfs' / 'Pack' / 'Actor'
+    return {path.name.split('.')[0] for pattern in ('Item_KeyRing_*.pack.zs', 'Item_BossKey_*.pack.zs')
+            for path in folder.glob(pattern)} if folder.is_dir() else set()
+
+
 def _game_icons(nup):
     """icons.bin from the game file at ``nup`` (a path), or None if it has none of the icons."""
     from oot_rando.formats.inspect_nup import Nup
@@ -292,7 +299,7 @@ def _game_icons(nup):
     except OSError as error:
         raise ValueError('Can\'t read the game file: ' + str(error)) from error
     try:
-        return ingame_icons.icons_file(ingame_icons.nup_reader(game))
+        return ingame_icons.nup_icons(game)
     finally:
         game.stream.close()
 

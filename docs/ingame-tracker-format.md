@@ -93,7 +93,11 @@ which save flags prove it and at which level.
 | 6 | u16 | reserved (0) |
 
 The level of an item is the highest level among its rules whose flag is true; 0 when none is. If none of the
-item's flags exists in the game, the item is unknown. Items whose name starts with `Soul (` are enemy souls.
+item's flags exists in the game, the item is unknown (the panel marks it with a `?`). Items whose name starts with
+`Soul (` are enemy souls. The strength upgrades (`IsGet.Armor_Child_Gauntlet_Goron`, `..._Adult_Gauntlet_Silver`,
+`..._Adult_Gauntlet_Gold`), the Lens of Truth (`IsGet.Armor_GlassTruth`) and the Fire Arrows (`IsGet.Item_Arrow_Fire`)
+have no chest actor to lead to their flags: the exporter adds their rules (`tracking_metadata.EXTRA_INVENTORY`),
+also to the files of seeds made before it did.
 
 ### Keys (24 bytes each)
 
@@ -107,17 +111,22 @@ One row per dungeon with small keys or a boss key to follow.
 | 6 | u16 | reserved (0) |
 | 8 | u32 | Int hash of the keys found so far |
 | 12 | u32 | Int hash of the keys held |
-| 16 | u32 | Bool hash of the applied key ring, 0 if none |
-| 20 | u32 | Bool hash of the boss key |
+| 16 | u32 | Bool hash of the key ring's get flag (`IsGet.Item_KeyRing_<dungeon>`), 0 if the seed has no ring there |
+| 20 | u32 | Bool hash of the boss key: its item's get flag (`IsGet.Item_BossKey_<dungeon>`) if it is an item of the seed, else `DungeonInfo.<folder>.IsGetBossKey` |
 
 Small keys found = the larger of the two Int values, or the total when the key ring flag is true or flag 4 is set.
-The boss key is held when its Bool is true or flag 8 is set.
+The boss key is held when its Bool is true or flag 8 is set. The key items' get flags are set as soon as they are
+obtained; the flags the item-get hook sets when it applies them (`RandoKeyRing.<folder>`, `IsGetBossKey`) can lag
+behind (saves of 13/11: Ganon's Castle's ring obtained, not applied). Files made before 0.2.1 named those; the
+exporter now names the get flags, also when it rewrites an older seed's file (`update-tracker`).
 
 ## The items' icons (`icons.bin`)
 
 Optional. The application writes it from the player's own game file when it generates a seed, or with
 `update-tracker --nup GAME.nup`; nothing of the game ships with the application. Each icon is the game's own
-picture (RomFS `UI/Tex/Icon/<name>.bntx.zs`, decompressed) copied as its BNTX stores the first level: ASTC 4x4
+picture (RomFS `UI/Tex/Icon/<name>.bntx.zs`, decompressed; for the spiritual stones and the medallions, which the
+pause screen shows as models, the file select's pictures `DataFileImportantIcon_00` to `_08` in the archive
+`UI/Layout2Archive/Common.Product.100.Nin_Ounce_NVN2.bntx.zs`) copied as its BNTX stores the first level: ASTC 4x4
 blocks in the GPU's block-linear layout, with the BNTX's description of that layout. Nothing is decoded on the PC:
 the module makes NVN textures of the bytes. The writer and the reference reader are
 `src/oot_rando/tracker/ingame_icons.py` (`build`, `parse`); the module checks the same bounds
@@ -133,7 +142,7 @@ Everything is little-endian. The header, the index, then the pictures, each star
 | 4 | u16 | version (1) |
 | 6 | u16 | header size (32) |
 | 8 | u32 | file size |
-| 12 | u32 | icon count (1 to 30) |
+| 12 | u32 | icon count (1 to 40) |
 | 16 | u32 | index offset (32) |
 | 20 | u32 | entry size (64) |
 | 24 | u32 | data offset: index offset + count × 64 |
@@ -143,7 +152,7 @@ Everything is little-endian. The header, the index, then the pictures, each star
 
 | Offset | Type | Field |
 |---|---|---|
-| 0 | char[32] | the item, NUL-terminated, as the module's grid names it (`ingame_tracker/src/grid.c`); at most one entry per item |
+| 0 | char[32] | the item, NUL-terminated, as the module's grid names it (`ingame_tracker/src/grid.c`), or `Small Key` / `Boss Key` for the keys row; at most one entry per name |
 | 32 | u32 | width (1 to 4096) |
 | 36 | u32 | height (1 to 4096) |
 | 40 | u32 | picture offset: 16-byte aligned, at or after the data offset |
@@ -152,9 +161,11 @@ Everything is little-endian. The header, the index, then the pictures, each star
 | 56 | u8[4] | the channels' sources (BRTI + 0x58), as NVN swizzle values: 0 zero, 1 one, 2 to 5 red, green, blue, alpha |
 | 60 | u32 | the BNTX's format: 0x2D01 ASTC 4x4 unorm, 0x2D06 ASTC 4x4 sRGB |
 
-The entries follow the panel's grid. An item whose picture the game lacks (another version of the game) has no
-entry and shows as its letters. The Megaton Hammer's picture is `Item_Hammer_PouchIcon` (683 pixels), not
-`Item_Hammer` (1440).
+The entries follow the panel's grid, then the keys (`Item_Dungeon_SmallKey`, `Item_Dungeon_BossKey`): 38 with
+the game of 13/11. An item whose picture the game lacks (another version of the game) has no entry and shows as its
+letters. The Megaton Hammer's picture is `Item_Hammer_PouchIcon` (683 pixels), not `Item_Hammer` (1440). The
+stones' and medallions' pictures (133 pixels) are read from the archive as it decompresses, only as far as the last
+of them; no other of its 878 textures is kept.
 
 ## What the module reads from the game
 

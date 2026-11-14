@@ -589,7 +589,7 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, ingam
         exefs = {}
         if ingame_tracker:
             report('In-game tracker: the items\' icons from the game…')
-            icons = ingame_icons.icons_file(ingame_icons.nup_reader(nup, d))
+            icons = ingame_icons.nup_icons(nup, d)
             ingame_bundle.attach(manifest, files, exefs, checks['checks'], tracking, icons)
         tracking_bytes = json.dumps(tracking, ensure_ascii=False, indent=2).encode('utf-8')
         manifest['tracking'] = {'schema_version': 1, 'sha256': sha256(tracking_bytes),

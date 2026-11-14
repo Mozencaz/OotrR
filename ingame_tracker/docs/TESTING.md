@@ -1,6 +1,6 @@
 # Live test plan
 
-Nothing in 0.1.0 or 0.2.0 has run in the game. The PC tests (`make test`) cover the seed file's parser (versions 1 and 2), the state, a
+Nothing in 0.1.0 has run in the game; 0.2.0's icons were seen in the game (13/11: upright, right colours, smooth), 0.2.1 not yet. The PC tests (`make test`) cover the seed file's parser (versions 1 and 2), the state, a
 region's list of checks, the game-data reader over a fake GameData, the controls (repeat, what the game doesn't see), the browsing and the
 icons file's index.
 These steps cover the rest. Back up the save first.
@@ -48,12 +48,18 @@ R3 + D-pad).
 With a seed this version made from your game (or one updated with `update-tracker --nup GAME.nup`), so it has
 `romfs/RandoTracker/icons.bin`:
 
-- Log, at the first opening: `gpu drawing: icon atlas 384x320 (N KiB), N KiB for a picture while they go in`, then, about a second later,
+- Log, at the first opening: `gpu drawing: icon atlas 512x320 (N KiB), 688 KiB for a picture while they go in` (N about 1280), then, about a second later,
   `gpu drawing: the icons are in; the pictures' N KiB go back`, and no `didn't go in` line.
 - The cells' letters give way to the items' icons over that second (one every other frame), with no hitch.
 - The icons are upright, in their own colours (as on the game's pause screen: not washed out, not too dark), smooth (no jagged edges or
   shimmer: each is shrunk from up to 683 pixels), centred in their cells; owned ones bright, missing and unknown ones dim.
 - Opening and closing the panel while the icons go in, and ten times after, works.
+- The grid's bottom row shows the three stones and six medallions as pictures (the file select's), owned ones on their coloured cell.
+- The keys row: each temple's medallion icon, then the small key's icon with `found/total`, then the boss key's icon, dim until you hold
+  it. BW, GTG and GC keep their letters. All eight fit on one line at 720p and 1080p.
+- No cell is blank: the Lens of Truth, the strength upgrades and the Fire Arrows show (dim until owned). A cell whose item the game has no
+  flag for (none should, with this game) shows a small `?` at its right.
+- Ganon's Castle's key ring, once obtained, shows `2/2` even before the next item get (its get flag; see the format doc's keys).
 - Rename `icons.bin` and start the game again: the log says `no content:/RandoTracker/icons.bin: the items show as their letters` and the
   cells show their letters. Rename it back.
 

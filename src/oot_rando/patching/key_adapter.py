@@ -29,6 +29,7 @@ from oot_rando.game.remake_world import FOLDER_DUNGEON
 RING_PREFIX = 'Item_KeyRing_'
 BOSS_PREFIX = 'Item_BossKey_'
 APPLIED_PREFIX = 'RandoKeyRing.'
+GET_PREFIX = 'IsGet.'   # the flag the game sets when a pouch item is obtained (soul_adapter.FLAG_PREFIX)
 SMALL_KEY_MODEL = 'Item_Dungeon_SmallKey'
 BOSS_KEY_MODEL = 'Item_Dungeon_BossKey'
 ACTION_GUIDE_FLOW = 'Event/EventFlow/ActionGuide.bfevfl.zs'
@@ -350,7 +351,9 @@ def key_tracking(options, saved_keys):
 
     ``saved_keys``: {'Int': hashes, 'Bool': hashes} of the saved GameData entries.
     Small keys found = max(``SmallKeyTotalNum``, ``SmallKeyNum`` held), or every key
-    once the key ring is applied (``RandoKeyRing.<folder>``) or with keys "Removed".
+    once the seed's key ring is obtained or with keys "Removed". A key ring or boss key
+    item counts once obtained (its ``IsGet.<actor>`` flag), not only once the get hook
+    has applied it (see :func:`owned_key_flags`).
     """
     from oot_rando.game.remake_world import ZONE_LABELS
     from oot_rando.patching.soul_adapter import murmur3
@@ -364,17 +367,39 @@ def key_tracking(options, saved_keys):
         if folder in RING_DUNGEONS:
             found, held = murmur3(base + 'SmallKeyTotalNum'), murmur3(base + 'SmallKeyNum')
             if {found, held} <= saved_keys.get('Int', set()):
-                ring = murmur3(APPLIED_PREFIX + folder)
+                ring = murmur3(GET_PREFIX + ring_actor(folder))
                 row['small'] = {'total': RING_DUNGEONS[folder], 'found': str(found), 'held': str(held),
                                 'ring': str(ring) if ring in saved_keys.get('Bool', set()) else None,
                                 'all': removed_small}
         if folder in TRACKED_BOSS_KEYS:
-            boss = murmur3(base + 'IsGetBossKey')
+            boss, item = murmur3(base + 'IsGetBossKey'), murmur3(GET_PREFIX + boss_actor(folder))
             if boss in saved_keys.get('Bool', set()):
-                row['boss'] = {'hash': str(boss), 'all': removed_boss and folder in BOSS_KEY_DUNGEONS}
+                row['boss'] = {'hash': str(item if item in saved_keys.get('Bool', set()) else boss),
+                               'all': removed_boss and folder in BOSS_KEY_DUNGEONS}
         if row['small'] or row['boss']:
             rows.append(row)
     return rows
+
+
+def owned_key_flags(row, key_actors=()):
+    """(ring, boss) Bool hashes (str or None) that say a tracker key row's key ring and boss key are owned.
+
+    The key items' own get flags (``IsGet.Item_KeyRing_<folder>``, ``IsGet.Item_BossKey_<folder>``), set
+    as soon as they are obtained, rather than those the ActionGuide hook sets when it applies them
+    (``RandoKeyRing.<folder>``, ``DungeonInfo.<folder>.IsGetBossKey``): in a save of 13/11 the Ganon's
+    Castle ring's get flag was set while the hook had not applied it. Rows of seeds made before this name
+    the hook's flags; ``key_actors`` (the seed's ``Item_KeyRing_*``/``Item_BossKey_*`` actors, if known)
+    tells which dungeons' boss key is an item of the seed.
+    """
+    from oot_rando.patching.soul_adapter import murmur3
+    folder, small, boss = row['folder'], row.get('small'), row.get('boss')
+    ring = small and small.get('ring')
+    if ring and int(ring) == murmur3(APPLIED_PREFIX + folder):
+        ring = str(murmur3(GET_PREFIX + ring_actor(folder)))
+    boss = boss and boss['hash']
+    if boss and boss_actor(folder) in key_actors:
+        boss = str(murmur3(GET_PREFIX + boss_actor(folder)))
+    return ring, boss
 
 
 def dungeon_keys(rows, snapshot):
@@ -382,14 +407,14 @@ def dungeon_keys(rows, snapshot):
     ints, bools = (snapshot or {}).get('int', {}), (snapshot or {}).get('bool', {})
     result = []
     for row in rows or ():
-        small = row.get('small')
+        small, ring_flag, boss_flag = row.get('small'), *owned_key_flags(row)
         if small:
             found = max(int(ints.get(int(small['found']), 0) or 0), int(ints.get(int(small['held']), 0) or 0))
-            if small['all'] or (small['ring'] and bools.get(int(small['ring']))):
+            if small['all'] or (ring_flag and bools.get(int(ring_flag))):
                 found = max(found, small['total'])
             small = (found, max(small['total'], found))
         boss = row.get('boss')
         if boss:
-            boss = bool(boss['all'] or bools.get(int(boss['hash'])))
+            boss = bool(boss['all'] or bools.get(int(boss_flag)))
         result.append((row['dungeon'], small, boss))
     return result

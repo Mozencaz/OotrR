@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import threading
 
+from oot_rando.game.tracking_metadata import inventory_rules
 from oot_rando.randomizer.randomizer_services import ManualTracker, read_artifact
 from oot_rando.tracker.save_reader import load_snapshot
 from oot_rando.paths import state_dir
@@ -179,7 +180,7 @@ class TrackerSession:
         """Observed inventory: ({item: level}, items readable in the save, items the seed tracks)."""
         with self._lock:
             counts, known = self._inventory
-            tracked = {rule['item'] for rule in (self.metadata or {}).get('inventory', [])}
+            tracked = {rule['item'] for rule in inventory_rules((self.metadata or {}).get('inventory'))}
             return dict(counts), set(known), tracked
 
     def keys(self):
@@ -195,7 +196,7 @@ class TrackerSession:
     @staticmethod
     def observed_inventory(snapshot, metadata):
         counts, known = Counter(), set()
-        for rule in metadata.get('inventory', []):
+        for rule in inventory_rules(metadata.get('inventory')):
             key, item = int(rule['hash']), rule['item']
             if key in snapshot['bool']:
                 known.add(item)

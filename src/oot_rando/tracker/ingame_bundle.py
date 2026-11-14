@@ -7,6 +7,8 @@ items' icons (``romfs/RandoTracker/icons.bin``, ingame_icons.py). All are listed
 """
 import hashlib
 
+from oot_rando.game.tracking_metadata import inventory_rules
+from oot_rando.patching.key_adapter import owned_key_flags
 from oot_rando.paths import resource
 from oot_rando.tracker.check_labels import check_labels
 from oot_rando.tracker import ingame_format as fmt
@@ -37,24 +39,27 @@ def _items(rules):
     return list(items.items())
 
 
-def _keys(rows):
+def _keys(rows, key_actors=()):
+    """The key rows, with the flags that say a key ring or boss key item is owned (owned_key_flags)."""
     result = []
     for row in rows or ():
         small, boss = row.get('small'), row.get('boss')
+        ring, boss_flag = owned_key_flags(row, key_actors)
         flags = (fmt.KEY_SMALL if small else 0) | (fmt.KEY_BOSS if boss else 0)
         flags |= fmt.KEY_SMALL_ALL if small and small['all'] else 0
         flags |= fmt.KEY_BOSS_ALL if boss and boss['all'] else 0
         result.append({'name': row['dungeon'], 'flags': flags, 'total': small['total'] if small else 0,
                        'found': int(small['found']) if small else 0, 'held': int(small['held']) if small else 0,
-                       'ring': int(small['ring'] or 0) if small else 0, 'boss': int(boss['hash']) if boss else 0})
+                       'ring': int(ring or 0) if small else 0, 'boss': int(boss_flag) if boss else 0})
     return result
 
 
-def seed_file(manifest, checks, tracking):
-    """Bytes of ``seed.trk`` from a seed's manifest, check catalogue and tracking data."""
+def seed_file(manifest, checks, tracking, key_actors=()):
+    """Bytes of ``seed.trk`` from a seed's manifest, check catalogue and tracking data (``key_actors``:
+    the seed's key ring and boss key actors, for seeds whose key rows predate owned_key_flags)."""
     return fmt.build(manifest['seed_id'][:SEED_ID_LENGTH], int(tracking['seed_marker']),
-                     int(tracking.get('goal_marker') or 0),
-                     _regions(checks, tracking['checks']), _items(tracking['inventory']), _keys(tracking.get('keys')))
+                     int(tracking.get('goal_marker') or 0), _regions(checks, tracking['checks']),
+                     _items(inventory_rules(tracking['inventory'])), _keys(tracking.get('keys'), key_actors))
 
 
 def module_binary():
@@ -65,10 +70,10 @@ def describe(data):
     return {'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
 
 
-def attach(manifest, files, exefs, checks, tracking, icons=None):
+def attach(manifest, files, exefs, checks, tracking, icons=None, key_actors=()):
     """Add the tracker to a seed being generated: its data file (and the icons, if given) to
     ``files`` (RomFS), the module to ``exefs``, and all of them to the manifest."""
-    data = seed_file(manifest, checks, tracking)
+    data = seed_file(manifest, checks, tracking, key_actors)
     files[SEED_FILE] = data
     entries = {SEED_FILE: describe(data)}
     if icons:

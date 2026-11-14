@@ -837,6 +837,14 @@ static int test_grid_names_and_labels(void)
   CHECK(!strcmp(abbr, "De"));
   grid_dungeon_abbr("", abbr);
   CHECK(!strcmp(abbr, ""));
+  const char *temples[] = { "Forest Temple", "Fire Temple", "Water Temple", "Shadow Temple", "Spirit Temple" };
+  for (unsigned i = 0; i < sizeof(temples) / sizeof(*temples); i++) {
+    const char *medallion = grid_dungeon_medallion(temples[i]);
+    CHECK(medallion && grid_index_of(medallion) >= 0 && !strncmp(medallion, temples[i], strlen(medallion) - 9));
+  }
+  CHECK(!strcmp(grid_dungeon_medallion("Shadow Temple"), "Shadow Medallion"));
+  CHECK(!grid_dungeon_medallion("Bottom of the Well") && !grid_dungeon_medallion("Gerudo Training Ground"));
+  CHECK(!grid_dungeon_medallion("Ganon's Castle") && !grid_dungeon_medallion("Deku Tree"));
   return 0;
 }
 
@@ -911,7 +919,7 @@ static int test_icons_index_refuses_damage(void)
 {
   struct { const char *what; size_t at; uint32_t value; int bytes; } damage[] = {
     { "magic", 0, 0x58585858, 4 },        { "version", 4, 2, 2 },               { "header size", 6, 64, 2 },
-    { "file size", 8, 100, 4 },           { "count 0", 12, 0, 4 },              { "count 31", 12, 31, 4 },
+    { "file size", 8, 100, 4 },           { "count 0", 12, 0, 4 },              { "count 41", 12, ICONFILE_MAX + 1, 4 },
     { "index place", 16, 64, 4 },         { "entry size", 20, 48, 4 },          { "data place", 24, 176, 4 },
     { "reserved", 28, 1, 4 },             { "an empty name", 32, 0, 1 },        { "width 0", 64, 0, 4 },
     { "width 5000", 64, 5000, 4 },        { "height 0", 68, 0, 4 },             { "a misaligned offset", 72, 168, 4 },
@@ -943,6 +951,45 @@ static int test_icons_index_refuses_damage(void)
   CHECK(!icons_parse(&index, ICONFILE_HEADER + ICONFILE_ENTRY) && !icons_parse(&index, ICONFILE_HEADER - 1));
   const char *why = "";
   CHECK(!iconfile_parse(&index, icons, sizeof(icons), ICONS_BYTES + 16, &why) && why[0]);
+  return 0;
+}
+
+/* a file of ICONFILE_MAX (or one more) 4 x 4 pictures, one block each: the atlas's every slot */
+static int test_icons_index_fills_the_atlas(void)
+{
+  enum { MOST = ICONFILE_MAX + 1, DATA_AT = ICONFILE_HEADER + MOST * ICONFILE_ENTRY };
+  static uint8_t file[DATA_AT + MOST * 16];
+  for (int count = ICONFILE_MAX; count <= MOST; count++) {
+    uint32_t data_at = ICONFILE_HEADER + count * ICONFILE_ENTRY, size = data_at + count * 16;
+    memset(file, 0, sizeof(file));
+    memcpy(file, "RTIC", 4);
+    put16(file + 4, ICONFILE_VERSION);
+    put16(file + 6, ICONFILE_HEADER);
+    put32(file + 8, size);
+    put32(file + 12, (uint32_t)count);
+    put32(file + 16, ICONFILE_HEADER);
+    put32(file + 20, ICONFILE_ENTRY);
+    put32(file + 24, data_at);
+    for (int i = 0; i < count; i++) {
+      uint8_t *e = file + ICONFILE_HEADER + i * ICONFILE_ENTRY;
+      snprintf((char *)e, ICONFILE_NAME, "Icon %d", i);
+      put32(e + 32, 4);
+      put32(e + 36, 4);
+      put32(e + 40, data_at + (uint32_t)i * 16);
+      put32(e + 44, 16);
+      e[48] = 4;
+      e[56] = 2, e[57] = 3, e[58] = 4, e[59] = 5;
+      put32(e + 60, 0x2D06);
+    }
+    icon_index_t index;
+    const char *why = "";
+    bool read = iconfile_parse(&index, file, size, size, &why);
+    CHECK(read == (count <= ICONFILE_MAX));
+    char last[ICONFILE_NAME];
+    snprintf(last, sizeof(last), "Icon %d", ICONFILE_MAX - 1);
+    if (read)
+      CHECK(index.count == ICONFILE_MAX && !strcmp(index.entries[ICONFILE_MAX - 1].name, last));
+  }
   return 0;
 }
 
@@ -983,6 +1030,7 @@ static const test_t tests[] = {
   { "text_helpers", test_text_helpers, 0 },
   { "icons_index_reads_every_entry", test_icons_index_reads_every_entry, 0 },
   { "icons_index_refuses_damage", test_icons_index_refuses_damage, 0 },
+  { "icons_index_fills_the_atlas", test_icons_index_fills_the_atlas, 0 },
 };
 
 int main(int argc, char **argv)

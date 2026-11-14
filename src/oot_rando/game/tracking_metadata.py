@@ -66,6 +66,30 @@ ITEM_LABELS = {
 }
 
 
+# Get flags no chest actor leads to: the strength upgrades' and the Lens's pouch names differ from their
+# actors' (IsGet.Armor_GlassTruth, not ...Child_/Adult_GlassTruth) and no actor gives the Fire Arrows. These
+# are the game's saved Bools (GameDataList 1.1), named as the items' icons are.
+EXTRA_INVENTORY = (
+    ('Progressive Strength Upgrade', 'Armor_Child_Gauntlet_Goron', 1),
+    ('Progressive Strength Upgrade', 'Armor_Adult_Gauntlet_Silver', 2),
+    ('Progressive Strength Upgrade', 'Armor_Adult_Gauntlet_Gold', 3),
+    ('Lens of Truth', 'Armor_GlassTruth', 1),
+    ('Fire Arrows', 'Item_Arrow_Fire', 1),
+)
+
+
+def inventory_rules(inventory, known=None):
+    """A seed's inventory rules plus the EXTRA_INVENTORY ones it lacks (seeds made before they were
+    known get them when read). ``known``: the saved Bool hashes, to add only flags the game has."""
+    rules = list(inventory or ())
+    have = {(rule['item'], str(rule['hash'])) for rule in rules}
+    for item, name, level in EXTRA_INVENTORY:
+        key = murmur3('IsGet.' + name)
+        if (item, str(key)) not in have and (known is None or key in known):
+            rules.append({'item': item, 'hash': str(key), 'count': level})
+    return rules
+
+
 DUNGEON_ITEM_KINDS = {'Small Key Ring': 'Key Ring', 'Small Key': 'Small Key', 'Boss Key': 'Boss Key', 'Map': 'Map', 'Compass': 'Compass'}
 DUNGEON_LABELS = {
     'Deku Tree': 'Deku Tree', 'Dodongos Cavern': 'Dodongo\'s Cavern', 'Jabu Jabus Belly': 'Jabu-Jabu\'s Belly',
@@ -163,13 +187,13 @@ def build_tracking(seed_id, checks, full, read_raw):
             # The seed bag is given at the start: it no longer proves the slingshot.
             'Item_Range_SlingShot': ['Weapon_Range_SlingShot'],
             'Item_HeavyBoot': ['Armor_Adult_HeavyBoot'], 'Item_HoverBoot': ['Armor_Adult_HoverBoot'],
-            'Item_GlassTruth': ['Armor_Child_GlassTruth', 'Armor_Adult_GlassTruth'],
         }
         level = PROGRESSIVE[item].index(actor) + 1 if actor in PROGRESSIVE.get(item, []) else 1
         for candidate in set([canonical] + aliases.get(actor, [])):
             key = murmur3('IsGet.' + candidate)
             if key in keys.get('Bool', set()):
                 inventory.append({'item': item, 'hash': str(key), 'count': level})
+    inventory = inventory_rules(inventory, keys.get('Bool', set()))
     # Zones (map folders) where the enemies of each soul appear, for the tracker.
     families = (full or {}).get('souls', {}).get('families', {})
     souls = [{'item': soul_item(key), 'zones': list(folders)} for key, folders in sorted(families.items())]

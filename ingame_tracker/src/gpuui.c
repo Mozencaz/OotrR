@@ -53,10 +53,11 @@ void free(void *p);                             /* from main */
 #define DEFAULT_RESERVED_ID 256
 #define MAX_DESCRIPTOR_SIZE 256
 #define ICON_PX 64            /* an icon's slot in the icon atlas */
-#define ICON_COLS 6
-#define ICON_ROWS 5
+#define ICON_COLS 8
+#define ICON_ROWS 5           /* 512 x 320, RGBA16F: 1.25 MiB */
 #define ICONS_W (ICON_PX * ICON_COLS)
 #define ICONS_H (ICON_PX * ICON_ROWS)
+_Static_assert(ICON_COLS * ICON_ROWS >= GPUUI_ICONS, "a slot for each icon");
 #define ICON_TAPS_MAX 6       /* a picture is shrunk as the mean of up to 6 x 6 filtered samples per icon pixel */
 #define BAKE_QUADS (ICON_TAPS_MAX * ICON_TAPS_MAX)
 #define ID_ICONS 1            /* after the glyph atlas: the icon atlas, then the picture being shrunk */
