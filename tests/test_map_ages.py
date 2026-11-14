@@ -83,10 +83,10 @@ class MapAgeTests(unittest.TestCase):
 
     def test_tracker_names_show_the_age(self):
         names = {c['id']: c['name'] for c in tracker_checks(self.data, self.c.matches, self.c.shuffled)}
-        self.assertEqual(names[KF_CHILD], 'Rock 1 (child)')
-        self.assertEqual(names[KF_ADULT], 'Rock 2 (adult)')
-        self.assertEqual(names[KF_BOTH], 'Rock 3')
-        self.assertEqual(names[HF_ADULT], 'Rock 5 (adult)')
+        self.assertEqual(names[KF_CHILD], 'Kokiri Forest rock 1 (child)')
+        self.assertEqual(names[KF_ADULT], 'Kokiri Forest rock 2 (adult)')
+        self.assertEqual(names[KF_BOTH], 'Kokiri Forest rock 3')
+        self.assertEqual(names[HF_ADULT], 'Hyrule Field rock 5 (adult)')
 
     def test_event_flows_have_no_age(self):
         # NPC gifts: an event flow named after a child NPC is not a child map.
