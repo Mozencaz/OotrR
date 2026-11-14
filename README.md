@@ -44,6 +44,11 @@ downloads the archive, verifies it against the release's `SHA256SUMS.txt`, swaps
 the executable in place and restarts; `data/` (seeds, settings) is kept. Run from
 the sources, it only points to the release page (use `git pull`).
 
+**Experimental versions:** tick *Use experimental versions (pre-releases)* in
+Setup to also be offered the GitHub pre-releases (`vX.Y.Z-beta.N`): new features
+first, possibly buggy. Untick it to go back: the next stable release replaces the
+experimental build.
+
 The game file must hold the base game **and** update v131072 in one `.nup`; the
 order of the packages inside it does not matter.
 

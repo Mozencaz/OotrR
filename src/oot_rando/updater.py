@@ -2,6 +2,8 @@
 
 * :func:`latest_release` asks the GitHub API for the latest published release
   (drafts and pre-releases excluded) and returns it when it is newer than this build.
+  With ``experimental=True`` (the player's opt-in), pre-releases (``v1.2.0-beta.1``)
+  count too: the newest of the recent releases is offered, stable or not.
 * :func:`install` downloads the archive of this system, checks the signature of
   the release's ``SHA256SUMS.txt`` (``SHA256SUMS.txt.sig``, Ed25519, public key in
   :mod:`oot_rando.update_key`: a release cannot be replaced without the project's
@@ -32,6 +34,7 @@ from oot_rando.paths import FROZEN
 
 REPOSITORY = 'Mozencaz/OotrR'
 LATEST = f'https://api.github.com/repos/{REPOSITORY}/releases/latest'
+RECENT = f'https://api.github.com/repos/{REPOSITORY}/releases?per_page=30'   # newest first, pre-releases included
 # Every download comes from this repository's releases, whatever the API answer says.
 DOWNLOADS = f'https://github.com/{REPOSITORY}/releases/download/'
 SUMS, SIGNATURE = 'SHA256SUMS.txt', 'SHA256SUMS.txt.sig'
@@ -64,8 +67,27 @@ def parse_version(text):
     return tuple(int(part or 0) for part in match.groups()) if match else None
 
 
+def is_prerelease(text):
+    """Whether a version has a pre-release suffix ('1.2.0-beta.1')."""
+    return bool(re.match(r'v?\d+(?:\.\d+){0,2}-\S', (text or '').strip()))
+
+
+def version_key(text):
+    """Sort key of a version, pre-releases before their release (semver):
+    1.2.0-alpha < 1.2.0-beta.1 < 1.2.0-beta.2 < 1.2.0-rc.1 < 1.2.0 < 1.2.1-beta.1. None if not a version."""
+    core = parse_version(text)
+    if core is None:
+        return None
+    match = re.match(r'v?\d+(?:\.\d+){0,2}-([0-9A-Za-z.-]+)', text.strip())
+    if not match:
+        return core, 1, ()
+    parts = tuple((0, int(part), '') if part.isdigit() else (1, 0, part.lower())
+                  for part in match.group(1).split('.') if part)
+    return core, 0, parts
+
+
 def is_newer(candidate, current=__version__):
-    new, old = parse_version(candidate), parse_version(current)
+    new, old = version_key(candidate), version_key(current)
     return bool(new and old and new > old)
 
 
@@ -118,9 +140,12 @@ def _get(url, timeout, accept='application/octet-stream', limit=MAX_ARCHIVE):
     return data
 
 
-def release_from_json(value, current=__version__, platform=sys.platform):
-    """The release described by a GitHub API answer if it is newer and has this system's archive."""
-    if not isinstance(value, dict) or value.get('draft') or value.get('prerelease'):
+def release_from_json(value, current=__version__, platform=sys.platform, experimental=False):
+    """The release described by a GitHub API answer if it is newer and has this system's archive.
+    Pre-releases only count with ``experimental``."""
+    if not isinstance(value, dict) or value.get('draft'):
+        return None
+    if (value.get('prerelease') or is_prerelease(str(value.get('tag_name') or ''))) and not experimental:
         return None
     version = str(value.get('tag_name') or '').lstrip('v')
     suffix = asset_suffix(platform)
@@ -139,12 +164,23 @@ def release_from_json(value, current=__version__, platform=sys.platform):
                    archive, assets[archive], assets[SUMS], assets[SIGNATURE])
 
 
-def latest_release(timeout=8):
-    """The latest GitHub release when newer than this build, else None."""
+def newest_release(values, current=__version__, platform=sys.platform, experimental=False):
+    """The newest usable release of a GitHub API release list, or None."""
+    found = [r for r in (release_from_json(v, current, platform, experimental)
+                         for v in (values if isinstance(values, list) else [])) if r]
+    return max(found, key=lambda r: version_key(r.version), default=None)
+
+
+def latest_release(timeout=8, experimental=False):
+    """The latest GitHub release when newer than this build, else None.
+    ``experimental``: pre-releases count too (the newest of the recent releases)."""
     try:
-        value = json.loads(_get(LATEST, timeout, 'application/vnd.github+json', 1 << 20))
+        value = json.loads(_get(RECENT if experimental else LATEST, timeout,
+                                'application/vnd.github+json', 4 << 20 if experimental else 1 << 20))
     except ValueError:
         raise UpdateError('Unexpected answer from GitHub.') from None
+    if experimental:
+        return newest_release(value, experimental=True)
     return release_from_json(value)
 
 
