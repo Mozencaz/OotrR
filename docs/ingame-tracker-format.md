@@ -5,7 +5,7 @@ Every seed folder written by the application carries the data the in-game tracke
 * `romfs/RandoTracker/seed.trk` — this file, listed in `manifest.json` under `files` with its size and SHA-256;
 * `exefs/subsdk7` — the prebuilt tracker module, listed under `exefs` in the manifest.
 
-The module is a separate GPL-3 project (source: <https://github.com/waze3174/ootr-ingame-tracker>). It reads
+The module is GPL-3 and its source is in this repository, in [`ingame_tracker/`](../ingame_tracker/) (the rest is MIT). It reads
 `content:/RandoTracker/seed.trk` and compares it with the running game's save flags. It only reads memory.
 
 `seed.trk` holds no placement: no item or reward of any check. It lists which flags to observe, grouped by the
