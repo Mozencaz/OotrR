@@ -20,7 +20,7 @@ save has found:
 - the seed's id, a warning when the save isn't from this seed, and "Goal reached";
 - a **postcard**: a small card with only the icons (items, songs, temples, dungeon keys) in a corner of the screen while you play.
 
-Version 0.4.0. 0.2.0's icons were seen in the game; the rest is **not yet tested in the game**, see [docs/TESTING.md](docs/TESTING.md).
+Version 0.4.0. Tested in the game (1.1.1, in the Ryuchii emulator): the panel, icons, postcard and songs. Game 1.0.0 is untested. See [docs/TESTING.md](docs/TESTING.md).
 
 ## Controls
 

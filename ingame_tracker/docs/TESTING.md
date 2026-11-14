@@ -1,6 +1,6 @@
 # Live test plan
 
-Nothing in 0.1.0 has run in the game; 0.2.0's icons were seen in the game (13/11: upright, right colours, smooth), 0.2.1 to 0.4.0 not yet. The PC tests (`make test`) cover the seed file's parser (versions 1 and 2), the state, a
+0.2.0's icons were seen in the game (13/11: upright, right colours, smooth); 0.2.1 to 0.4.0 (key rows, postcard, songs) were checked in the game on 1.1.1 in the Ryuchii emulator (14/11). Game 1.0.0 is untested. The PC tests (`make test`) cover the seed file's parser (versions 1 and 2), the state, a
 region's list of checks, the game-data reader over a fake GameData, the controls (repeat, what the game doesn't see), the browsing and the
 icons file's index.
 These steps cover the rest. Back up the save first.
