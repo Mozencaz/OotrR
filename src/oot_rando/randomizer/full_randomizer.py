@@ -741,7 +741,7 @@ def _result(data, logic, options, matches, shuffled, placed, tiers, sphere_of, s
                 and options['shuffle_bosskeys'] in ('any_dungeon', 'keysanity')):
             from oot_rando.patching.key_adapter import boss_actor, item_folder
             canonical = boss_actor(item_folder(item))   # opens its own dungeon's boss door anywhere
-        actor = form_actor(canonical, entry.get('form', 'chest'), airborne=source == 'skulltula')
+        actor = form_actor(canonical, entry.get('form', 'chest'), skulltula_drop=source == 'skulltula')
         label = SOURCE_LABELS.get(source, source)
         name = entry['ap'][0] if entry['kind'] == 'exact' else (
             f'{entry["folder"]} — {label} {str(entry["hash"])[-6:]}' if entry['hash'] else gid)
