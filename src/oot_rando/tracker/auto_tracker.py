@@ -7,6 +7,7 @@ from pathlib import Path
 import threading
 
 from oot_rando.game.tracking_metadata import inventory_rules
+from oot_rando.logic.rules import split_age_member
 from oot_rando.randomizer.randomizer_services import ManualTracker, read_artifact
 from oot_rando.tracker.save_reader import load_snapshot
 from oot_rando.paths import state_dir
@@ -256,8 +257,10 @@ class TrackerSession:
         members = logic.virtual.get(location, [])
         guards = [m for m in members if m.startswith('Souls|')]
         others = [m for m in members if not m.startswith('Souls|')]
+        # A source of one age's maps: only the part of the area done at that age counts.
+        aged = [m for m in others if split_age_member(m)[0]]
         return (all(logic.accessible(state, g) for g in guards)
-                and any(logic.accessible(state, m) for m in others))
+                and any(logic.accessible(state, m) for m in aged or others))
 
     @staticmethod
     def logic_location(gid, row):

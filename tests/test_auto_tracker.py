@@ -144,5 +144,31 @@ class AutoTrackerTests(unittest.TestCase):
             self.assertEqual(session.check_state('area')['access'], 'partial')
             self.assertEqual(session.check_state('far')['access'], 'blocked')
 
+    def test_adult_map_area_is_not_partial_while_only_the_child_gets_there(self):
+        class Logic:
+            referenced = {'Time Travel'}   # never observed in the save
+            virtual = {'Remake|child_area': ['Child|Near', 'Far'], 'Remake|adult_area': ['Near', 'Adult|Near']}
+            def location_names(self):
+                return ['Near', 'Far']
+            def new_state(self, counts):
+                return counts
+            def sweep(self, placements, state):
+                return state, {'Near'}, []
+            def accessible(self, state, member):
+                if member == 'Adult|Near':
+                    return state.get('Time Travel', 0) > 0
+                return member in ('Near', 'Child|Near')
+        with tempfile.TemporaryDirectory() as directory:
+            session = self.make_session(Path(directory))
+            session.metadata['checks'].update({
+                'child_area': {'collection': None, 'logic': 'area', 'location': 'Remake|child_area'},
+                'adult_area': {'collection': None, 'logic': 'area', 'location': 'Remake|adult_area'}})
+            session._logic = Logic()
+            with patch('oot_rando.tracker.auto_tracker.load_snapshot', return_value=self.snapshot()):
+                session.refresh()
+            self.assertEqual(session.check_state('child_area')['access'], 'partial')
+            # Not "partial": the adult part of the area may be reachable, the save cannot tell.
+            self.assertEqual(session.check_state('adult_area')['access'], 'unknown')
+
 if __name__ == '__main__':
     unittest.main()

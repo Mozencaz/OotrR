@@ -225,6 +225,21 @@ class Integration(unittest.TestCase):
                 ordered = [spheres[a] for a in actors if a in spheres]
                 self.assertEqual(ordered, sorted(ordered), family)
 
+    def test_adult_map_sources_wait_for_adult_access(self):
+        from oot_rando.randomizer import full_randomizer
+        from oot_rando.game.remake_world import source_age
+        for seed in ('age1', 'age2'):
+            options, result = self.plan(NEW_SOURCES, seed)
+            c = full_randomizer.prepare(self.data, options, self.groups, self.enemies, seed, True, extra=self.extra)
+            _, _, spheres = c.sweep({p['id']: p['item'] for p in result['placements']})
+            # Time Travel is collected with the pedestal: the adult moves from the next sphere on.
+            adult_from = next(i for i, sphere in enumerate(spheres) if 'Master Sword Pedestal' in sphere) + 1
+            adult = [p for p in result['placements']
+                     if p['sphere'] is not None and source_age(c.matches[p['id']]['variants']) == 'adult']
+            self.assertTrue(adult)
+            for p in adult:
+                self.assertGreaterEqual(p['sphere'], adult_from, (seed, p['id'], p['item']))
+
     def test_shopsanity_keeps_logic_purchases(self):
         options, result = self.plan({'shopsanity': '4'}, 'shops')
         per_shop = Counter(p['folder'] for p in result['placements'] if p['source'] == 'shop')
