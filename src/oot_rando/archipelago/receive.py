@@ -92,11 +92,10 @@ class Deliverer:
 def received_keys(entries, slot, player_name, location_name):
     """Record keys of received items found at a location, in server order.
 
-    Items found in this world count too: the copies of a dynamic progressive family
-    are handed over by the client wherever they are (the other ones of this world
-    have no record and are ignored by :class:`Deliverer`). ``slot``: unused, kept
-    for the callers. ``entries``: NetworkItem dicts; ``player_name(slot)``,
-    ``location_name(location, slot)``.
+    Items found in this world count too: they have no record (the game gives them
+    itself; patches of older versions handed some over) and :class:`Deliverer`
+    ignores them. ``slot``: unused, kept for the callers. ``entries``: NetworkItem
+    dicts; ``player_name(slot)``, ``location_name(location, slot)``.
     """
     keys = []
     for entry in entries:

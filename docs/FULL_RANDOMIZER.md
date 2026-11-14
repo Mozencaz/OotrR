@@ -30,7 +30,7 @@ shuffled reward only once (`repeatable_adapter.py`), then go back to their vanil
 * **Starting inventory** (`start_inventory_from_pool`, AP name): items held from the
   start, given silently at the end of the opening (`event_patch.add_pouch_items`). A
   copy found in the item pool is replaced by rupees; progressive copies take the
-  lowest tiers of their family. Songs, tunics and trade items have no pouch actor
+  lowest levels of their family. Songs, tunics and trade items have no pouch actor
   yet. In a multiworld, the apworld's own `start_inventory_from_pool` is used.
 * **Item pool** (`item_pool_value`): plentiful (one extra copy of each major
   non-progressive item, replacing filler), scarce (at most 3 bottles, half the
@@ -94,6 +94,35 @@ structure `DungeonInfo.<folder>` (RSDB `DungeonParam` rows): `.SmallKeyNum`,
 * **Not validated in game**: opening a door with a key ring found outside the
   dungeon, the boss door with a key found elsewhere.
 
+## Progressive items (`progressive.py`)
+
+Issue #23: a copy placed with a fixed level could be found before the lower one (the
+large bullet bag before the slingshot), and a later lower level could take capacity
+away. Every copy is now a *token* that becomes the next level in game:
+
+* Each copy placed in this world is its own pouch actor `Item_Prog_<family>_<n>`
+  (built like the souls: Forest Medallion key item, model of the family's first
+  level, texts, `IsGet` flag), plus a saved flag `RandoProg.<token>`.
+* So are the unshuffled sources of a fixed level (a chest or a freestanding item
+  left in place, Darunia's bracelet: `STATIC_TIER_SOURCES`): found after a shuffled
+  copy, their own level could be lower than the one Link holds. The other native
+  sources (bag and wallet upgrades of NPCs) already give the next level.
+* Converter: `ActionGuide/ActionGuide` (end of every item get) and
+  `ActionGuide/ActionGuideForShop` (shops) first call the entry `RandoProgressive`:
+  for each token got (`IsGet`) and not converted yet, set its flag, take it out of the
+  pouch (as trade items are) and give the level above the highest one held, through
+  `GetPouchContent/GetPouchContentByActorName` (get window, no pose; the ocarinas
+  too). Levels are tested on their pouch names (`Weapon_Range_Bow`,
+  `Armor_Child_Gauntlet_Goron`…) and the magic meter on `IsGet.Item_FairyBless_*`.
+  Holding the last level gives it again.
+* Gifts whose flow never reaches `ActionGuide` (boss rewards, Saria, Darunia…)
+  call `RandoProgressive` right after the gift (`RandoProgAfter_<event>`). A token got
+  any other way is converted at the next item get.
+* Archipelago: progressive copies can go to any world. Copies received from other
+  worlds go through the mailbox, which gives the same next level (`ap_mailbox`).
+* **Not validated in game**: the token get then the level's window, a token in a shop,
+  a token from Saria, a boss or Darunia, the take out of the pouch.
+
 ## Enemy souls (`soul_adapter.py`)
 
 Modes `bosses`, `regional`, `all` (46 souls, 845 enemies). `Presence` is added to
@@ -123,8 +152,9 @@ the dialogue box stayed empty and blocked the game. A new save is required.
   the lake lab (child only), the age rule is added.
 - A group holding a location that the AP rules never reach only receives filler.
 - Progressive items (hookshot/longshot, gauntlets, bomb bag, bow, slingshot,
-  wallets, scales): the lower level always goes to the earliest sphere (the two
-  values are swapped when needed); optional strict order.
+  wallets, scales…): each copy gives the level above the one Link holds, so the
+  n-th copy found is level n, as the AP logic counts them (see *Progressive items*
+  below). `progressive_order` and `progressive_strict` no longer change anything.
 - Souls: entering a dungeon requires the souls of the families present; a boss
   room requires the boss soul; conditional chests require the souls of their map.
   Excluded from souls: Poes, Stalchildren, Leevers, Gerudo, gold skulltulas,
@@ -196,6 +226,9 @@ outside the maps are not covered (except chest events).
 8. **Great fairy / quest**: the right item is given; a replaced Saria ocarina does
    not also add the vanilla ocarina.
 9. **Boss heart container**: the placed item (visible on entering the room) can be picked up.
+10. **Progressive items**: find the higher copy of a family first (e.g. a slingshot
+    token after the bullet bag was expected): the first one found gives the slingshot,
+    the next one the bag; a native chest found later never takes capacity away.
 
 Known limits: some NPCs decide "already given" from the vanilla item (e.g. silver
 scale for the diving game) and can give their new item again; shop texts of

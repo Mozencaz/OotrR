@@ -11,10 +11,12 @@ Checks, from the produced files only (the generator's plan is not reused):
 3. both age variants of a source carry the same reward;
 4. every reward actor exists (game pack, generated soul or derived pack) and
    every generated actor has its RSDB rows and RESTBL entry (souls: saved flag);
-5. a fresh sweep of the remake logic over the spoiled placements is beatable and,
-   with progressive order on, lower tiers are found in strictly earlier spheres.
+5. every progressive copy, and every native source of a fixed level, gives its own
+   token, converted to the next level by the item-get flow (or right after its gift);
+6. a fresh sweep of the remake logic over the spoiled placements is beatable.
 """
-from collections import defaultdict
+from collections import Counter, defaultdict
+import copy
 import json
 import struct
 import sys
@@ -33,6 +35,7 @@ from oot_rando.patching.soul_adapter import murmur3, RSDB_FILES, GAMEDATA, FLAG_
 from oot_rando.game.remake_world import PROGRESSIVE, item_actor
 from oot_rando.game.item_forms import is_derived, canonical_of
 from oot_rando.patching.key_adapter import is_key_actor
+from oot_rando.patching.progressive import applied_flag, is_token
 from oot_rando.randomizer.randomizer_core import save_marker
 
 QOL_MAPS = {MAP, STATIC}
@@ -66,9 +69,28 @@ def verify(nup_path, seed_dir):
     out = lambda path: decompress((seed_dir / 'romfs' / path).read_bytes(), d)
     full = [p for p in spoiler['placements'] if str(p.get('category', '')).startswith('full_')]
     _, groups, enemies, extra = scan_world(nup, d, members)
+    # Fresh logic sweep from the spoiler; it also names the progressive tokens.
+    from oot_rando.logic.world import World
+    from oot_rando.randomizer import full_randomizer
+    plan = full_randomizer.replay(World(), manifest['settings']['full'], copy.deepcopy(groups),
+                                  copy.deepcopy(enemies), {p['id']: p['ap_item'] for p in full},
+                                  manifest['settings']['open_forest'], extra=copy.deepcopy(extra))
+    tokens, natives = plan['progressive']['tokens'], plan['progressive']['natives']
+    for placement in full:
+        reward = placement.get('reward_actor', placement['actor'])
+        canonical = canonical_of(reward) if is_derived(reward) else reward
+        if canonical != tokens.get(placement['id'], canonical) or (is_token(canonical) and placement['id'] not in tokens):
+            raise ValueError('Progressive copy without its own token: ' + placement['id'])
     # Expected edits, rebuilt from the original game and the spoiler only.
     map_edits = defaultdict(dict)     # resource -> actor index -> {field: actor}
     event_edits = defaultdict(dict)   # resource -> (event, param) -> actor
+    for native in natives:
+        for patch in native['patches']:
+            if 'event' in patch:
+                event_edits[patch['resource']][(patch['event'], patch['param'])] = native['after']
+            else:
+                field = 'Gyaml' if patch['path'][-1] == 'Gyaml' else 'Drop__DropActor'
+                map_edits[patch['resource']].setdefault(patch['path'][1], {})[field] = native['after']
     for placement in full:
         gid, actor = placement['id'], placement['actor']
         if gid in groups:
@@ -149,6 +171,24 @@ def verify(nup_path, seed_dir):
     chest_flows = {}
     for record in chest_records:
         chest_flows.setdefault(record['flow'], []).append(record)
+    # Token gifts outside any item get call the converter themselves (recomputed here).
+    from oot_rando.patching.event_info import flow_path as event_flow_path
+    from oot_rando.patching.progressive import AFTER_PREFIX, ACTION_GUIDE, CONVERTER_ENTRY, hook_sites
+
+    def produced_flow(name):
+        path = event_flow_path(name)
+        if path in manifest['files']:
+            return out(path)
+        return decompress(nup.read(members[path]), d) if path in members else None
+
+    token_sources = [[(v['resource'], v['event']) for v in extra[p['id']]['variants'] if 'event' in v]
+                     for p in full if p['id'] in tokens and p['id'] in extra]
+    token_sources += [[(patch['resource'], patch['event']) for patch in native['patches'] if 'event' in patch]
+                      for native in natives]
+    progressive_skip = manifest.get('skips', {}).get('progressive') or {}
+    hooks = hook_sites(token_sources, produced_flow, covered=manifest.get('skips', {}).get('gift_get', {}))
+    if hooks != progressive_skip.get('hooks', {}):
+        raise ValueError('Progressive token gifts differ from the spoiler.')
     soul_actors = set()
     window_context = [None, None]
     for path in sorted(manifest['files']):
@@ -201,6 +241,14 @@ def verify(nup_path, seed_dir):
                     raise ValueError('Dungeon keys differ from the spoiler.')
                 original = add_key_hook(original, records)[0]
                 report['key_items'] = len(records)
+            all_tokens = sorted(set(tokens.values()) | {n['token'] for n in natives})
+            if path == ACTION_GUIDE_FLOW and (all_tokens or skips.get('progressive')):
+                # Progressive tokens: converted at the start of every item get.
+                from oot_rando.patching.progressive import add_converter
+                if (skips.get('progressive') or {}).get('converter', {}).get('tokens') != all_tokens:
+                    raise ValueError('Progressive tokens differ from the spoiler.')
+                original = add_converter(original, all_tokens)[0]
+                report['progressive_tokens'] = len(all_tokens)
             from oot_rando.patching.qol_patches import SWORD_CHEST_FLOW, skip_kokiri_sword_cutscene
             if path == SWORD_CHEST_FLOW and skips.get('sword_chest'):
                 original = skip_kokiri_sword_cutscene(original)[0]
@@ -246,6 +294,16 @@ def verify(nup_path, seed_dir):
                     if marker['event'] not in before or marker['marker'] in before:
                         raise ValueError('Inconsistent collection marker: ' + path)
                     before[marker['marker']] = {'GameDataName': marker['flag'], 'Index': -1, 'Value': True}
+            if path in hooks:
+                produced = {e.name: e for e in _flow_events(out(path))}
+                for name in hooks[path]:
+                    call = produced[name].data.nxt.v
+                    if (call is None or call.name != AFTER_PREFIX + name or call.data.params is not None
+                            or (call.data.res_flowchart_name, call.data.entry_point_name) != (ACTION_GUIDE,
+                                                                                             CONVERTER_ENTRY)):
+                        raise ValueError('Progressive token gift without its conversion: ' + path)
+                    before[call.name] = None
+                    report['progressive_gifts'] = report.get('progressive_gifts', 0) + 1
             if path == 'Event/EventFlow/OpeningEvent.bfevfl.zs':
                 # Seed bag and quiver given silently at the end of the opening.
                 from oot_rando.randomizer.randomizer_core import starting_pouch_items
@@ -350,17 +408,21 @@ def verify(nup_path, seed_dir):
         if actor in once_actors:
             derived.add(actor)
             canonical = once_actors[actor]['canonical']
-            if canonical.startswith(('Item_Soul_', 'Item_AP_')) or is_key_actor(canonical):
+            if canonical.startswith(('Item_Soul_', 'Item_AP_')) or is_key_actor(canonical) or is_token(canonical):
                 soul_actors.add(canonical)
-        elif actor.startswith(('Item_Soul_', 'Item_AP_')) or is_key_actor(actor):
+        elif actor.startswith(('Item_Soul_', 'Item_AP_')) or is_key_actor(actor) or is_token(actor):
             soul_actors.add(actor)
         elif is_derived(actor):
             derived.add(actor)
             canonical = canonical_of(actor)
-            if canonical.startswith(('Item_Soul_', 'Item_AP_')) or is_key_actor(canonical):
-                soul_actors.add(canonical)  # derived soul/key: the generated item must exist too
+            if canonical.startswith(('Item_Soul_', 'Item_AP_')) or is_key_actor(canonical) or is_token(canonical):
+                soul_actors.add(canonical)  # derived soul/key/token: the generated item must exist too
         elif 'Pack/Actor/' + actor + '.pack.zs' not in members:
             raise ValueError('Actor missing: ' + actor)
+    for native in natives:
+        soul_actors.add(native['token'])
+        if is_derived(native['after']):
+            derived.add(native['after'])
     generated = soul_actors | derived
     if generated:
         rest = decompress((seed_dir / 'romfs' / RESTBL).read_bytes(), d)
@@ -374,6 +436,9 @@ def verify(nup_path, seed_dir):
         for record in manifest.get('skips', {}).get('key_items', {}).get('records', []):
             if record['kind'] == 'ring' and murmur3(record['applied']) not in flags:
                 raise ValueError('Missing key ring flag: ' + record['folder'])
+        for actor in sorted(a for a in soul_actors if is_token(a)):
+            if murmur3(applied_flag(actor)) not in flags:
+                raise ValueError('Missing progressive token flag: ' + actor)
         for actor in sorted(generated):
             pack_path = f'Pack/Actor/{actor}.pack.zs'
             pack = sarc(out(pack_path))
@@ -384,66 +449,28 @@ def verify(nup_path, seed_dir):
                 raise ValueError('Missing RSDB row: ' + actor)
             if actor in soul_actors and murmur3(FLAG_PREFIX + actor) not in flags:
                 raise ValueError('Missing save flag: ' + actor)
-    # Fresh logic sweep from the spoiler.
-    from oot_rando.logic.world import World
-    from oot_rando.randomizer import full_randomizer
-    data = World()
-    plan = full_randomizer.replay(data, manifest['settings']['full'], groups, enemies,
-                                  {p['id']: p['ap_item'] for p in full}, manifest['settings']['open_forest'],
-                                  extra=extra)
     multiworld = manifest.get('archipelago')
-    warnings = []
     if multiworld is not None:
         # Placed by Archipelago: victory may need items of other worlds (checked by
-        # Archipelago); the tier order follows the multiworld playthrough.
-        order = multiworld.get('spheres') or {}
-        if manifest['settings']['full'].get('progressive_order', True):
-            for family, actors in PROGRESSIVE.items():
-                spheres = {}
-                for p in full:
-                    if p['ap_item'] == family:
-                        reward_actor = p.get('reward_actor', p['actor'])
-                        base = next((a for a in actors if reward_actor in (a, 'Obj_Rando_' + a, 'Shop_Rando_' + a)),
-                                    None)
-                        spheres[base] = order.get(p['id'])
-                ordered = [spheres[a] for a in actors if a in spheres]
-                pairs = list(zip(ordered, ordered[1:]))
-                if any(x is not None and y is not None and x > y for x, y in pairs):
-                    raise ValueError(f'Level order not respected for {family}: {spheres}')
-                if any(x is None or y is None or x == y for x, y in pairs):
-                    warnings.append(f'{family}: levels in the same multiworld sphere {spheres}')
-        # Starting copies of a progressive family are its lowest levels.
+        # Archipelago). Starting copies of a progressive family are its lowest levels.
+        taken = Counter()
         for start in multiworld.get('starting', []):
             item, actor = start['item'], start['actor']
             if item in PROGRESSIVE:
-                placed = [actors.index(a) for p in full if p['ap_item'] == item
-                          for actors in [PROGRESSIVE[item]]
-                          for a in actors if p.get('reward_actor', p['actor']) in (a, 'Obj_Rando_' + a,
-                                                                                    'Shop_Rando_' + a)]
-                if actor not in PROGRESSIVE[item] or any(i <= PROGRESSIVE[item].index(actor) for i in placed):
-                    raise ValueError(f'Starting {item} is not its lowest level: {actor}')
+                levels = PROGRESSIVE[item]
+                if taken[item] >= len(levels) or actor != levels[taken[item]]:
+                    raise ValueError(f'Starting {item} is not its next lowest level: {actor}')
+                taken[item] += 1
             elif full_randomizer.starting_unsupported(item) or actor != item_actor(item, None):
                 raise ValueError(f'Unexpected starting item: {item} → {actor}')
         report.update(souls=len(soul_actors), derived=len(derived), beatable='checked by Archipelago',
                       spheres=plan['sphere_count'], unreachable_logic_locations=plan['unreachable'],
                       archipelago={'seed_name': multiworld.get('seed_name'), 'slot_name': multiworld.get('slot_name'),
-                                   'items_in_other_worlds': len(multiworld.get('remote', []))},
-                      warnings=warnings)
+                                   'items_in_other_worlds': len(multiworld.get('remote', []))})
         nup.stream.close()
         return report
     if not plan['beatable']:
         raise ValueError('Logic replay: victory not reached.')
-    if manifest['settings']['full'].get('progressive_order', True):
-        for family, actors in PROGRESSIVE.items():
-            spheres = {}
-            for p in full:
-                if p['ap_item'] == family:
-                    reward_actor = p.get('reward_actor', p['actor'])
-                    base = next((a for a in actors if reward_actor in (a, 'Obj_Rando_' + a, 'Shop_Rando_' + a)), None)
-                    spheres[base] = plan['spheres'].get(p['id'])
-            ordered = [spheres[a] for a in actors if a in spheres]
-            if any(x is None or y is None or x >= y for x, y in zip(ordered, ordered[1:])):
-                raise ValueError(f'Level order not respected for {family}: {spheres}')
     report.update(souls=len(soul_actors), derived=len(derived), beatable=True, spheres=plan['sphere_count'],
                   unreachable_logic_locations=plan['unreachable'])
     nup.stream.close()
