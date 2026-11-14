@@ -18,8 +18,7 @@ from oot_rando.formats.inspect_nup import Nup
 from oot_rando.formats.inspect_resources import Byml, decompress, dictionaries, sarc
 from oot_rando.patching.randomize_kokiri import BUILD, TITLE, MAP, RESTBL, CHESTS, POOL, check_supported_game, patch_map
 from oot_rando.patching.qol_patches import (STATIC, STATIC_SOURCE_SHA256, DYNAMIC_SOURCE_SHA256, PHYSICS, EVENT_SETTINGS,
-                         patch_forest, patch_baked_wall, keep_mido_at_his_wall, MIDO_SCHEDULE,
-                         sha256, cutscene_files, patch_dialogues,
+                         patch_forest, patch_baked_wall, sha256, cutscene_files, patch_dialogues,
                          area_presentation_files, quick_chest, CHEST_FLOW,
                          quick_small_chest, SMALL_CHEST_FLOW,
                          KOKIRI_SHOP_MAPS, KOKIRI_SHOP_PACKS, open_kokiri_shop,
@@ -442,10 +441,6 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, ingam
             extra_raw[EVENT_SETTINGS], skips['dialogues'] = patch_dialogues(
                 decompress(read(EVENT_SETTINGS), d), settings.skip_auto_dialogues, settings.skip_locked_cutscenes)
         plain_raw = {}
-        if settings.open_forest:
-            # The castle can now come before the Deku Tree: Mido keeps his wall until it is down.
-            plain_raw[MIDO_SCHEDULE], extra_raw[GAMEDATA] = keep_mido_at_his_wall(read(MIDO_SCHEDULE),
-                                                                                extra_raw[GAMEDATA])
         mailbox_items = ap_records(settings)
         if mailbox_items:
             # Items of other worlds: the client sets a Bool in the game's memory, the
@@ -504,7 +499,7 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, ingam
             growths[path] = max(len(raw) - len(decompress(source, d)), 0)
             compress(path, raw, source)
         for path, raw in sorted(plain_raw.items()):
-            # Uncompressed resources (sequence AI, schedules): written as they are.
+            # Uncompressed resources (sequence AI): written as they are.
             growths[path] = max(len(raw) - len(read(path)), 0)
             files[path] = raw
         new_sizes = {}

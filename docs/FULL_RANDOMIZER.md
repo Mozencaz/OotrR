@@ -72,20 +72,6 @@ names of REALAZK's token kits, at most 25 characters) or `Obj_Rando_<item>`. The
 pouch sets `PlayGetEventManyTimes` and `IsPlayGetEventPouchMax`, so the get event
 plays on every pickup, even at full capacity. The tracker reads the same row.
 
-## Open forest and Mido (`qol_patches.keep_mido_at_his_wall`)
-
-Mido's wall (`FldObj_AirWall_Player_GenerateNavMesh`, presence
-`KokiriForest_Npc_Kokiri_Mido_Child_Blocker`) goes down only when Mido is talked to
-with the sword and shield equipped, or by the Kokiri Emerald completed event, both
-at the path entrance. Two of his schedules send him to his spot by the Deku Tree,
-past that wall: `Get_StoneOfForest_Complete_Mido_TalkEnd` and
-`Goto_HyruleCastle_IsCompleted_Exp`. With the forest exit open, the castle can be
-done first, and Mido left the entrance for good. Both schedules now use a new
-`BoolExp` that also needs the wall's flag off (`Rando_Mido_*_WallDown_Exp`), so
-Mido stays at the entrance until he has seen the sword and shield, as the logic
-expects. Mido should pick his schedule when the forest loads, so a save already
-stuck there should be fixed by the new seed on the next visit (pilot #10 confirms it).
-
 ## Dungeon-specific keys (`key_adapter.py`)
 
 Remake keys are generic: `Item_Dungeon_SmallKey`/`BossKey` are credited by native
@@ -210,9 +196,6 @@ outside the maps are not covered (except chest events).
 8. **Great fairy / quest**: the right item is given; a replaced Saria ocarina does
    not also add the vanilla ocarina.
 9. **Boss heart container**: the placed item (visible on entering the room) can be picked up.
-10. **Mido** (open forest): with the castle done before the Deku Tree, Mido still stands
-    at the path entrance; with the sword and shield equipped his talk lowers the wall
-    and the Deku Tree speaks and opens.
 
 Known limits: some NPCs decide "already given" from the vanilla item (e.g. silver
 scale for the diving game) and can give their new item again; shop texts of
