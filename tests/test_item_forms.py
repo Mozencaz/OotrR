@@ -4,7 +4,13 @@ import unittest
 
 from oot_rando.formats import byml_codec
 from oot_rando.formats.inspect_resources import sarc
-from oot_rando.game.item_forms import build_pack, resolve_components, _table_components, WORLD_TEMPLATE
+from oot_rando.game.item_forms import (NATIVE_WORLD, WORLD_POUCH_FLAGS, WORLD_TEMPLATE, build_pack, canonical_of,
+                                       form_actor, is_derived, is_world_derived, resolve_components,
+                                       _table_components)
+
+# Components that make the gold token's AI save the skulltula it drops from
+# (REALAZK pickup_pack/kit.rs, MIT, ae9e4063: REFS and LIFE_REF).
+TOKEN_KIT_REFS = ('AIInfoRef', 'BlackboardRef', 'DeathRef', 'GameLifeConditionRef')
 
 
 def doc(root):
@@ -82,15 +88,53 @@ class DerivedGameParameterTests(unittest.TestCase):
                             self.assertIn(ref[1:], files)
 
 
-class AirborneDropTests(unittest.TestCase):
-    def test_skulltula_drops_are_contact_pickups(self):
-        from oot_rando.game.item_forms import form_actor
-        # On vines/walls Link cannot press A: A-button pickups become derived contact pickups.
-        self.assertEqual(form_actor('Obj_Heart_Piece', 'world', airborne=True), 'Obj_Rando_Obj_Heart_Piece')
-        self.assertEqual(form_actor('Obj_Heart_Container', 'world', airborne=True), 'Obj_Rando_Obj_Heart_Container')
+class SkulltulaDropTests(unittest.TestCase):
+    def test_skulltula_drops_are_token_kits(self):
+        self.assertEqual(form_actor('Item_Token_Gold', 'world', skulltula_drop=True), 'Obj_Token_Gold')
+        self.assertEqual(form_actor('TBox_Rupee_Red', 'world', skulltula_drop=True), 'Obj_Rupee_Red_GS')
+        self.assertEqual(form_actor('Obj_Heart_Piece', 'world', skulltula_drop=True), 'Obj_Heart_Piece_GS')
+        self.assertEqual(form_actor('Item_Hookshot', 'world', skulltula_drop=True), 'Obj_Rando_Item_Hookshot')
+        # Other world locations keep the native pickups.
+        self.assertEqual(form_actor('TBox_Rupee_Red', 'world'), 'Obj_Rupee_Red')
         self.assertEqual(form_actor('Obj_Heart_Piece', 'world'), 'Obj_Heart_Piece')
-        self.assertEqual(form_actor('TBox_Rupee_Red', 'world', airborne=True), 'Obj_Rupee_Red')
-        self.assertEqual(form_actor('Item_Token_Gold', 'world', airborne=True), 'Obj_Token_Gold')
+
+    def test_kit_names_round_trip_and_fit(self):
+        from oot_rando.patching.soul_adapter import MAX_ACTOR_NAME
+        for canonical in NATIVE_WORLD:
+            actor = form_actor(canonical, 'world', skulltula_drop=True)
+            with self.subTest(actor=actor):
+                if actor == WORLD_TEMPLATE:
+                    self.assertFalse(is_derived(actor))
+                    continue
+                self.assertTrue(is_world_derived(actor))
+                self.assertEqual(canonical_of(actor), canonical)
+                self.assertLessEqual(len(actor), MAX_ACTOR_NAME)
+        self.assertFalse(is_derived('Obj_Token_Gold_GS'))
+        self.assertFalse(is_derived('Enemy_Unknown_GS'))
+
+    def test_kit_keeps_token_behaviour_and_always_plays_get_event(self):
+        packs = fake_packs()
+        packs['TBox_Rupee_Red'] = {
+            'Actor/TBox_Rupee_Red.engine__actor__ActorParam.bgyml': doc({'Components': {
+                'ModelInfoRef': '?Component/ModelInfo/Obj_Rupee_Red.engine__component__ModelInfo.bgyml',
+                'PouchContentRef': '?Component/PouchContentParam/Red.game__component__PouchContentParam.bgyml'}}),
+            'Component/ModelInfo/Obj_Rupee_Red.engine__component__ModelInfo.bgyml': doc({'FmdbName': 'Rupee'}),
+            'Component/PouchContentParam/Red.game__component__PouchContentParam.bgyml': doc({
+                'PlayGetEventManyTimes': False}),
+        }
+        template = packs[WORLD_TEMPLATE]
+        param = f'Actor/{WORLD_TEMPLATE}.engine__actor__ActorParam.bgyml'
+        components = byml_codec.load(template[param])['root']['Components']
+        components.update({key: f'Work/Component/{key}/Item_Token_Gold.gyml' for key in TOKEN_KIT_REFS})
+        template[param] = doc({'Components': components})
+        files = sarc(build_pack('Obj_Rupee_Red_GS', packs.get, byml_codec)[0])
+        kit = resolve_components(files, 'Obj_Rupee_Red_GS', byml_codec)
+        for key in TOKEN_KIT_REFS:
+            self.assertEqual(kit[key], f'Work/Component/{key}/Item_Token_Gold.gyml')
+        self.assertEqual(kit['ModelInfoRef'], '?Component/ModelInfo/Obj_Rupee_Red.engine__component__ModelInfo.bgyml')
+        pouch = byml_codec.load(files[kit['PouchContentRef'][1:]])['root']
+        self.assertEqual({key: pouch[key] for key in WORLD_POUCH_FLAGS}, WORLD_POUCH_FLAGS)
+        self.assertEqual(pouch['PouchActor'], 'Work/Actor/TBox_Rupee_Red.engine__actor__ActorParam.gyml')
 
 
 @unittest.skipUnless(os.environ.get('OOT_NUP'), 'OOT_NUP absent')
@@ -187,7 +231,7 @@ class RealPackNameTests(unittest.TestCase):
     def test_derived_heart_piece_is_contact_pickup(self):
         for canonical in ('Obj_Heart_Piece', 'Obj_Heart_Container'):
             with self.subTest(canonical=canonical):
-                derived = 'Obj_Rando_' + canonical
+                derived = form_actor(canonical, 'world', skulltula_drop=True)
                 files = sarc(build_pack(derived, self.read_pack, byml_codec)[0])
                 components = resolve_components(files, derived, byml_codec)
                 self.assertIn('AutoPickUp', components['AttentionSenderRef'])
@@ -199,7 +243,7 @@ class RealPackNameTests(unittest.TestCase):
         # Item with its own effect user (Heart Piece) and item without (Hover Boots).
         for canonical, expected in (('Obj_Heart_Piece', 'Obj_Heart_Piece'), ('Item_HoverBoot', None)):
             with self.subTest(canonical=canonical):
-                derived = 'Obj_Rando_' + canonical
+                derived = form_actor(canonical, 'world', skulltula_drop=True)
                 files = sarc(build_pack(derived, self.read_pack, byml_codec)[0])
                 components = resolve_components(files, derived, byml_codec)
                 for key in ('ELinkRef', 'SLinkRef'):
@@ -209,6 +253,30 @@ class RealPackNameTests(unittest.TestCase):
                         self.assertIsNone(ref)
                     else:
                         self.assertEqual(byml_codec.load(files[ref[1:]])['root']['UserName'], expected)
+
+    def test_every_skulltula_drop_is_a_token_kit(self):
+        """What REALAZK's kit check verifies (pickup_pack/kit.rs, MIT, ae9e4063): the
+        token's AI, blackboard, death and life refs, a pouch that always plays the get
+        event, and a pickup taken on contact. The kit names are free in the game."""
+        token = resolve_components(self.read_pack(WORLD_TEMPLATE), WORLD_TEMPLATE, byml_codec)
+        for canonical in NATIVE_WORLD:
+            actor = form_actor(canonical, 'world', skulltula_drop=True)
+            if actor == WORLD_TEMPLATE:
+                continue
+            with self.subTest(actor=actor):
+                self.assertNotIn(f'Pack/Actor/{actor}.pack.zs', self.members)
+                files = sarc(build_pack(actor, self.read_pack, byml_codec)[0])
+                components = resolve_components(files, actor, byml_codec)
+                for key in TOKEN_KIT_REFS + ('AttentionSenderRef', 'PhysicsRef'):
+                    self.assertEqual(components[key], token[key], key)
+                pouch = byml_codec.load(files[components['PouchContentRef'][1:]])['root']
+                self.assertEqual({key: pouch.get(key) for key in WORLD_POUCH_FLAGS}, WORLD_POUCH_FLAGS)
+                self.assertIs(pouch['DefaultAutoGet'], True)
+                # The item's own resources (model, pouch, game parameters) travel in the pack.
+                source = self.read_pack(canonical)
+                for ref in components.values():
+                    if isinstance(ref, str) and ref.startswith('?') and ref[1:] in source:
+                        self.assertTrue(ref[1:] in files, ref)
 
 
 if __name__ == '__main__':

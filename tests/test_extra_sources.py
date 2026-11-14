@@ -11,7 +11,7 @@ from collections import Counter
 from oot_rando.logic import rando_options
 from oot_rando.game.extra_sources import NPC_GIFTS, EXCLUDED_NPC_LOCATIONS, scan_map_sources
 from oot_rando.randomizer.full_randomizer import enabled_sources, source_in_scope, tier_layout
-from oot_rando.game.item_forms import can_take, form_actor, is_derived, canonical_of
+from oot_rando.game.item_forms import can_take, form_actor, is_derived, is_world_derived, canonical_of
 
 NUP = os.environ.get('OOT_NUP')
 NEW_SOURCES = {'tokensanity': 'all', 'shopsanity': '4', 'shuffle_freestanding_items': 'all',
@@ -229,6 +229,8 @@ class Integration(unittest.TestCase):
                     self.assertFalse(p['after'].startswith(('Item_', 'TBox_')), p)
                 if p['form'] == 'shop':
                     self.assertTrue(p['after'].startswith('Shop_'), p)
+                if p['source'] == 'skulltula':   # only the token's behaviour saves the skulltula
+                    self.assertTrue(p['after'] == 'Obj_Token_Gold' or is_world_derived(p['after']), p)
             for family, actors in PROGRESSIVE.items():
                 spheres = {}
                 for p in result['placements']:
