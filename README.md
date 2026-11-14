@@ -82,6 +82,42 @@ be added by its executable name in **Setup → Other emulator executables**.
 The **in-game overlay** (Windows, Hookshot) shows the item grid plus the soul and
 check counts over the game window; toggle it with **Ctrl + Shift + O**.
 
+## In-game tracker
+
+On an emulator or a Switch, every seed carries a small module that draws a tracker inside the game, in
+the game's own style: press **R + right stick up** to open it and again (or **B**) to close it. It shows the
+items (with the game's own icons and their levels), the twelve ocarina songs, the dungeons' small keys and boss keys, the checks found per region and in total,
+the enemy souls, and a warning when the loaded save is not from this seed. The D-pad or the left stick moves
+over the regions, **A** opens a region's checks by name (ticked when collected), **B** goes back. While it is
+open the game does not see R, the right stick, A, B, the D-pad or the left stick. The last entry of the
+regions, **Postcard**, turns on a small card with only the icons (items, songs, temples, dungeon keys) in a corner of the screen; its
+position, size and opacity are set there and kept in a small file on the SD card. It only reads the game's
+save data; it never changes the game or the save.
+
+The seed folder gets `romfs/RandoTracker/seed.trk` (the flags to watch, no item placements; the format is in
+[docs/ingame-tracker-format.md](docs/ingame-tracker-format.md)), `exefs/subsdk7`, the module, and
+`romfs/RandoTracker/icons.bin`, the items' and songs' icons, copied from your game file as the game stores them (nothing of the
+game ships with the application; without that file the items show as letters). They are listed in the seed's
+`manifest.json` and verified with the rest, and the module is only active while the seed
+is enabled in the game's add-ons. It is a **GPL-3** program, not covered by this project's MIT licence: its
+licence and source note are in `src/oot_rando/resources/ingame_tracker/` (`LICENSE`, `SOURCE.md`), and its
+source is in this repository, in [`ingame_tracker/`](ingame_tracker/) (a GPL-3 folder with its own `LICENSE`; see its README for how to
+build it). It does not apply to a PC port (Hookshot,
+Longshot), which keeps its own overlay.
+
+To leave it out, untick **In-game tracker** in Settings > Customize settings > Quality of life, or add
+`--no-ingame-tracker` to `ap-install`. A seed generated before this feature, or without the tracker, can get
+it with `update-tracker --add` (below); if its data is too old for it, generate it again.
+
+A newer version of the application brings a newer tracker. **Update the in-game tracker** (Setup > Save,
+next to **Reload the tracker**), or `python -m oot_rando update-tracker SEED_OR_MODS_FOLDER [--nup GAME.nup]`,
+gives the installed seed this version's `seed.trk` and module without generating it again, and the icons from
+the game file (the window uses the one set in Setup; without it, the seed keeps the icons it has): those files and
+their entries in `manifest.json` are rewritten (staged, then moved into place), nothing else in the folder changes,
+so saves of the seed carry on. It refuses a folder that isn't a seed or whose data doesn't match its manifest.
+A seed made without the tracker gets it only when asked (`--add`). Close the game first: the new module loads
+the next time the game starts.
+
 ## Skippable cutscenes and quality of life
 
 Code: [qol_patches.py](src/oot_rando/patching/qol_patches.py).
@@ -186,7 +222,7 @@ it. A randomizer seed already contains these patches: while a seed is enabled, t
 
 ```
 src/oot_rando/
-  __main__.py      entry point (GUI; audit, verify, memory, selftest, apworld, ap-install, qol-install, ap-client)
+  __main__.py      entry point (GUI; audit, verify, memory, selftest, apworld, ap-install, qol-install, update-tracker, ap-client)
   paths.py         application folders (sources: build/; portable: data/)
   formats/         NUP, zstd/SARC resources, BYML, MSBT
   game/            remake map reading, matching, item forms
@@ -198,6 +234,7 @@ src/oot_rando/
   gui/             Tk interface
 tests/             unit tests and verifiers
 tools/             development tools (base world import)
+ingame_tracker/    in-game tracker module (GPL-3): C source of the subsdk7 shipped in each seed
 packaging/         Windows and Linux portable builds
 docs/              design notes
 ```
@@ -207,5 +244,5 @@ distribute them.
 
 ## License
 
-[MIT](LICENSE). The logic data derived from the Archipelago OoT world keeps its own
+[MIT](LICENSE), except the in-game tracker module in `ingame_tracker/`, which is GPL-3 (`ingame_tracker/LICENSE`). The logic data derived from the Archipelago OoT world keeps its own
 MIT licence (`src/oot_rando/logic/world/LICENSE-archipelago-oot.txt`).
