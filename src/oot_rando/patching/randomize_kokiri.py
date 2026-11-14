@@ -34,7 +34,12 @@ def check_supported_game(nup):
     except KeyError:
         raise ValueError('Unsupported NUP structure: the update has no exefs/main.') from None
     if main[:4] != b'NSO0' or main[0x40:0x60].hex() != BUILD:
-        raise ValueError('Unsupported game build.')
+        # Details for a bug report: which executable was read, and what the dump holds.
+        found_build = main[0x40:0x50].hex() if main[:4] == b'NSO0' else 'not an NSO (' + main[:4].hex() + ')'
+        packages = ', '.join(f'{p[0]:016X} v{p[4]}' for p in sorted(nup.packages))
+        raise ValueError(f'Unsupported game build: exefs/main build {found_build}, expected {BUILD[:32]} '
+                         f'(update v{UPDATE_VERSION}). Packages in the NUP: {packages}. Dump the original '
+                         f'game and its update from the console again, without mods.')
 MAP = 'Banc/KokiriForest/KokiriForest_Child_Dynamic.bcett.byml.zs'
 RESTBL = 'System/Resource/ResourceSizeTable.Product.111.Nin_Ounce_NVN2.rsizetable.zs'
 CHESTS = {10831981390482426294: 'TBox_Rupee_Green', 4555665598794293658: 'TBox_Rupee_Blue',

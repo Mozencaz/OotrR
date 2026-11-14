@@ -23,6 +23,7 @@ from oot_rando.patching.qol_patches import (STATIC, STATIC_SOURCE_SHA256, DYNAMI
                          quick_small_chest, SMALL_CHEST_FLOW,
                          KOKIRI_SHOP_MAPS, KOKIRI_SHOP_PACKS, open_kokiri_shop,
                          release_kokiri_shop_goods, BOMB_LIFT_PACKS, free_bomb_lift,
+                         DC_BOULDER_MODULE, let_bombs_break_dc_boulder, SCRUB_FLOW, keep_one_scrub_good,
                          ACTION_GUIDE_FLOW, ocarina_guide_on_get,
                          SWORD_CHEST_FLOW, skip_kokiri_sword_cutscene,
                          NOCTURNAL_SKULLTULA_MAPS, nocturnal_skulltula_edits)
@@ -275,6 +276,10 @@ def compress_changed(extra_raw, files, growths, read, d):
     """Recompress edited resources into ``files``; ``growths`` records how much each one grew."""
     for path, raw in sorted(extra_raw.items()):
         source = read(path)
+        if not path.endswith('.zs'):       # stored uncompressed in the game (logic modules)
+            growths[path] = max(len(raw) - len(source), 0)
+            files[path] = raw
+            continue
         growths[path] = max(len(raw) - len(decompress(source, d)), 0)
         files[path] = recompress(raw, source, d)
 
@@ -425,6 +430,13 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
                     extra_raw[path], freed = patched, freed + count
             if not freed:
                 raise ValueError('Bomb lift parameter not found.')
+            # The bomb bag can come before the Goron Bracelet: Link's bombs break the
+            # Dodongo's Cavern boulder, not only the bomb flower (raw file, not compressed).
+            extra_raw[DC_BOULDER_MODULE], dc_boulder = let_bombs_break_dc_boulder(
+                extra_raw.get(DC_BOULDER_MODULE) or read(DC_BOULDER_MODULE))
+            # Items found in any order: a refill scrub may have no good Link can use yet.
+            extra_raw[SCRUB_FLOW], scrub_goods = keep_one_scrub_good(
+                extra_raw.get(SCRUB_FLOW) or decompress(read(SCRUB_FLOW), d))
             # The Fairy Ocarina can come before the Deku Tree: it gets the vanilla
             # ocarina guide (normally shown in Hyrule Field after the bridge) on item get.
             extra_raw[ACTION_GUIDE_FLOW], ocarina_guide = ocarina_guide_on_get(
@@ -472,6 +484,8 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
         skips = {}
         if settings.full is not None:
             skips['ocarina_guide'] = ocarina_guide
+            skips['dc_boulder_bombs'] = dc_boulder
+            skips['scrub_goods'] = scrub_goods
             if full.get('key_items'):
                 skips['key_items'] = {'records': full['key_items'], 'hook': key_hook}
             skips['sword_chest'] = sword_chest

@@ -353,7 +353,12 @@ def preset(name):
 
 
 def from_ap_yaml(text):
-    """Import the OoT section of an AP YAML. Returns (values, ignored_messages)."""
+    """Import the options of an AP YAML. Returns (values, ignored_messages).
+
+    Reads an ``OoT Remake`` YAML (game section ``OoT Remake``, application-only
+    options under ``OoT Remake application``) or an original Ocarina of Time one
+    (section ``Ocarina of Time``, remake extras under ``OoT Remake``).
+    """
     try:
         import yaml
     except ImportError as error:
@@ -361,16 +366,23 @@ def from_ap_yaml(text):
     document = yaml.safe_load(text)
     if not isinstance(document, dict):
         raise ValueError('Invalid Archipelago YAML.')
-    section = document.get('Ocarina of Time') or document.get('oot')
-    if not isinstance(section, dict):
-        raise ValueError('"Ocarina of Time" section missing from the YAML.')
+    original = document.get('Ocarina of Time') or document.get('oot')
+    remake = document.get(AP_GAME)
+    if isinstance(remake, dict) and (document.get('game') == AP_GAME or not isinstance(original, dict)):
+        section, extra = remake, document.get(AP_APP_SECTION)
+    elif isinstance(original, dict):
+        section, extra = original, remake
+    else:
+        raise ValueError(f'"{AP_GAME}" section missing from the YAML.')
     values, ignored = defaults(), []
-    extra = document.get('OoT Remake')
     items = list(section.items()) + (list(extra.items()) if isinstance(extra, dict) else [])
     for key, raw in items:
         if key == 'open_forest':
-            ignored.append('open_forest: set by "Open the way" in the setup')
+            if section is not remake:
+                ignored.append('open_forest: set by "Open the way" in the setup')
             continue
+        if raw == 'randomized' and key in BY_NAME and 'random' in BY_NAME[key].allowed():
+            raw = 'random'  # Archipelago's name of the remake's own random value
         if key == 'start_inventory':
             key = 'start_inventory_from_pool'
         if key not in BY_NAME:
@@ -421,25 +433,37 @@ REMAKE_ONLY = ('shuffle_chests', 'chest_matching', 'shuffle_remake_items', 'prog
                'shuffle_boss_rewards', 'shuffle_great_fairies', 'shuffle_quest_rewards')
 
 
-def to_ap_yaml(values, name='Player'):
-    lines = ['name: ' + name, 'game: Ocarina of Time', 'Ocarina of Time:']
+AP_GAME = 'OoT Remake'
+AP_APP_SECTION = 'OoT Remake application'
+
+
+def to_ap_yaml(values, name='Player', open_forest=True):
+    """Archipelago YAML of the ``OoT Remake`` game (the multiworld player YAML).
+
+    The options Archipelago does not take (or takes in another form) follow in an
+    ``OoT Remake application`` section, which Archipelago ignores and
+    :func:`from_ap_yaml` reads back, so the export round-trips exactly.
+    """
+    import json
+    from oot_rando.archipelago.bridge import ap_option_specs, player_yaml
+    values = validate(values, supported_only=True)
+    exposed = {spec['name'] for spec in ap_option_specs()} | {'start_inventory_from_pool'}
+    lines = [player_yaml(values, open_forest, name).rstrip('\n'),
+             '# Options of the OoT Randomizer application, ignored by Archipelago:',
+             AP_APP_SECTION + ':']
     for option in OPTIONS:
-        if option.name in REMAKE_ONLY:
+        if option.name in exposed:
             continue
         value = values[option.name]
         if option.name == 'logic_tricks':
-            value = '[]'
+            text = '[]' if value == 'none' else json.dumps(value)  # read back as a trick list
         elif option.kind == 'items':
-            import json
-            value = json.dumps(value, ensure_ascii=False)
+            text = json.dumps(value, ensure_ascii=False)
         elif isinstance(value, bool):
-            value = 'true' if value else 'false'
-        lines.append(f'  {option.name}: {value}')
-    lines.append('# Remake-only options, read by this application only:')
-    lines.append('OoT Remake:')
-    for name in REMAKE_ONLY:
-        value = values[name]
-        lines.append(f'  {name}: {str(value).lower() if isinstance(value, bool) else value}')
+            text = 'true' if value else 'false'
+        else:
+            text = json.dumps(value if isinstance(value, str) else str(value), ensure_ascii=False)
+        lines.append(f'  {option.name}: {text}')
     return '\n'.join(lines) + '\n'
 
 

@@ -71,6 +71,12 @@ def _playthrough_entry(text):
     return location, item_label(item)
 
 
+def _renamed(entry, renamed):
+    """Playthrough location shown under the name of its spoiler row."""
+    location, item = entry
+    return renamed.get(location, location), item
+
+
 def load_report(directory, extra_roots=()):
     """Return {'seed_id', 'seed', 'rows', 'playthrough', 'path'} or raise FileNotFoundError."""
     directory = Path(directory)
@@ -89,7 +95,7 @@ def load_report(directory, extra_roots=()):
     manifest = path.parent / 'manifest.json'
     if manifest.is_file():
         seed = json.loads(manifest.read_text(encoding='utf-8')).get('settings', {}).get('seed', '')
-    rows = []
+    rows, renamed = [], {}
     for placement in spoiler.get('placements', []):
         ident = str(placement.get('id', placement.get('hash', '')))
         check = catalogue.get(ident, {})
@@ -105,6 +111,8 @@ def load_report(directory, extra_roots=()):
             source = placement.get('source', '')
         aps = placement.get('ap_locations') or []
         name = check.get('name') or placement.get('location') or ident
+        if placement.get('location'):
+            renamed[placement['location']] = name
         rows.append({'id': ident, 'region': region, 'zone': zone, 'location': name,
                      'item': item, 'original': _original(placement.get('before', ''), zone),
                      'sphere': placement.get('sphere'), 'kind': KIND_LABELS.get(source, source or 'Chest'),
@@ -113,7 +121,7 @@ def load_report(directory, extra_roots=()):
     playthrough = []
     for sphere in spoiler.get('playthrough', []):
         playthrough.append({'sphere': sphere['sphere'],
-                            'items': [_playthrough_entry(text) for text in sphere.get('items', [])]})
+                            'items': [_renamed(_playthrough_entry(text), renamed) for text in sphere.get('items', [])]})
     return {'seed_id': spoiler.get('seed_id', ''), 'seed': seed, 'rows': rows,
             'playthrough': playthrough, 'path': str(path)}
 

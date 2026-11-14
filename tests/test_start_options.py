@@ -41,7 +41,8 @@ class OptionTests(unittest.TestCase):
         values = rando_options.validate({'start_inventory_from_pool': {'Hover Boots': 1, 'Bow': 2},
                                          'item_pool_value': 'scarce'})
         text = rando_options.to_ap_yaml(values)
-        self.assertIn('  item_pool_value: scarce', text.split('OoT Remake:')[0])
+        self.assertIn('game: OoT Remake', text)
+        self.assertIn("  item_pool_value: 'scarce'", text.split('OoT Remake application:')[0])
         imported, ignored = rando_options.from_ap_yaml(text)
         self.assertEqual(imported['start_inventory_from_pool'], {'Bow': 2, 'Hover Boots': 1})
         self.assertEqual(imported['item_pool_value'], 'scarce')

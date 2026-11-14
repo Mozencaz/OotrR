@@ -777,6 +777,7 @@ def _result(data, logic, options, matches, shuffled, placed, tiers, sphere_of, s
         spoiler.append({'id': gid, 'location': name, 'item': soul_label(item) if item.startswith('Soul (') else item,
                         'ap_item': item, 'actor': actor, 'before': entry['before'], 'source': source,
                         'sphere': sphere_of.get(vname(gid)), 'ap_locations': entry['ap']})
+    location_names = {row['id']: row['location'] for row in spoiler}
     playthrough = []
     for index, sphere in enumerate(spheres):
         names = []
@@ -785,7 +786,9 @@ def _result(data, logic, options, matches, shuffled, placed, tiers, sphere_of, s
                 gid = location[len('Remake|'):]
                 item = placed.get(gid)
                 if item and (item in logic.referenced | set(souls['items']) or item in logic.bundles):
-                    names.append(f'{shuffled[gid]["ap"][0] if shuffled[gid]["ap"] else gid} : {item}')
+                    # Same name as the spoiler row: an approximate entry's AP names are
+                    # only candidates (one pot name could stand for many pots).
+                    names.append(f'{location_names.get(gid, gid)} : {item}')
         if names:
             playthrough.append({'sphere': index, 'items': sorted(names)})
     checks = tracker_checks(data, matches, shuffled)

@@ -61,6 +61,9 @@ class RepeatableSourceTests(unittest.TestCase):
         self.assertEqual(first['Presence']['FlagName'], fallback['Presence']['FlagName'])
         self.assertTrue(first['Presence']['IsNegation'])
         self.assertFalse(fallback['Presence']['IsNegation'])
+        # Lazy: the vanilla source comes back on the next area load, not at once.
+        self.assertTrue(first['Presence']['IsCheckLazy'])
+        self.assertTrue(fallback['Presence']['IsCheckLazy'])
         self.assertEqual(plan['placements'][0]['reward_actor'], 'Obj_Rando_Item_BombBag_Small')
         self.assertNotIn('Presence', maps['map']['root']['Actors'][0])
 
@@ -72,6 +75,17 @@ class RepeatableSourceTests(unittest.TestCase):
         fallback = byml_codec.load(raw_maps['map'])['root']['Actors'][1]
         self.assertNotIn('Drop__DropActor', fallback['Dynamic'])
         self.assertEqual(fallback['Dynamic']['Drop__DropTable'], 'original-table')
+
+    def test_minor_rewards_use_the_short_get(self):
+        from oot_rando.patching.repeatable_adapter import LARGE_GET_TYPE, MEDIUM_GET_TYPE, get_type
+        from oot_rando.patching.soul_adapter import murmur3
+        self.assertEqual((LARGE_GET_TYPE, MEDIUM_GET_TYPE), (murmur3('Large'), murmur3('Medium')))
+        for actor in ('TBox_Rupee_Green', 'TBox_Rupee_Gold', 'TBox_ArrowBundle_Large', 'TBox_DekuNutBundle',
+                      'Item_BombBundle_Small', 'Item_DekuStickBundle_Small', 'Item_BombchuBundle_Small', 'Obj_Heart'):
+            self.assertEqual(get_type(actor), MEDIUM_GET_TYPE, actor)
+        for actor in ('Item_Hookshot', 'Obj_Heart_Piece', 'Obj_Heart_Container', 'Item_Token_Gold',
+                      'Item_Soul_Keese', 'TBox_Shield_Deku'):
+            self.assertEqual(get_type(actor), LARGE_GET_TYPE, actor)
 
     def test_native_once_pot_keeps_presence_without_a_second_source(self):
         presence = {'FlagName': 'IceCavern_Room07_RedRupeePot_IsCrushed', 'IsNegation': True, 'IsCheckLazy': True}

@@ -215,6 +215,14 @@ class Integration(unittest.TestCase):
                                             extra=self.extra)
             self.assertTrue(replay['beatable'])
             self.assertEqual(replay['unreachable'], [])
+            # The playthrough names each location as its spoiler row does (not an
+            # approximate entry's first AP candidate, such as one pot name for many pots).
+            rows = {row['id']: row['location'] for row in result['spoiler']}
+            shown = [text.rpartition(' : ')[0] for sphere in result['playthrough'] for text in sphere['items']]
+            self.assertTrue(shown)
+            self.assertTrue(set(shown) <= set(rows.values()), set(shown) - set(rows.values()))
+            approximate = {p['id'] for p in result['placements'] if p['kind'] != 'exact'}
+            self.assertTrue(any(rows[gid] in shown for gid in approximate))
             sources = Counter(p['source'] for p in result['placements'])
             for source in ('chest', 'skulltula', 'shop', 'freestanding', 'npc', 'pots'):
                 self.assertGreater(sources[source], 0, source)
