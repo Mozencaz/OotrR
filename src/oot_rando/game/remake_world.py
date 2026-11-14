@@ -162,8 +162,8 @@ ACTOR_ITEMS = {
 DUNGEON_ACTORS = {'Item_Dungeon_Map': 'Map', 'Item_Dungeon_Compass': 'Compass',
                   'Item_Dungeon_SmallKey': 'Small Key', 'Item_Dungeon_BossKey': 'Boss Key'}
 
-# Progressive families: remake actors in upgrade order. A copy whose source is
-# not shuffled keeps its native behaviour; see ``full_randomizer.family_tiers``.
+# Progressive families: remake actors in upgrade order. Every copy gives the level
+# above the one Link holds (``patching.progressive``).
 PROGRESSIVE = {
     'Progressive Hookshot': ['Item_Hookshot', 'Item_Longshot'],
     'Progressive Strength Upgrade': ['Item_Gauntlet_Goron', 'Item_Gauntlet_Silver', 'Item_Gauntlet_Gold'],
@@ -184,6 +184,11 @@ STATIC_TIER_SOURCES = {'GC Darunias Joy': ('Progressive Strength Upgrade', 0)}
 
 
 def actor_item(actor, folder):
+    if actor.startswith('Item_Prog_'):
+        from oot_rando.patching.progressive import token_family
+        family = token_family(actor)
+        if family:
+            return family
     if actor.startswith(('Item_KeyRing_', 'Item_BossKey_')):
         from oot_rando.patching.key_adapter import key_actor_item
         item = key_actor_item(actor)
@@ -200,7 +205,7 @@ def actor_item(actor, folder):
     return ACTOR_ITEMS.get(actor, 'Remake: ' + actor)
 
 
-def item_actor(item, folder, tier=None):
+def item_actor(item, folder):
     """Remake actor for an AP item placed in ``folder`` (dungeon items stay generic)."""
     from oot_rando.patching.ap_item import ap_actor, is_ap_item
     if is_ap_item(item):
@@ -218,10 +223,8 @@ def item_actor(item, folder, tier=None):
     if item.startswith('Soul ('):
         from oot_rando.patching.soul_adapter import soul_actor
         return soul_actor(item)
-    if item in PROGRESSIVE and tier is not None:
-        return PROGRESSIVE[item][tier]
     if item in PROGRESSIVE:
-        return PROGRESSIVE[item][0]
+        return PROGRESSIVE[item][0]   # its first level (forms the family's copies may take)
     candidates = [a for a, i in ACTOR_ITEMS.items() if i == item]
     if not candidates:
         raise ValueError('No remake actor for: ' + item)

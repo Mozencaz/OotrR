@@ -32,8 +32,8 @@ from oot_rando.game.resource_allocations import allocation, grow_resources, add_
 from oot_rando.formats.byml_writer import patch_strings
 from oot_rando.logic import rando_options
 
-GENERATOR_VERSION = '0.8.0'
-ADAPTER_VERSION = 'ap-glitchless-v4'   # v4: short key ring / boss key / regional soul actor names
+GENERATOR_VERSION = '0.9.0'
+ADAPTER_VERSION = 'ap-glitchless-v5'   # v5: progressive tokens (every copy gives the next level)
 ADULT_MAP = MAP.replace('_Child_', '_Adult_')
 STARTING_ITEMS = ('Item_BulletBag_Small', 'Item_Quiver_Small')
 
@@ -434,6 +434,11 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
                 from oot_rando.patching.key_adapter import add_key_hook
                 extra_raw[ACTION_GUIDE_FLOW], key_hook = add_key_hook(extra_raw[ACTION_GUIDE_FLOW],
                                                                       full['key_items'])
+            if full['progressive']['actors']:
+                # Progressive tokens: the next level, at the start of every item get.
+                from oot_rando.patching.progressive import add_converter
+                extra_raw[ACTION_GUIDE_FLOW], progressive_converter = add_converter(
+                    extra_raw[ACTION_GUIDE_FLOW], full['progressive']['actors'])
             # The Kokiri Sword chest no longer hands over (and equips) the sword
             # through its cutscene whatever it contains.
             extra_raw[SWORD_CHEST_FLOW], sword_chest = skip_kokiri_sword_cutscene(
@@ -474,6 +479,8 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
             skips['ocarina_guide'] = ocarina_guide
             if full.get('key_items'):
                 skips['key_items'] = {'records': full['key_items'], 'hook': key_hook}
+            if full['progressive']['actors']:
+                skips['progressive'] = {'converter': progressive_converter, 'hooks': full['progressive']['hooks']}
             skips['sword_chest'] = sword_chest
             if full.get('gift_get'):
                 skips['gift_get'] = full['gift_get']
@@ -686,7 +693,6 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
         plan = full_randomizer.plan_assigned(data, settings.full, groups, enemies, patch['seed_key'],
                                              bridge.assigned_items(patch), settings.open_forest, report,
                                              extra=extra, labels=bridge.foreign_labels(patch),
-                                             order=bridge.patch_spheres(patch),
                                              starting=patch.get('precollected', ()))
         plan['archipelago'] = {'starting': plan['starting'], 'seed_name': patch.get('seed_name'), 'slot_name': patch.get('slot_name'),
                                'player': patch.get('player'), 'location_ids': patch.get('location_ids', {}),
@@ -707,7 +713,9 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
                 row['reward_actor'] = row['actor']
                 row['actor'] = record['actor']
     changes, event_changes = defaultdict(list), defaultdict(list)
-    for placement in plan['placements']:
+    # Unshuffled sources of a fixed progressive level give a token too (full_randomizer.native_sources).
+    natives = plan['progressive']['natives']
+    for placement in plan['placements'] + natives:
         unchanged = placement['after'] == placement['before']
         for patch in placement['patches']:
             if 'after' in patch:      # own value (scrub price), whatever the item
@@ -724,11 +732,12 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
     for resource, edits in presence_changes(plan['souls']['edits'] + plan['souls'].get('door_edits', []),
                                             {path: maps[path]['root'] for path in maps}).items():
         changes[resource].extend(edits)
-    actors = {p['after'] for p in plan['placements']} - {p['before'] for p in plan['placements']}
+    actors = {p['after'] for p in plan['placements'] + natives} - {p['before'] for p in plan['placements']}
     from oot_rando.patching.key_adapter import is_key_actor as _is_key_actor
+    from oot_rando.patching.progressive import is_token
     for actor in sorted(actors):
         if (actor.startswith(('Item_Soul_', 'Item_AP_')) or is_derived(actor) or actor in repeatable_actors
-                or _is_key_actor(actor)):
+                or _is_key_actor(actor) or is_token(actor)):
             continue
         if 'Pack/Actor/' + actor + '.pack.zs' not in members:
             raise ValueError('Reward actor missing from the game: ' + actor)
@@ -785,6 +794,19 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
             ap_modified, ap_new = build_ap_files(ap_read, ap_items, messages)
             modified.update(ap_modified)
             new.update(ap_new)
+    tokens = sorted(set(plan['progressive']['tokens'].values()) | {n['token'] for n in natives})
+    plan['progressive']['actors'] = tokens
+    if tokens:
+        report(f'Building {len(tokens)} progressive items (next level once found)…')
+        from oot_rando.patching.progressive import build_token_files
+        messages = sorted(m for m in members if m.startswith('Mals/') and '.Product.110.' in m)
+
+        def token_read(path):
+            return modified[path] if path in modified else decompress(read(path), dictionaries_)
+
+        token_modified, token_new = build_token_files(token_read, tokens, messages)
+        modified.update(token_modified)
+        new.update(token_new)
     for resource, edits in sorted(event_changes.items()):
         report('Event: ' + resource.split('/')[-1])
         modified[resource] = patch_event_params(decompress(read(resource), dictionaries_), edits)
@@ -829,6 +851,22 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
         modified[target], given = give_gift_after(raw, spec['after'], bypass['actor'], bypass['flag'])
         plan['gift_get'][resource] = {'event': spec['event'], 'actor': bypass['actor'], 'flag': bypass['flag'],
                                       'flow': target, 'after': spec['after'], 'call': given['call']}
+    # Token gifts whose flow never reaches an item get convert their token themselves.
+    from oot_rando.patching.event_info import flow_name, flow_path
+    from oot_rando.patching.progressive import add_converter_calls, hook_sites
+
+    def current_flow(name):
+        path = flow_path(name)
+        if path in modified:
+            return modified[path]
+        return decompress(read(path), dictionaries_) if path in members else None
+
+    holders = [p for p in plan['placements'] if p['id'] in plan['progressive']['tokens']] + natives
+    token_sources = [[(patch['resource'], patch['event']) for patch in placement['patches'] if 'event' in patch]
+                     for placement in holders]
+    plan['progressive']['hooks'] = hook_sites(token_sources, current_flow, covered=plan['gift_get'])
+    for resource, events in sorted(plan['progressive']['hooks'].items()):
+        modified[resource] = add_converter_calls(current_flow(flow_name(resource)), events, flow_name(resource))
     if saved_flags:
         raw = modified.get(GAMEDATA)
         if raw is None:
@@ -841,7 +879,7 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
         if path in modified or path in new:
             raise ValueError('Shopkeeper pack already modified: ' + seller)
         modified[path], _ = limit_shop_stock(decompress(read(path), dictionaries_), slots)
-    derived = derived_actors(p['after'] for p in plan['placements'])
+    derived = derived_actors(p['after'] for p in plan['placements'] + natives)
     if derived or repeatables:
         report(f'Building {len(derived)} derived actors (freestanding and shop items)…')
         packs = {}

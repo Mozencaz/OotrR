@@ -74,13 +74,31 @@ def entry_calls(raw, entry):
     return _entry_walk(raw, entry)[0]
 
 
+def event_calls(raw, event):
+    """(flowchart, entry) of every external sub-flow reachable from the event named ``event`` (included)."""
+    return _entry_walk(raw, None, event)[0]
+
+
+def reachable(event):
+    """Events reachable from ``event`` (included) in its flowchart, without entering sub-flows."""
+    seen, stack, found = set(), [event], []
+    while stack:
+        current = stack.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        found.append(current)
+        stack.extend(_successors(current))
+    return found
+
+
 def entry_transitions(raw, entry):
     """``EventName`` of every ``EventTransition`` reachable from ``entry`` (same flowchart)."""
     return _entry_walk(raw, entry)[1]
 
 
-def _entry_walk(raw, entry):
-    """(external calls, transition events) reachable from ``entry``."""
+def _entry_walk(raw, entry, start=None):
+    """(external calls, transition events) reachable from ``entry`` (or from the event named ``start``)."""
     from evfl.event import ActionEvent, SubFlowEvent
     chart = _chart(raw) if raw is not None else None
     if chart is None:
@@ -88,7 +106,7 @@ def _entry_walk(raw, entry):
     entries = {e.name: e for e in chart.entry_points}
     calls, transitions, seen_entries, seen = set(), set(), set(), set()
     stack = [entries[entry]] if entry in entries else []
-    events = []
+    events = [e for e in chart.events if e.name == start] if start is not None else []
     while stack or events:
         if events:
             event = events.pop()
