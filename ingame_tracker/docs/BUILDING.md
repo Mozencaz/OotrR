@@ -7,7 +7,7 @@
 ```
 make            # bin/subsdk7
 make dist       # dist/emulator/load/0400486024DEC000/ootrTracker/exefs/subsdk7, dist/atmosphere/contents/0400486024DEC000/exefs/subsdk7
-make test       # the PC tests: the seed file's parser, the tracker, the game-data reader, the controls
+make test       # the PC tests: the seed file's parser, the tracker, the game-data reader, the controls, the browsing
 make clean
 ```
 
@@ -26,10 +26,13 @@ commit it, then run `make ship` (it builds, copies the binary there and prints i
 with the commit that holds the change and the printed values, and commit them (the application's tests check the checksum).
 
 The build embeds `PACKAGE_VERSION`, by default the version in `VERSION` and `git describe` of the repository (it appears in the log's
-`loaded ...` line). The shipped 0.1.0 binary was built with `make PACKAGE_VERSION="0.1.0 (565cb4e)"` in the module's earlier
-standalone checkout (`/c/dev/ootr-ingame-tracker`). Built from another folder with the same flag, its code and data are the same but
-its build id is not, because the build id hashes the debug information and that names the source folder. So the sha256 and the size
-(by a byte or so, from the compression) differ too.
+`loaded ...` line). The build id hashes the debug information, which records the folder the module was built in, so the Makefile maps
+that folder to `.` (`-ffile-prefix-map`; devkitPro's MSYS2 records the Windows form of it, `pwd -W`). With the same `PACKAGE_VERSION`
+and the same devkitA64, a build from any folder is byte for byte the same (checked for 0.2.0 from a second folder). A folder whose path
+has a space doesn't build (make splits it).
+
+The 0.1.0 binary, built before that, came from the module's earlier standalone checkout (`/c/dev/ootr-ingame-tracker`) with
+`make PACKAGE_VERSION="0.1.0 (565cb4e)"`; built from this folder it had the same code and data and another build id.
 
 ## Checking a build loads
 
@@ -38,7 +41,7 @@ In the emulator's log, at boot:
 ```
 ootrTracker: game build:
 ootrTracker: 1.1.1
-ootrTracker: loaded 0.1.0 (...); controller hooks go in at the game's first controller setup
+ootrTracker: loaded 0.2.0 (...); controller hooks go in at the game's first controller setup
 ootrTracker: GetNpadStates style 0 hooked from InitializeNpad: calls the sdk at 0x...
 ...
 ootrTracker: counting frames from reads of controller style 0, NpadIdType 0x0
