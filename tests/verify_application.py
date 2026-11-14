@@ -14,7 +14,7 @@ from oot_rando.randomizer.randomizer_core import Settings, generate, placements_
 from oot_rando.randomizer.randomizer_services import read_artifact, ManualTracker
 from oot_rando.patching.randomize_kokiri import MAP, RESTBL, CHESTS
 from oot_rando.tracker.ingame_bundle import SEED_FILE
-from oot_rando.patching.qol_patches import (STATIC, INTRO, PHYSICS, EVENT_SETTINGS, LOCKED_CUTSCENES, list_path,
+from oot_rando.patching.qol_patches import (STATIC, INTRO, PHYSICS, MIDO_SCHEDULE, EVENT_SETTINGS, LOCKED_CUTSCENES, list_path,
                          AREA_PRESENTATIONS, flow_path)
 
 
@@ -37,7 +37,7 @@ def verify(nup_path):
             expected_files = {MAP, ADULT_MAP, RESTBL, 'GameData/GameDataList.Product.110.byml.zs',
                               'Event/EventFlow/OpeningEvent.bfevfl.zs', SEED_FILE}
             if values[0]:
-                expected_files |= {STATIC, PHYSICS}
+                expected_files |= {STATIC, PHYSICS, MIDO_SCHEDULE}
             if values[1]:
                 expected_files |= {INTRO} | {list_path(name) for name in LOCKED_CUTSCENES} | {
                     flow_path(name) for name in AREA_PRESENTATIONS}

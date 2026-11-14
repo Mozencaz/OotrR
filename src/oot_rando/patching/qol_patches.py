@@ -30,8 +30,10 @@ import hashlib
 import io
 import struct
 
+from oot_rando.formats import byml_codec
 from oot_rando.formats.inspect_resources import Byml
 from oot_rando.patching.randomize_kokiri import slot
+from oot_rando.patching.soul_adapter import murmur3
 
 INTRO = 'Event/EventSetting/EventSettingComponentList/Dm_Kokiri_0000.engine__event__EventSettingComponentList.bgyml'
 INTRO_PARENT = 'Event/EventSetting/EventSettingComponentList/RecordMovieTimelineEvent.engine__event__EventSettingComponentList.bgyml'
@@ -221,6 +223,53 @@ def patch_baked_wall(raw):
                      'fixed_index':base,'instance_index':instance_index,'instance_offset':hex(INSTANCE_OFFSET),
                      'changed_byte_offsets':[hex(i) for i in sorted(actual)],'source_sha256':sha256(raw),
                      'decompressed_size_changed':False}
+
+
+MIDO_SCHEDULE = 'Component/AIScheduleParam/Npc_Kokiri_Mido_Child.game__component__AIScheduleParam.bgyml'
+MIDO_WALL_FLAG = 'KokiriForest_Npc_Kokiri_Mido_Child_Blocker'
+# Mido's schedules for his spot by the Deku Tree (AnchorAction4, past his wall)
+# → the expression that also needs his wall down.
+MIDO_PAST_WALL = {'Get_StoneOfForest_Complete_Mido_TalkEnd': 'Rando_Mido_TalkEnd_WallDown_Exp',
+                  'Goto_HyruleCastle_IsCompleted_Exp': 'Rando_Mido_HyruleCastle_WallDown_Exp'}
+# BoolExp program: [code, operand] steps on a stack, as in the vanilla
+# DoorOfTime_IsAfterStep03_AND_SageOfForest_NotCompleted_Exp = [10, A], [10, B], [5], [3].
+EXP_PUSH = {'Bool': 0, 'BoolExp': 10}
+EXP_AND, EXP_NOT = 3, 5
+
+
+def keep_mido_at_his_wall(schedule_raw, gamedata_raw):
+    """Mido goes to his spot past his wall only once the wall is down.
+
+    With the forest exit open, the Hyrule Castle quest can end before the Deku
+    Tree: its schedule moved Mido past the wall while it still stood, and the
+    talks that lower it play only at the entrance.
+    Returns the new schedule and GameData resources."""
+    schedule = byml_codec.load(schedule_raw)
+    entries = [e for e in schedule['root']['ConditionalSchedule'] if e.get('ConditionFlag') in MIDO_PAST_WALL]
+    if sorted(e['ConditionFlag'] for e in entries) != sorted(MIDO_PAST_WALL):
+        raise ValueError('Unexpected Mido schedules')
+    for entry in entries:
+        entry['ConditionFlag'] = MIDO_PAST_WALL[entry['ConditionFlag']]
+    document = byml_codec.load(gamedata_raw)
+    data = document['root']['Data']
+    kinds = {int(e['Hash']): kind for kind, rows in data.items() for e in rows if 'Hash' in e}
+    if kinds.get(murmur3(MIDO_WALL_FLAG)) != 'Bool':
+        raise ValueError("Mido's wall flag not found")
+    # Row settings of a computed expression, from one of those being wrapped.
+    template = next(e for e in data['BoolExp'] if e['Hash'] == murmur3('Goto_HyruleCastle_IsCompleted_Exp'))
+    for condition, name in sorted(MIDO_PAST_WALL.items()):
+        if murmur3(name) in kinds:
+            raise ValueError('Expression collision: ' + name)
+        kind = kinds.get(murmur3(condition))
+        if kind not in EXP_PUSH:
+            raise ValueError('Unexpected Mido schedule condition: ' + condition)
+        steps = [(EXP_PUSH[kind], murmur3(condition)), (EXP_PUSH['Bool'], murmur3(MIDO_WALL_FLAG)),
+                 (EXP_NOT,), (EXP_AND,)]
+        row = copy.deepcopy(template)
+        row.update(Hash=byml_codec.U32(murmur3(name)), Values=[[byml_codec.U64(v) for v in step] for step in steps])
+        data['BoolExp'].append(row)
+        kinds[murmur3(name)] = 'BoolExp'
+    return byml_codec.dump(schedule), byml_codec.dump(document)
 
 
 # ---------------------------------------------------------------- skips
