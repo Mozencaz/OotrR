@@ -829,8 +829,13 @@ def tracker_checks(data, matches, shuffled):
             covered.update(entry['ap'])
         label = SOURCE_LABELS.get(source, source)
         zone = _entry_zone(data, entry, gid)
-        name = entry['ap'][0] if entry['kind'] == 'exact' and entry['ap'] else (
-            f'{zone_label(zone)} {label} {str(entry["hash"])[-6:]}' if entry.get('hash') else gid)
+        if entry['kind'] == 'exact' and entry['ap']:
+            name = entry['ap'][0]
+        else:
+            name = f'{zone_label(zone)} {label} {str(entry["hash"])[-6:]}' if entry.get('hash') else gid
+            age = source_age(entry['variants'])
+            if age:
+                name += f' ({age})'   # only on that age's maps
         checks.append({'id': gid, 'zone': zone, 'region': zone_label(zone),
                        'category': 'full_' + ('chests' if source == 'chest' else source), 'name': name,
                        'randomized': gid in shuffled, 'repeatable': source in REPEATABLE,

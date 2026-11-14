@@ -6,7 +6,7 @@ import unittest
 from oot_rando.game.extra_sources import scan_map_sources
 from oot_rando.logic import rando_options
 from oot_rando.logic.world import World
-from oot_rando.randomizer.full_randomizer import prepare, vname
+from oot_rando.randomizer.full_randomizer import prepare, tracker_checks, vname
 
 KF = 'Banc/KokiriForest/KokiriForest_{}_Static.bcett.byml.zs'
 HF = 'Banc/HyruleField/HyruleField_{}_Static.bcett.byml.zs'
@@ -79,6 +79,13 @@ class MapAgeTests(unittest.TestCase):
                 counts = {item: n for item, n in STONES.items() if item != missing}
                 self.assertNotIn(KF_ADULT, self.collected(counts))
                 self.assertIn(KF_CHILD, self.collected(counts))
+
+    def test_tracker_names_show_the_age(self):
+        names = {c['id']: c['name'] for c in tracker_checks(self.data, self.c.matches, self.c.shuffled)}
+        self.assertEqual(names[KF_CHILD], 'Kokiri Forest rock 1 (child)')
+        self.assertEqual(names[KF_ADULT], 'Kokiri Forest rock 2 (adult)')
+        self.assertEqual(names[KF_BOTH], 'Kokiri Forest rock 3')
+        self.assertEqual(names[HF_ADULT], 'Hyrule Field rock 5 (adult)')
 
 
 if __name__ == '__main__':
