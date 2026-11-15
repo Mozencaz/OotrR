@@ -255,7 +255,11 @@ class ArchipelagoClient:
         secure = self.urls[0].startswith('wss://')
         try:
             self._set_status('Connecting to ' + self.urls[0] + '...')
-            socket = connect(self.urls[0], max_size=MAX_MESSAGE, open_timeout=10)
+            options = {}
+            if secure:
+                from oot_rando.updater import tls_context
+                options['ssl'] = tls_context()
+            socket = connect(self.urls[0], max_size=MAX_MESSAGE, open_timeout=10, **options)
             self.encrypted = secure
             return socket
         except Exception as error:  # noqa: BLE001 - the plain fallback, if any, decides

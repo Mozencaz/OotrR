@@ -117,7 +117,8 @@ def can_self_update():
     return FROZEN and asset_suffix() is not None and public_key() is not None
 
 
-def _context():
+def tls_context():
+    """TLS context that also finds the distribution's certificates from a frozen Linux build."""
     context = ssl.create_default_context()
     if not context.get_ca_certs() and sys.platform.startswith('linux'):
         # A bundled OpenSSL may look for certificates where this distribution keeps none.
@@ -131,7 +132,7 @@ def _context():
 def _get(url, timeout, accept='application/octet-stream', limit=MAX_ARCHIVE):
     request = urllib.request.Request(url, headers={'User-Agent': USER_AGENT, 'Accept': accept})
     try:
-        with urllib.request.urlopen(request, timeout=timeout, context=_context()) as response:
+        with urllib.request.urlopen(request, timeout=timeout, context=tls_context()) as response:
             data = response.read(limit + 1)
     except OSError as error:   # URLError, timeouts, SSL errors
         raise UpdateError(f'Cannot reach GitHub: {getattr(error, "reason", error)}') from None
