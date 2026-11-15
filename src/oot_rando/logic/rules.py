@@ -167,9 +167,8 @@ class Logic:
         for item in data.item_table:
             names[escape_name(item)] = item
         remake = getattr(data, 'remake', None) or {}
-        # Remake-only events ({region: {event: rule}}) and the event the night needs.
+        # Remake-only events ({region: {event: rule}}).
         self.remake_events = remake.get('events') or {}
-        self.night_requires = remake.get('night_requires')
         events = set()
         for region in data.regions:
             for event in region.get('events', {}):
@@ -378,10 +377,6 @@ class Logic:
             }
             if node.id == 'at_night' and self._night_needs_song:
                 special['at_night'] = "(c.get('Ocarina',0)>=1 and c.get('Suns Song',0)>=1)"
-            if self.night_requires and node.id in ('at_night', 'at_dampe_time'):
-                # The remake holds the clock at 15:00 until this event (no night before).
-                special[node.id] = f"({special[node.id]} and c.get({self.night_requires!r},0)>=1)"
-                self.referenced.add(self.night_requires)
             if node.id in special:
                 if node.id.startswith('at_'):
                     self.referenced.update(('Ocarina', 'Suns Song'))

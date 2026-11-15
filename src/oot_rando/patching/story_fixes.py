@@ -107,25 +107,30 @@ class _Chart:
         self.expected[name] = dict(params)
         return event
 
-    def switch(self, name, query, params, true, false):
+    def switch(self, name, query, params, true, false, actor='GameDataActor'):
         from evfl.event import SwitchEvent
         from evfl.util import make_index, make_rindex
-        gamedata = self.actor('GameDataActor')
+        owner = self.actor(actor)
         data = SwitchEvent()
-        data.actor = make_rindex(gamedata)
-        data.actor_query = make_rindex(self.holder(gamedata.queries, query))
-        data.cases = {0: make_index(true), 1: make_index(false)}
+        data.actor = make_rindex(owner)
+        data.actor_query = make_rindex(self.holder(owner.queries, query))
+        # A case that ends the flow is left out (as the vanilla switches do).
+        data.cases = {key: make_index(target) for key, target in ((0, true), (1, false)) if target is not None}
+        return self._add(name, data, params)
+
+    def action(self, name, actor, act, params, following):
+        from evfl.event import ActionEvent
+        from evfl.util import make_index, make_rindex
+        owner = self.actor(actor)
+        data = ActionEvent()
+        data.actor = make_rindex(owner)
+        data.actor_action = make_rindex(self.holder(owner.actions, act))
+        data.nxt = make_index(following)
         return self._add(name, data, params)
 
     def set_bool(self, name, flag, value, following):
-        from evfl.event import ActionEvent
-        from evfl.util import make_index, make_rindex
-        gamedata = self.actor('GameDataActor')
-        data = ActionEvent()
-        data.actor = make_rindex(gamedata)
-        data.actor_action = make_rindex(self.holder(gamedata.actions, 'EventTriggerSetGameDataBool'))
-        data.nxt = make_index(following)
-        return self._add(name, data, {'GameDataName': flag, 'Value': value, 'Index': -1})
+        return self.action(name, 'GameDataActor', 'EventTriggerSetGameDataBool',
+                           {'GameDataName': flag, 'Value': value, 'Index': -1}, following)
 
     def write(self):
         stream = io.BytesIO()
@@ -262,9 +267,118 @@ def sheik_presence_edits(root):
 SHEIK_PRESENCE_ENTRY = {'FlagName': SHEIK_PRESENCE, 'IsCheckLazy': False, 'IsNegation': False}
 
 
+# --- Zelda's escape (DoorOfTime) on the three stones ---------------------------
+# ``DoorOfTime/DoorOfTime_CheckStoneNum`` runs only at the end of Dodongo's Cavern and
+# Jabu-Jabu's Belly and reads both dungeon *quests*: with the stones found elsewhere,
+# Zelda never fled (15/11, Discord report). Its Step03 branch moves DoorOfTime to
+# ``Step03``, raises the Hyrule Field drawbridge (``IsHyruleFieldBridgeClose``) and
+# sets ``DoorOfTime_GetStoneCount`` to 0; the drawbridge area then starts
+# ``HyruleField_DoorOfTime_Escape`` (Step04), then the moat ``..._GetOcarinaOfTime``.
+# The same branch now also runs on the three stones held, checked at every item get
+# (``ActionGuide/ActionGuide``) and at the end of Impa's send-off, once DoorOfTime is
+# past ``Step01`` (send-off done) and not past ``Step2_2`` (before Step03; ``IsAfter``
+# is strict, as Darunia's vanilla gift shows). The native check is skipped once Step03
+# is reached, so a later dungeon end never moves it back (vanilla never runs it there).
+# The send-off moves Get_StoneOfFire to ``KakarikoVillageNpc``: now only while that
+# quest has not started (vanilla order), so Dodongo's Cavern done first stays done.
+DOOR_FLOW = 'Event/EventFlow/DoorOfTime.bfevfl.zs'
+ACTION_GUIDE_FLOW = 'Event/EventFlow/ActionGuide.bfevfl.zs'
+STONES = ('Item_Stone_Forest', 'Item_Stone_Fire', 'Item_Stone_Water')
+DOOR_STARTED = 'DoorOfTime_IsAfter_Step01_Exp'
+DOOR_BEFORE_ESCAPE = 'DoorOfTime_IsAfter_Step2_2_Exp'
+BRIDGE_CLOSED = 'IsHyruleFieldBridgeClose'
+FIRE_QUEST_STARTED = 'Get_StoneOfFire_IsAfter_Ready_Exp'
+
+
+def _stone_check(flow, prefix, following):
+    """Events: DoorOfTime to Step03 when started, before Step03, and the stones held."""
+    from evfl.util import make_index
+    step = flow.action(prefix + 'Step03', 'ChallengeSystemActor', 'EventExecuteProgressChallengeStep',
+                       {'IsIgnoreCompletedChallenge': False, 'IsIgnoreChallengeProgressUI': False,
+                        'ChallengeName': 'DoorOfTime', 'StepName': 'Step03'}, None)
+    bridge = flow.set_bool(prefix + 'Bridge', BRIDGE_CLOSED, True, None)
+    count = flow.action(prefix + 'Count', 'GameDataActor', 'EventTriggerSetGameDataInt',
+                        {'GameDataName': 'DoorOfTime_GetStoneCount', 'Value': 0, 'Index': -1}, following)
+    step.data.nxt, bridge.data.nxt = make_index(bridge), make_index(count)
+    check = step
+    for index, stone in reversed(list(enumerate(STONES))):
+        check = flow.switch(f'{prefix}Stone{index}', 'EventQueryIsExistInPouch', {'Actor': stone, 'Num': 1},
+                            check, following, actor='PouchSystemActor')
+    before = flow.switch(prefix + 'BeforeEscape', 'EventQueryIsGameDataBoolExp',
+                         {'GameDataName': DOOR_BEFORE_ESCAPE}, following, check)
+    return flow.switch(prefix + 'Started', 'EventQueryIsGameDataBoolExp',
+                       {'GameDataName': DOOR_STARTED}, before, following)
+
+
+def zelda_escape_on_item_get(raw):
+    """``ActionGuide/ActionGuide``: the stone check first, at every item get. Returns (bytes, report)."""
+    from evfl.util import make_index
+    flow = _Chart(raw)
+    entry = {e.name: e for e in flow.chart.entry_points}.get('ActionGuide')
+    if entry is None or entry.main_event.v is None:
+        raise ValueError('Unexpected ActionGuide flow.')
+    first = entry.main_event.v
+    entry.main_event = make_index(_stone_check(flow, 'RandoDoorStones', first))
+    result, events = flow.write()
+    start = {e.name: e for e in _flow(result).flowchart.entry_points}['ActionGuide'].main_event.v
+    if start.name != 'RandoDoorStonesStarted' or events['RandoDoorStonesCount'].data.nxt.v.name != first.name:
+        raise ValueError('Stone check wrongly chained in ActionGuide.')
+    return result, {'flow': ACTION_GUIDE_FLOW, 'start': start.name, 'stones': list(STONES)}
+
+
+def zelda_escape_door_flow(raw):
+    """``DoorOfTime``: stone check after the send-off, native check never backwards.
+
+    Returns (bytes, report)."""
+    from evfl.util import make_index
+    from oot_rando.patching.qol_patches import _predecessors
+    flow = _Chart(raw)
+    entries = {e.name: e for e in flow.chart.entry_points}
+    native = entries.get('DoorOfTime_CheckStoneNum')
+    if native is None or native.main_event.v is None or native.main_event.v.name != 'Event38':
+        raise ValueError('Unexpected DoorOfTime stone check.')
+    guard = flow.switch('RandoDoorCheckForward', 'EventQueryIsGameDataBoolExp',
+                        {'GameDataName': DOOR_BEFORE_ESCAPE}, None, native.main_event.v)
+    native.main_event = make_index(guard)
+    # Send-off: Step02 (Event7), then Get_StoneOfFire KakarikoVillageNpc (Event62), end.
+    step02, fire = flow.event('Event7', 'ActionEvent'), flow.event('Event62', 'ActionEvent')
+    if (_params(step02).get('StepName') != 'Step02' or step02.data.nxt.v is not fire
+            or _params(fire).get('StepName') != 'KakarikoVillageNpc'
+            or getattr(fire.data.nxt, 'v', None) is not None or len(_predecessors(flow.chart, fire)) != 1):
+        raise ValueError('Unexpected Impa send-off end.')
+    stones = _stone_check(flow, 'RandoSendOffStones', None)
+    fire.data.nxt = make_index(stones)
+    started = flow.switch('RandoFireQuestStarted', 'EventQueryIsGameDataBoolExp',
+                          {'GameDataName': FIRE_QUEST_STARTED}, stones, fire)
+    step02.data.nxt = make_index(started)
+    result, events = flow.write()
+    if (events['Event7'].data.nxt.v.name != 'RandoFireQuestStarted'
+            or events['Event62'].data.nxt.v.name != 'RandoSendOffStonesStarted'
+            or events['RandoDoorCheckForward'].data.cases[1].v.name != 'Event38'):
+        raise ValueError('DoorOfTime stone checks wrongly chained.')
+    return result, {'flow': DOOR_FLOW, 'native_guard': 'RandoDoorCheckForward', 'send_off': 'RandoSendOffStones'}
+
+
+# --- The clock before Zelda ------------------------------------------------------
+# Until Impa's send-off (``HavePlayedEvent.Dm_HrlField_0020``) the remake holds the
+# Hyrule Field clock at 15:00 (issue #40; native code, not in the game data): no night,
+# so no night-only skulltulas, Dampé... before Zelda. The flag is now set at the end of
+# the new-game opening: the clock runs from the start. The send-off itself still plays
+# (Impa's talk starts it with a map change, not on this flag); the flag is otherwise
+# read only by two child NPCs' lines (Npc_Hylia_043_Child, Npc_Hylia_Soldier_008_Child)
+# and by the Zora River owl (Dm_ZoraRiver_0005, which also needs Saria's Song).
+CLOCK_FLAG = 'HavePlayedEvent.Dm_HrlField_0020'
+
+
+def story_start_values():
+    """GameData values written at the end of the new-game opening (full mode)."""
+    return {CLOCK_FLAG: True}
+
+
 FLOW_FIXES = (
     (FIRE_STONE_FLOW, 'darunia_gift', darunia_gift_after_dungeon),
     (DARUNIA_GIFT_FLOW, 'fire_quest_forward', keep_fire_quest_forward),
     (EPONA_FLOW, 'second_malon', second_malon_after_talon),
     (BOWLING_FLOW, 'bombchu_bowling', open_bombchu_bowling),
+    (DOOR_FLOW, 'zelda_escape', zelda_escape_door_flow),
 )

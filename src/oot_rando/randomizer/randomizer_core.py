@@ -466,6 +466,11 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
             raw_maps[story_fixes.TEMPLE_MAP] = patch_strings(temple, sheik_edits)
             story['sheik'] = {'map': story_fixes.TEMPLE_MAP, 'actor': sheik_edits[0]['path'][1],
                               'presence': story_fixes.SHEIK_PRESENCE}
+            # Zelda's escape on the three stones, checked at every item get.
+            extra_raw[ACTION_GUIDE_FLOW], story['zelda_escape_item_get'] = story_fixes.zelda_escape_on_item_get(
+                extra_raw[ACTION_GUIDE_FLOW])
+            # The clock runs before Zelda (Impa's send-off flag set at the start).
+            story['clock'] = story_fixes.CLOCK_FLAG
         gamedata_source = extra_raw.get(GAMEDATA)
         if gamedata_source is None:
             gamedata_source = decompress(read(GAMEDATA), d)
@@ -493,7 +498,7 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
             # Maps/compasses "start with", keys "removed": dungeon data written at the start.
             from oot_rando.patching.event_patch import add_start_values
             from oot_rando.patching.key_adapter import start_dungeon_values, check_start_values
-            start_values = start_dungeon_values(settings.full)
+            start_values = dict(start_dungeon_values(settings.full), **story_fixes.story_start_values())
             if start_values:
                 check_start_values(extra_raw[GAMEDATA], start_values)
                 extra_raw[opening] = add_start_values(extra_raw[opening], 'RandoCollected_Event3', start_values)

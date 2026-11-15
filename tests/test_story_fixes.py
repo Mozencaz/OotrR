@@ -106,14 +106,49 @@ class GameFlows(unittest.TestCase):
         self.assertEqual(len(sheik), 1)
         self.assertEqual(sheik[0]['Presence'], s.SHEIK_PRESENCE_ENTRY)
 
+    def test_zelda_escape_on_stones_at_item_get(self):
+        from oot_rando.patching.qol_patches import ocarina_guide_on_get
+        source = ocarina_guide_on_get(self.read(s.ACTION_GUIDE_FLOW))[0]
+        raw, _ = s.zelda_escape_on_item_get(source)
+        events = self.chart(raw)
+        started = events['RandoDoorStonesStarted'].data
+        self.assertEqual(started.params.data, {'GameDataName': s.DOOR_STARTED})
+        before = started.cases[0].v.data                       # send-off done...
+        self.assertEqual(before.params.data, {'GameDataName': s.DOOR_BEFORE_ESCAPE})
+        check, held = before.cases[1].v, []                    # ...and Step03 not reached
+        while check.name.startswith('RandoDoorStonesStone'):
+            held.append(check.data.params.data['Actor'])
+            check = check.data.cases[0].v
+        self.assertEqual(held, list(s.STONES))
+        self.assertEqual(check.data.params.data['StepName'], 'Step03')
+        bridge = check.data.nxt.v
+        self.assertEqual(bridge.data.params.data, {'GameDataName': s.BRIDGE_CLOSED, 'Value': True, 'Index': -1})
+        self.assertEqual(bridge.data.nxt.v.data.nxt.v.name, 'RandoOcarinaHeld')   # then the vanilla get
+        self.check_kept(source, raw)
+
+    def test_door_flow_send_off_and_native_check(self):
+        source = self.read(s.DOOR_FLOW)
+        raw, _ = s.zelda_escape_door_flow(source)
+        events = self.chart(raw)
+        guard = events['RandoDoorCheckForward'].data
+        self.assertEqual(set(guard.cases), {1})                # Step03 reached: nothing
+        self.assertEqual(guard.cases[1].v.name, 'Event38')     # else the native dungeon check
+        started = events['Event7'].data.nxt.v.data             # after Step02 of the send-off
+        self.assertEqual(started.params.data, {'GameDataName': s.FIRE_QUEST_STARTED})
+        self.assertEqual(started.cases[1].v.name, 'Event62')   # fire quest moved only if not started
+        self.assertEqual(started.cases[0].v.name, 'RandoSendOffStonesStarted')
+        self.assertEqual(events['Event62'].data.nxt.v.name, 'RandoSendOffStonesStarted')
+        self.check_kept(source, raw)
+
     def test_flags_exist_in_the_game_data(self):
         from oot_rando.patching.soul_adapter import GAMEDATA, murmur3
         data = Byml(self.read(GAMEDATA)).root['Data']
         bools = {e['Hash'] for e in data['Bool']}
         exps = {e['Hash'] for e in data['BoolExp']}
-        for name in (s.DARUNIA_GIFT_PLAYED, s.TALON_AWAKE, s.SECOND_MALON):
+        for name in (s.DARUNIA_GIFT_PLAYED, s.TALON_AWAKE, s.SECOND_MALON, s.BRIDGE_CLOSED, s.CLOCK_FLAG):
             self.assertIn(murmur3(name), bools, name)
-        for name in (s.AFTER_SARIA_PLAY, s.SHEIK_PRESENCE):
+        for name in (s.AFTER_SARIA_PLAY, s.SHEIK_PRESENCE, s.DOOR_STARTED, s.DOOR_BEFORE_ESCAPE,
+                     s.FIRE_QUEST_STARTED):
             self.assertIn(murmur3(name), exps, name)
 
 

@@ -17,8 +17,8 @@ HF_CHILD, HF_ADULT = 'HyruleField#rocks#4', 'HyruleField#rocks#5'
 # The Door of Time opens with the Song of Time, which (with the Ocarina of Time) the child
 # gets in Hyrule Field for the three spiritual stones: vanilla songs and ocarinas.
 STONES = {'Kokiri Emerald': 1, 'Goron Ruby': 1, 'Zora Sapphire': 1}
-# Remake: the Door of Time also waits for Zelda and both dungeon quests (DoorOfTime).
-DOOR_EVENTS = {'Met Zelda': 1, 'Dodongos Cavern Clear': 1, 'Jabu Jabus Belly Clear': 1}
+# Remake: the Door of Time also waits for Zelda (DoorOfTime starts after her).
+DOOR_EVENTS = {'Met Zelda': 1}
 
 
 def rock(ident, position=VILLAGE):

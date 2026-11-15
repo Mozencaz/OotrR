@@ -38,7 +38,7 @@ class LogicTests(unittest.TestCase):
     def test_night_tokens_need_suns_song_when_asked(self):
         class Night:
             tod = {'adult': True, 'child': True}
-        hookshot = {'Progressive Hookshot': 1, 'Met Zelda': 1}
+        hookshot = {'Progressive Hookshot': 1}
         song = dict(hookshot, **{'Ocarina': 1, 'Suns Song': 1})
         relaxed = dict(self.logic.location_rules)['SFM GS'][0][1]
         self.assertTrue(relaxed(Night, hookshot, 'adult'))
@@ -51,28 +51,20 @@ class LogicTests(unittest.TestCase):
         self.assertIs(dict(strict.location_rules)['Kak Anju as Adult'][0][1](Night, {}, 'adult'),
                       dict(self.logic.location_rules)['Kak Anju as Adult'][0][1](Night, {}, 'adult'))
 
-    def test_no_night_before_zelda(self):
-        # Remake: the clock stays at 15:00 until Impa's send-off after Zelda.
-        class Night:
-            tod = {'adult': True, 'child': True}
-        rule = dict(self.logic.location_rules)['SFM GS'][0][1]
-        hookshot = {'Progressive Hookshot': 1}
-        self.assertFalse(rule(Night, hookshot, 'adult'))
-        self.assertFalse(rule(Night, dict(hookshot, **{'Ocarina': 1, 'Suns Song': 1}), 'adult'))
-        self.assertTrue(rule(Night, dict(hookshot, **{'Met Zelda': 1}), 'adult'))
-
-    def test_song_of_time_and_door_wait_for_both_dungeons(self):
-        # Zelda's escape and the Door of Time follow Dodongo's Cavern and Jabu-Jabu.
+    def test_song_of_time_and_door_wait_for_zelda_and_stones(self):
+        # Zelda's escape and the Door of Time (DoorOfTime) follow Zelda and the
+        # three stones (the game checks the stones held: patching/story_fixes.py).
         for location in ('Song from Ocarina of Time', 'Master Sword Pedestal'):
             rule = self.data.remake['location_rules'][location]
-            for event in ('Met Zelda', 'Dodongos Cavern Clear', 'Jabu Jabus Belly Clear'):
-                self.assertIn(repr(event), rule, location)
+            self.assertIn("'Met Zelda'", rule, location)
+            self.assertIn('has_all_stones', rule, location)
+            self.assertNotIn('Clear', rule, location)
         self.assertNotIn('Master Sword Pedestal', self.reachable(
             {'Master Sword Pedestal': None}, {'Ocarina': 1, 'Song of Time': 1}))
 
     def test_remake_events_compiled(self):
         events = {e for r in self.logic.regions.values() for e, _ in r['events']}
-        self.assertTrue({'Met Zelda', 'Dodongos Cavern Clear', 'Jabu Jabus Belly Clear'} <= events)
+        self.assertIn('Met Zelda', events)
 
     def test_saria_gift_waits_for_deku_tree(self):
         self.assertNotIn('LW Gift from Saria', self.reachable({'LW Gift from Saria': None}))

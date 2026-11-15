@@ -33,11 +33,9 @@ _REMAKE = _load('remake.json')
 REMAKE_LOCATION_RULES = {name: entry['rule'] for name, entry in _REMAKE['location_rules'].items()}
 REMAKE_LOCATION_REGIONS = {name: (entry['from'], entry['to'])
                            for name, entry in _REMAKE['location_regions'].items()}
-# Remake-only events, by region ({region: {event: rule}}), and the event without
-# which the clock never reaches the night.
+# Remake-only events, by region ({region: {event: rule}}).
 REMAKE_EVENTS = {region: {event: entry['rule'] for event, entry in events.items()}
                  for region, events in _REMAKE.get('events', {}).items()}
-REMAKE_NIGHT_REQUIRES = _REMAKE.get('time_of_day', {}).get('night_requires')
 
 
 class World:
@@ -54,8 +52,7 @@ class World:
         self.item_table = _load('items.json')
         self.remake = {'location_rules': dict(REMAKE_LOCATION_RULES),
                        'location_regions': {k: list(v) for k, v in REMAKE_LOCATION_REGIONS.items()},
-                       'events': {k: dict(v) for k, v in REMAKE_EVENTS.items()},
-                       'night_requires': REMAKE_NIGHT_REQUIRES}
+                       'events': {k: dict(v) for k, v in REMAKE_EVENTS.items()}}
 
     @property
     def version(self):
