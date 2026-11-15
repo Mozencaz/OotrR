@@ -166,10 +166,16 @@ class Logic:
         names = {}
         for item in data.item_table:
             names[escape_name(item)] = item
+        remake = getattr(data, 'remake', None) or {}
+        # Remake-only events ({region: {event: rule}}) and the event the night needs.
+        self.remake_events = remake.get('events') or {}
+        self.night_requires = remake.get('night_requires')
         events = set()
         for region in data.regions:
             for event in region.get('events', {}):
                 events.add(event)
+        for region_events in self.remake_events.values():
+            events.update(region_events)
         for event in events:
             names.setdefault(escape_name(event), event)
         self.names = names
@@ -223,11 +229,12 @@ class Logic:
                 compiled['locations'].append((location, compiled_rule))
                 self.location_region.setdefault(location, name)
                 self.location_rules.setdefault(location, []).append((name, compiled_rule))
-            for event, rule in region.get('events', {}).items():
+            for event, rule in dict(region.get('events', {}), **self.remake_events.get(name, {})).items():
                 compiled['events'].append((event, self.compile(rule)))
             self.regions[name] = compiled
         self._region = None
         missing = {t for r in self.regions.values() for t, _ in r['exits']} - set(self.regions)
+        missing |= set(self.remake_events) - set(self.regions)
         if missing:
             raise ValueError('Unknown AP regions: ' + ', '.join(sorted(missing)))
 
@@ -371,6 +378,10 @@ class Logic:
             }
             if node.id == 'at_night' and self._night_needs_song:
                 special['at_night'] = "(c.get('Ocarina',0)>=1 and c.get('Suns Song',0)>=1)"
+            if self.night_requires and node.id in ('at_night', 'at_dampe_time'):
+                # The remake holds the clock at 15:00 until this event (no night before).
+                special[node.id] = f"({special[node.id]} and c.get({self.night_requires!r},0)>=1)"
+                self.referenced.add(self.night_requires)
             if node.id in special:
                 if node.id.startswith('at_'):
                     self.referenced.update(('Ocarina', 'Suns Song'))

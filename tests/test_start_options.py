@@ -84,9 +84,11 @@ class DungeonStartTests(unittest.TestCase):
     def test_start_values(self):
         values = start_dungeon_values(dict(rando_options.defaults(), shuffle_mapcompass='startwith',
                                            shuffle_smallkeys='remove', shuffle_bosskeys='remove'))
-        self.assertEqual(len(values), 2 * len(MAP_DUNGEONS) + len(RING_DUNGEONS) + len(BOSS_KEY_DUNGEONS))
+        # Small keys: held and found counts.
+        self.assertEqual(len(values), 2 * len(MAP_DUNGEONS) + 2 * len(RING_DUNGEONS) + len(BOSS_KEY_DUNGEONS))
         self.assertIs(values['DungeonInfo.ForestTemple.IsGetMap'], True)
         self.assertEqual(values['DungeonInfo.FireTemple.SmallKeyNum'], 8)
+        self.assertEqual(values['DungeonInfo.FireTemple.SmallKeyTotalNum'], 8)
         self.assertIs(values['DungeonInfo.SpiritTemple.IsGetBossKey'], True)
         self.assertNotIn('DungeonInfo.InsideGanonCastle.IsGetBossKey', values)
         self.assertEqual(start_dungeon_values(rando_options.defaults()), {})

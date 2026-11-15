@@ -1203,10 +1203,14 @@ def quick_small_chest(raw):
 # ``ActionGuide/ActionGuide``: it now first runs the vanilla ocarina sequence while
 # the Fairy Ocarina is in the pouch. ``OpenActionGuideSceen`` shows a guide once only
 # (``EventQueryHaveOpenedActionGuide``), so this happens on the get of the ocarina
-# itself — or, for a save that already holds it, on the next item get.
+# itself — or, for a save that already holds it, on the next item get. The Ocarina of
+# Time held alone runs it too.
 ACTION_GUIDE_FLOW = 'Event/EventFlow/ActionGuide.bfevfl.zs'
 OCARINA_GUIDE_ENTRY = 'OpenActionGuideSceenForOcarina'
 OCARINA_ACTOR = 'Item_Ocarina_Fairy'
+# The Ocarina of Time found first (no Fairy Ocarina) needs the same guide: it could
+# not be played before a reload (15/11, Discord report).
+OCARINA_OF_TIME_ACTOR = 'Item_Ocarina_Time'
 
 
 def ocarina_guide_on_get(raw):
@@ -1241,7 +1245,7 @@ def ocarina_guide_on_get(raw):
         query = StringHolder('EventQueryIsExistInPouch')
         actor.queries.append(query)
     names = {e.name for e in chart.events}
-    if {'RandoOcarinaHeld', 'RandoOcarinaGuide'} & names:
+    if {'RandoOcarinaHeld', 'RandoOcarinaTimeHeld', 'RandoOcarinaGuide'} & names:
         raise ValueError('ActionGuide flow already modified.')
     guide = Event()
     guide.name, guide.data = 'RandoOcarinaGuide', SubFlowEvent()
@@ -1254,10 +1258,17 @@ def ocarina_guide_on_get(raw):
     held.data.actor, held.data.actor_query = make_rindex(actor), make_rindex(query)
     held.data.params = Container()
     held.data.params.data = {'Actor': OCARINA_ACTOR, 'Num': 1}
-    held.data.cases = {0: make_index(guide), 1: make_index(first)}
-    chart.events.extend([held, guide])
+    time_held = Event()
+    time_held.name, time_held.data = 'RandoOcarinaTimeHeld', SwitchEvent()
+    time_held.data.actor, time_held.data.actor_query = make_rindex(actor), make_rindex(query)
+    time_held.data.params = Container()
+    time_held.data.params.data = {'Actor': OCARINA_OF_TIME_ACTOR, 'Num': 1}
+    time_held.data.cases = {0: make_index(guide), 1: make_index(first)}
+    held.data.cases = {0: make_index(guide), 1: make_index(time_held)}
+    chart.events.extend([held, time_held, guide])
     entry.main_event = make_index(held)
     expected[held.name] = dict(held.data.params.data)
+    expected[time_held.name] = dict(time_held.data.params.data)
     expected[guide.name] = None
     stream = io.BytesIO()
     flow.write(stream)
@@ -1268,12 +1279,15 @@ def ocarina_guide_on_get(raw):
     events = {e.name: e for e in checked.flowchart.events}
     start = {e.name: e for e in checked.flowchart.entry_points}['ActionGuide'].main_event.v
     switch = events['RandoOcarinaHeld'].data
+    time_switch = events['RandoOcarinaTimeHeld'].data
     if (start.name != 'RandoOcarinaHeld' or switch.cases[0].v.name != 'RandoOcarinaGuide'
-            or switch.cases[1].v.name != first.name
+            or switch.cases[1].v.name != 'RandoOcarinaTimeHeld'
+            or time_switch.cases[0].v.name != 'RandoOcarinaGuide' or time_switch.cases[1].v.name != first.name
             or events['RandoOcarinaGuide'].data.nxt.v.name != first.name
             or events['RandoOcarinaGuide'].data.entry_point_name != OCARINA_GUIDE_ENTRY):
         raise ValueError('Ocarina guide wrongly chained.')
-    return result, {'entry': 'ActionGuide', 'guide': OCARINA_GUIDE_ENTRY, 'actor': OCARINA_ACTOR}
+    return result, {'entry': 'ActionGuide', 'guide': OCARINA_GUIDE_ENTRY,
+                    'actor': OCARINA_ACTOR, 'actors': [OCARINA_ACTOR, OCARINA_OF_TIME_ACTOR]}
 
 
 # Gifts handed over in a cutscene. Some cutscenes add their item with

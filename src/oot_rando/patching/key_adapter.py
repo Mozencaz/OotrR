@@ -15,6 +15,7 @@ once) and its boss key can become an item of its own, both placeable anywhere:
 * every item-get flow ends in ``ActionGuide/ActionGuide`` (see
   ``qol_patches.ocarina_guide_on_get``): it first checks each key item of the
   seed; a ring in the pouch not yet applied adds its keys to ``SmallKeyNum``
+  and ``SmallKeyTotalNum`` (keys found, credited too by the native key get)
   once (saved flag ``RandoKeyRing.<folder>``), a boss key in the pouch sets
   ``IsGetBossKey``. A key obtained by a path that skips the get flow is applied
   on the next item get.
@@ -62,6 +63,13 @@ ENGLISH_DUNGEONS = {
     'ShadowTemple': 'Shadow Temple', 'SpiritTemple': 'Spirit Temple', 'BottomOfTheWell': 'Bottom of the Well',
     'GerudoTrainingGround': 'Gerudo Training Ground', 'InsideGanonCastle': "Ganon's Castle",
 }
+
+
+def total_keys(held):
+    """``DungeonInfo.<folder>.SmallKeyTotalNum`` (keys found) of a ``SmallKeyNum`` (keys held)."""
+    if not held.endswith('.SmallKeyNum'):
+        raise ValueError('Not a held key count: ' + held)
+    return held[:-len('SmallKeyNum')] + 'SmallKeyTotalNum'
 
 
 def ring_item(folder):
@@ -200,6 +208,7 @@ def start_dungeon_values(options):
     if options.get('shuffle_smallkeys') == 'remove':
         for folder, count in RING_DUNGEONS.items():
             values[f'DungeonInfo.{folder}.SmallKeyNum'] = count
+            values[f'DungeonInfo.{folder}.SmallKeyTotalNum'] = count
     if options.get('shuffle_bosskeys') == 'remove':
         for folder in BOSS_KEY_DUNGEONS:
             values[f'DungeonInfo.{folder}.IsGetBossKey'] = True
@@ -284,9 +293,11 @@ def check_dungeon_data(gamedata_raw, records):
     types = {'ring': 'Int', 'boss': 'Bool', 'map': 'Bool', 'compass': 'Bool'}
     for record in records:
         entries = {e['Hash']: e for e in data[types[record['kind']]]}
-        entry = entries.get(murmur3(record['gamedata']))
-        if entry is None or entry.get('SaveFileIndex') != 0:
-            raise ValueError('Dungeon data not found: ' + record['gamedata'])
+        names = [record['gamedata']] + ([total_keys(record['gamedata'])] if record['kind'] == 'ring' else [])
+        for name in names:
+            entry = entries.get(murmur3(name))
+            if entry is None or entry.get('SaveFileIndex') != 0:
+                raise ValueError('Dungeon data not found: ' + name)
 
 
 def add_key_hook(raw, records):
@@ -369,9 +380,14 @@ def add_key_hook(raw, records):
             mark = action(f'RandoKeyApplied_{stem}', gamedata, set_bool,
                           {'GameDataName': record['applied'], 'Value': True, 'Index': -1})
             mark.data.nxt = make_index(following)
+            # Keys found too (SmallKeyTotalNum), as the native key get credits them:
+            # held keys alone did not show in the dungeon (15/11, Discord report).
+            found = action(f'RandoKeyFound_{stem}', gamedata, add_int,
+                           {'GameDataName': total_keys(record['gamedata']), 'Value': record['count'], 'Index': -1})
+            found.data.nxt = make_index(mark)
             give = action(f'RandoKeyGive_{stem}', gamedata, add_int,
                           {'GameDataName': record['gamedata'], 'Value': record['count'], 'Index': -1})
-            give.data.nxt = make_index(mark)
+            give.data.nxt = make_index(found)
             done = switch(f'RandoKeyDone_{stem}', gamedata, is_bool,
                           {'GameDataName': record['applied'], 'Index': -1}, following, give)
             first = switch(f'RandoKeyHeld_{stem}', pouch, in_pouch,

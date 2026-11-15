@@ -262,6 +262,11 @@ def verify(nup_path, seed_dir):
             if path == SWORD_CHEST_FLOW and skips.get('sword_chest'):
                 original = skip_kokiri_sword_cutscene(original)[0]
                 report['comfort_flows'] = report.get('comfort_flows', 0) + 1
+            from oot_rando.patching import story_fixes
+            for fixed_path, key, fix in story_fixes.FLOW_FIXES:
+                if path == fixed_path and key in (skips.get('story_fixes') or {}):
+                    original = fix(original)[0]
+                    report['story_fixes'] = report.get('story_fixes', 0) + 1
             gifts = skips.get('gift_get', {})
             if path in gifts:
                 # Cutscene whose own add is bypassed: never reached any more.
@@ -418,6 +423,14 @@ def verify(nup_path, seed_dir):
                 else:
                     a2.setdefault('Dynamic', {})[field] = actor
                 report['rewards'] += 1
+            sheik_fix = (manifest.get('skips', {}).get('story_fixes') or {}).get('sheik')
+            if sheik_fix and path == sheik_fix['map'] and index == sheik_fix['actor'] and 'Presence' not in a2:
+                # Temple of Time Sheik only after the Forest Temple (patching/story_fixes.py).
+                from oot_rando.patching.story_fixes import SHEIK, SHEIK_PRESENCE_ENTRY
+                if a2.get('Gyaml') != SHEIK or sheik_fix['presence'] != SHEIK_PRESENCE_ENTRY['FlagName']:
+                    raise ValueError('Unexpected Sheik presence: ' + path)
+                a2['Presence'] = dict(SHEIK_PRESENCE_ENTRY)
+                report['story_fixes'] = report.get('story_fixes', 0) + 1
             if 'Presence' in b2 and 'Presence' not in a2:
                 flag = b2['Presence'].get('FlagName', '')
                 if not flag.startswith(FLAG_PREFIX + 'Item_Soul_') or b2['Presence'] != {

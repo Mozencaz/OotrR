@@ -395,7 +395,11 @@ class NupTests(unittest.TestCase):
         held = entry.main_event.v
         self.assertEqual(held.data.actor_query.v.v, 'EventQueryIsExistInPouch')
         self.assertEqual(held.data.params.data, {'Actor': 'Item_Ocarina_Fairy', 'Num': 1})
-        guide, original = held.data.cases[0].v, held.data.cases[1].v
+        guide, time_held = held.data.cases[0].v, held.data.cases[1].v
+        # The Ocarina of Time held alone gets the same guide.
+        self.assertEqual(time_held.data.params.data, {'Actor': 'Item_Ocarina_Time', 'Num': 1})
+        self.assertIs(time_held.data.cases[0].v, guide)
+        original = time_held.data.cases[1].v
         self.assertEqual((guide.data.res_flowchart_name, guide.data.entry_point_name),
                          ('', 'OpenActionGuideSceenForOcarina'))
         self.assertIs(guide.data.nxt.v, original)

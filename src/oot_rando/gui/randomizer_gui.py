@@ -157,6 +157,11 @@ class Application:
         self.tracker_search, self.save_path = tk.StringVar(), tk.StringVar()
         self.auto_save = tk.BooleanVar(value=True)
         self.app_state = self.read_app_state()
+        # Remembered between app starts (it was off again at every start: 15/11 report, issue #39).
+        self.options['skulltulas_always_present'].set(self.app_state.get('skulltulas_always_present') is True)
+        self.options['skulltulas_always_present'].trace_add(
+            'write', lambda *args: self.write_app_state(
+                skulltulas_always_present=self.options['skulltulas_always_present'].get()))
         # Game file and mods folder: chosen once by the player, then remembered.
         self.nup.set(self.app_state.get('game_file') or '')
         self.mods.set(self.app_state.get('mods_dir') or default_mods_dir())

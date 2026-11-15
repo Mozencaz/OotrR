@@ -20,7 +20,39 @@
   "Song from Saria": {
    "rule": "is_child and Zeldas_Letter and at('GC Darunias Chamber', is_child)",
    "why": "Saria teaches her song during the Fire Stone quest (Challenge Get_StoneOfFire, step SariaMelodyGet), only after Darunia asked for music in his chamber (11/11: Kokiri Sword behind the Skull Kid)."
+  },
+  "Song from Ocarina of Time": {
+   "rule": "is_child and has_all_stones and 'Met Zelda' and 'Dodongos Cavern Clear' and 'Jabu Jabus Belly Clear'",
+   "why": "Zelda's escape and the Song of Time (Challenge DoorOfTime, after Goto_HyruleCastle) follow DoorOfTime_CheckStoneNum, run when Dodongo's Cavern and Jabu-Jabu's Belly are finished: it reads both dungeon quests (Get_StoneOfFire / Get_StoneOfWater completed), not the stones held (15/11, Discord report: three stones, no cutscene before Jabu-Jabu)."
+  },
+  "Master Sword Pedestal": {
+   "rule": "'Met Zelda' and 'Dodongos Cavern Clear' and 'Jabu Jabus Belly Clear'",
+   "why": "The Door of Time opens in the same DoorOfTime challenge: the Song of Time alone (songs shuffled) does not open it before both dungeon quests and meeting Zelda."
   }
+ },
+ "events": {
+  "HC Garden Locations": {
+   "Met Zelda": {
+    "rule": "is_child",
+    "why": "Zelda in the castle garden completes Goto_HyruleCastle; Impa's send-off follows (HavePlayedEvent.Dm_HrlField_0020), which frees the clock and starts DoorOfTime."
+   }
+  },
+  "King Dodongo Boss Room": {
+   "Dodongos Cavern Clear": {
+    "rule": "((can_use(Megaton_Hammer) and logic_dc_hammer_floor) or has_explosives or king_dodongo_shortcuts) and (((Bombs or Progressive_Strength_Upgrade) and can_jumpslash) or deadly_bonks == 'ohko')",
+    "why": "King Dodongo beaten (same rule as his location): the Get_StoneOfFire quest completes on the way out."
+   }
+  },
+  "Barinade Boss Room": {
+   "Jabu Jabus Belly Clear": {
+    "rule": "can_use(Boomerang) and (Sticks or Kokiri_Sword)",
+    "why": "Barinade beaten (same rule as its location): the Get_StoneOfWater quest completes on the way out."
+   }
+  }
+ },
+ "time_of_day": {
+  "night_requires": "Met Zelda",
+  "why": "Until Impa's send-off after Zelda (HavePlayedEvent.Dm_HrlField_0020) the remake holds the clock at 15:00 (issue #40): no night, so night-only checks (gold skulltulas, Dampé…) need Zelda first (15/11, Discord report)."
  },
  "location_regions": {
   "LW Near Shortcuts Grotto Chest": {

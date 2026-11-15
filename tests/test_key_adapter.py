@@ -121,7 +121,10 @@ class NupTests(unittest.TestCase):
         add = done.cases[1].v.data                     # not yet applied: add the keys once
         self.assertEqual(add.params.data, {'GameDataName': 'DungeonInfo.WaterTemple.SmallKeyNum',
                                            'Value': 6, 'Index': -1})
-        mark = add.nxt.v.data
+        found = add.nxt.v.data                         # keys found too, as the native get
+        self.assertEqual(found.params.data, {'GameDataName': 'DungeonInfo.WaterTemple.SmallKeyTotalNum',
+                                             'Value': 6, 'Index': -1})
+        mark = found.nxt.v.data
         self.assertEqual(mark.params.data['GameDataName'], 'RandoKeyRing.WaterTemple')
         self.assertEqual(mark.nxt.v.name, 'RandoOcarinaHeld')   # then the vanilla get flow
         self.assertEqual(done.cases[0].v.name, 'RandoOcarinaHeld')
