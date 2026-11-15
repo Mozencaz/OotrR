@@ -100,7 +100,11 @@ OPTIONS = [
            ((False, OK), (True, NO_ADAPTER)), False, kind='bool'),
     Option('zora_fountain', 'World', 'King Zora',
            (('closed', 'Ruto\'s Letter required', OK), ('adult', 'Moved for adult', NO_ADAPTER),
-            ('open', 'Always moved', NO_ADAPTER)), 'closed'),
+            ('open', 'Always moved', OK)), 'closed',
+           'Always moved: King Zora starts aside, so Zora\'s Fountain needs no Ruto\'s Letter, and no '
+           'later scene moves him back. The letter can no longer be delivered, so it never turns into '
+           'a bottle. To be confirmed in game.',
+           experimental=('open',)),
     Option('gerudo_fortress', 'World', 'Gerudo Fortress',
            (('normal', 'Four carpenters', OK), ('fast', 'One carpenter', NO_ADAPTER),
             ('open', 'Open', NO_ADAPTER)), 'normal'),
