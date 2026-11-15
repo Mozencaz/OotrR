@@ -4,7 +4,7 @@
  * them (their icons, from the seed's icons.bin, once they're in; their letters until then or without it), the
  * dungeons' keys, the checks found by region, one of them highlighted; or, with a region's list open, its checks.
  * The postcard is the items, the songs and the keys alone, as a smaller card in a corner, drawn with the same
- * code. */
+ * code; the Archipelago console is the desktop client's latest lines in a band at an edge, each fading out. */
 #include "trackerui.h"
 
 #include "gamefile.h"
@@ -53,7 +53,12 @@
 #define ELLIPSIS         ".."
 #define COUNT_ROOM       24
 #define HINT_REGIONS     "D-pad: choose     A: open     B: close"
+#define HINT_SETTINGS    "Up / down: choose     A: open     B: back"
 #define HINT_POSTCARD    "Up / down: choose     Left / right: change     B: back"
+#define HINT_CONSOLE     "Up / down: choose     Left / right or A: change     B: back"
+#define SETTINGS_TITLE   "Settings"
+#define NO_MESSAGES      "No messages yet"
+#define CONSOLE_WRAP_ROWS 3 /* a console line takes at most this many rows; the rest is cut */
 #define ICON_FILE        GAME_ROM "/RandoTracker/icons.bin"
 #define SMALL_KEY_ICON   "Small Key" /* the keys' entries in it, after the grid's items */
 #define BOSS_KEY_ICON    "Boss Key"
@@ -68,6 +73,11 @@ static const rgb_t dim_colour = { 0x96, 0x91, 0x87 };
 static const rgb_t faint_colour = { 0x5A, 0x57, 0x52 };
 static const rgb_t warning_colour = { 0xFF, 0x9A, 0x7A };
 static const rgb_t done_colour = { 0x9A, 0xDF, 0x9A };
+static const rgb_t notice_colour = { 0xC4, 0xBE, 0xB2 };
+static const rgb_t kind_colours[CONSOLE_KIND_COUNT] = {
+  [CONSOLE_RECEIVED] = { 0xF5, 0xD6, 0x85 }, [CONSOLE_SENT] = { 0x9A, 0xDF, 0x9A }, [CONSOLE_HINT] = { 0x9C, 0xC8, 0xFF },
+  [CONSOLE_CHAT] = { 0xEC, 0xE8, 0xDE }, [CONSOLE_SERVER] = { 0xC4, 0xBE, 0xB2 }, [CONSOLE_OTHERS] = { 0xC8, 0xB4, 0xE6 },
+};
 static const gpu_colour_t icon_owned = { 1, 1, 1, 1 };
 static const gpu_colour_t icon_missing = { 0.55f, 0.55f, 0.55f, 0.4f };
 static const gpu_colour_t icon_unknown = { 0.5f, 0.5f, 0.5f, 0.18f };
@@ -220,8 +230,8 @@ static content_t content_of(const panel_t *panel)
   panel_shape_t *shape = &content.shape;
   if (shape->tracking) {
     shape->list = panel->browse.view == BROWSE_CHECKS && panel->browse.region < panel->state.region_count;
-    shape->postcard_page = panel->browse.view == BROWSE_POSTCARD;
-    bool regions = !shape->list && !shape->postcard_page;
+    shape->settings_rows = browse_page_rows(panel->browse.view);
+    bool regions = !shape->list && !shape->settings_rows;
     shape->has_keys = regions && panel->state.key_count > 0;
     shape->has_summary = regions;
     shape->region_rows = regions ? browse_region_rows(panel->state.region_count) : 0;
@@ -409,16 +419,22 @@ static float draw_summary(const layout_t *l, const tracker_state_t *state, float
   return y + row + SECTION_GAP_FP * l->fp;
 }
 
+/* `text` cut with ".." (also when `cut`) so that it is no wider than `room`, in `out` of `out_room` bytes. */
+static void fit_text(const type_t *type, const char *text, float room, bool cut, char *out, size_t out_room)
+{
+  int length = (int)text_copy(out, out_room, text);
+  if (!cut && text_width_n(type, out, length) <= room)
+    return;
+  float ellipsis = text_width(type, ELLIPSIS);
+  while (length > 0 && text_width_n(type, out, length) + ellipsis > room)
+    length--;
+  text_copy(out + length, out_room - (size_t)length, ELLIPSIS);
+}
+
 /* The region's name cut with ".." so that it is no wider than `room`. */
 static void fit_name(const layout_t *l, const char *name, float room, char out[NAME_ROOM])
 {
-  int length = (int)text_copy(out, NAME_ROOM, name);
-  if (text_width_n(&l->body, out, length) <= room)
-    return;
-  float ellipsis = text_width(&l->body, ELLIPSIS);
-  while (length > 0 && text_width_n(&l->body, out, length) + ellipsis > room)
-    length--;
-  text_copy(out + length, NAME_ROOM - length, ELLIPSIS);
+  fit_text(&l->body, name, room, false, out, NAME_ROOM);
 }
 
 /* the band behind the highlighted row, with its gold edge */
@@ -454,14 +470,7 @@ static void draw_region(const layout_t *l, const region_state_t *region, float x
              done ? done_colour : none ? dim_colour : white, x, column_w, y, row);
 }
 
-static void draw_postcard_entry(const layout_t *l, const postcard_settings_t *postcard, float x, float column_w,
-                                float y, float row)
-{
-  draw_entry(l, postcard_setting_name(POSTCARD_SETTING_SHOWN), postcard_value_text(postcard, POSTCARD_SETTING_SHOWN),
-             text_colour, postcard->shown ? done_colour : dim_colour, x, column_w, y, row);
-}
-
-/* the regions, then the Postcard entry, in columns filled top to bottom */
+/* the regions, then the Settings entry, in columns filled top to bottom */
 static float draw_regions(const layout_t *l, const panel_t *panel, int rows, float y)
 {
   const tracker_state_t *state = &panel->state;
@@ -475,30 +484,97 @@ static float draw_regions(const layout_t *l, const panel_t *panel, int rows, flo
     if (i < state->region_count)
       draw_region(l, &state->regions[i], x, column_w, top, row);
     else
-      draw_postcard_entry(l, &panel->postcard, x, column_w, top, row);
+      draw_entry(l, SETTINGS_TITLE, "", text_colour, text_colour, x, column_w, top, row);
   }
   return y + rows * row;
 }
 
-/* --- the postcard's settings ---------------------------------------------------------------------- */
+/* --- the settings pages ------------------------------------------------------------------------- */
 
-static float draw_postcard_page(const layout_t *l, const panel_t *panel, float y)
+/* The Console page's rows after Fade are the console's kinds of message, each with a check box that shows or hides
+ * it, as sloperinaGZ's watch list has a check box per watch for its on-screen box (src/ootgz/menus.c, "watches: the
+ * list", GPL-3, master 5b44a21). */
+
+typedef struct {
+  const char *name;
+  const char *value; /* NULL: a check box before the name instead */
+  bool ticked;       /* ... ticked */
+  bool arrows;       /* `< value >`: left and right change it */
+} setting_row_t;
+
+static setting_row_t settings_entry(const panel_t *panel, settings_entry_t entry)
 {
+  if (entry == SETTINGS_POSTCARD)
+    return (setting_row_t){ postcard_setting_name(POSTCARD_SETTING_SHOWN),
+                            postcard_value_text(&panel->postcard, POSTCARD_SETTING_SHOWN), false, false };
+  return (setting_row_t){ console_setting_name(CONSOLE_SETTING_SHOWN),
+                          console_value_text(&panel->console, CONSOLE_SETTING_SHOWN, panel->archipelago), false, false };
+}
+
+#define PAGE_ROWS CONSOLE_SETTING_COUNT /* the longest settings page */
+_Static_assert((int)SETTINGS_ENTRY_COUNT <= PAGE_ROWS && (int)POSTCARD_SETTING_COUNT <= PAGE_ROWS,
+               "every settings page's rows fit PAGE_ROWS");
+
+/* the rows of the settings page shown, and its title; returns how many */
+static uint32_t page_rows(const panel_t *panel, setting_row_t rows[PAGE_ROWS], const char **title)
+{
+  const console_settings_t *console = &panel->console;
+  browse_view_t view = panel->browse.view;
+  uint32_t count = browse_page_rows(view);
+  *title = view == BROWSE_SETTINGS ? SETTINGS_TITLE
+           : view == BROWSE_POSTCARD ? postcard_setting_name(POSTCARD_SETTING_SHOWN)
+           : console_setting_name(CONSOLE_SETTING_SHOWN);
+  for (uint32_t i = 0; i < count; i++) {
+    if (view == BROWSE_SETTINGS)
+      rows[i] = settings_entry(panel, (settings_entry_t)i);
+    else if (view == BROWSE_POSTCARD)
+      rows[i] = (setting_row_t){ postcard_setting_name((postcard_setting_t)i),
+                                 postcard_value_text(&panel->postcard, (postcard_setting_t)i), false, true };
+    else if (console_setting_is_kind((console_setting_t)i))
+      rows[i] = (setting_row_t){ console_setting_name((console_setting_t)i), 0,
+                                 console_kind_shown(console, console_setting_kind((console_setting_t)i)), false };
+    else
+      rows[i] = (setting_row_t){ console_setting_name((console_setting_t)i),
+                                 console_value_text(console, (console_setting_t)i, panel->archipelago), false, true };
+  }
+  return count;
+}
+
+static void draw_tick_box(const layout_t *l, gd_flag_t flag, float x, float y, float row);
+
+static float draw_settings_page(const layout_t *l, const panel_t *panel, float y)
+{
+  setting_row_t rows[PAGE_ROWS];
+  const char *title = "";
+  uint32_t count = page_rows(panel, rows, &title), highlighted = browse_page_row(&panel->browse);
   float head = LIST_HEAD_ROW_FP * l->fp, row = SETTING_ROW_FP * l->fp;
-  draw_text(&l->bold, postcard_setting_name(POSTCARD_SETTING_SHOWN), l->inner_x, baseline_in(&l->bold, y, head),
-            title_colour);
+  draw_text(&l->bold, title, l->inner_x, baseline_in(&l->bold, y, head), title_colour);
   y += head;
-  for (int i = 0; i < POSTCARD_SETTING_COUNT; i++) {
+  for (uint32_t i = 0; i < count; i++) {
     char value[NAME_ROOM];
-    float top = y + i * row;
-    if ((uint32_t)i == panel->browse.setting)
+    float top = y + i * row, x = l->inner_x;
+    if (i == highlighted)
       draw_highlight(l, l->inner_x, top, l->inner_w, row);
-    draw_text(&l->body, postcard_setting_name((postcard_setting_t)i), l->inner_x, baseline_in(&l->body, top, row),
-              text_colour);
-    snprintf(value, sizeof(value), "< %s >", postcard_value_text(&panel->postcard, (postcard_setting_t)i));
+    if (!rows[i].value) {
+      draw_tick_box(l, rows[i].ticked ? GD_TRUE : GD_FALSE, x, top, row);
+      x += (TICK_BOX_FP + TICK_GAP_FP) * l->fp;
+    }
+    draw_text(&l->body, rows[i].name, x, baseline_in(&l->body, top, row), text_colour);
+    if (!rows[i].value)
+      continue;
+    snprintf(value, sizeof(value), rows[i].arrows ? "< %s >" : "%s", rows[i].value);
     draw_text(&l->bold, value, l->inner_x + SETTING_VALUE_AT_FP * l->fp, baseline_in(&l->bold, top, row), white);
   }
-  return y + POSTCARD_SETTING_COUNT * row + SECTION_GAP_FP * l->fp;
+  return y + count * row + SECTION_GAP_FP * l->fp;
+}
+
+static const char *page_hint(browse_view_t view)
+{
+  switch (view) {
+    case BROWSE_SETTINGS: return HINT_SETTINGS;
+    case BROWSE_CONSOLE: return HINT_CONSOLE;
+    default: return HINT_POSTCARD;
+  }
 }
 
 /* --- a region's list of checks ------------------------------------------------------------------ */
@@ -571,8 +647,8 @@ static void draw_panel(const panel_t *panel, nvn_rect_t area)
   y = draw_status(&l, &content, y);
   if (!shape->tracking)
     return;
-  if (shape->postcard_page) {
-    draw_hint(&l, HINT_POSTCARD, draw_postcard_page(&l, panel, y));
+  if (shape->settings_rows) {
+    draw_hint(&l, page_hint(panel->browse.view), draw_settings_page(&l, panel, y));
     return;
   }
   if (shape->list) {
@@ -592,23 +668,22 @@ static void draw_panel(const panel_t *panel, nvn_rect_t area)
 /* the card's box in the corner its settings choose, at its size: the items' cells CARD_CELL_W_FP wide, the songs
  * across the same width and the keys in CARD_KEY_COLUMNS columns under them, all at the card's own scale of the
  * picture's font pixel */
-static layout_t card_layout(const postcard_settings_t *settings, const tracker_state_t *state, nvn_rect_t area)
+static layout_t card_layout(const postcard_settings_t *settings, const box_t *card, nvn_rect_t area)
 {
-  layout_t l = layout_scaled(picture_fp(area) * postcard_scale(settings));
-  l.w = sizes_card_width() * l.fp;
+  float fp = picture_fp(area);
+  layout_t l = layout_scaled(fp * postcard_scale(settings));
+  l.w = card->w * fp;
   l.inner_w = l.w - 2 * CARD_PAD_FP * l.fp;
-  l.h = sizes_card_height(state->key_count) * l.fp;
-  postcard_origin((postcard_position_t)settings->position, area.w, area.h, l.w, l.h, MARGIN_FP * picture_fp(area),
-                  &l.x, &l.y);
-  l.x = (float)(int)l.x;
-  l.y = (float)(int)l.y;
+  l.h = card->h * fp;
+  l.x = (float)(int)(card->x * fp);
+  l.y = (float)(int)(card->y * fp);
   l.inner_x = l.x + CARD_PAD_FP * l.fp;
   return l;
 }
 
-static void draw_postcard(const panel_t *panel, nvn_rect_t area)
+static void draw_postcard(const panel_t *panel, const box_t *card, nvn_rect_t area)
 {
-  layout_t l = card_layout(&panel->postcard, &panel->state, area);
+  layout_t l = card_layout(&panel->postcard, card, area);
   gpuui_set_opacity(postcard_opacity(&panel->postcard));
   gpuui_fill(l.x, l.y, l.w, l.h, to_gpu(box_colour, BOX_OPACITY));
   float y = draw_grid(&l, &panel->state, l.y + CARD_PAD_FP * l.fp);
@@ -617,26 +692,132 @@ static void draw_postcard(const panel_t *panel, nvn_rect_t area)
   gpuui_set_opacity(1);
 }
 
-/* The panel when it is open; the postcard when it is on, with the panel closed or showing the postcard's
- * settings (the card then shows what they do). */
-static void draw_frame(const panel_t *panel, nvn_rect_t area)
+/* --- the console ---------------------------------------------------------------------------------- */
+
+typedef struct {
+  char text[CONSOLE_TEXT_ROOM];
+  rgb_t colour;
+  float alpha;
+} console_row_t;
+
+/* the rows shown, filled from the last (the newest is at the bottom); the render thread's */
+static struct {
+  console_row_t rows[CONSOLE_MAX_LINES];
+  int count, room;
+} console_rows;
+
+static void add_console_row(const type_t *type, const char *text, int length, bool cut, float room, rgb_t colour,
+                            float alpha)
 {
+  console_row_t *row = &console_rows.rows[console_rows.room - 1 - console_rows.count++];
+  char piece[CONSOLE_TEXT_ROOM];
+  text_copy(piece, (size_t)length + 1 < sizeof(piece) ? (size_t)length + 1 : sizeof(piece), text);
+  fit_text(type, piece, room, cut, row->text, sizeof(row->text));
+  row->colour = colour;
+  row->alpha = alpha;
+}
+
+/* a line's rows (at most CONSOLE_WRAP_ROWS, the last cut with ".." if the line goes on), its last first, while the
+ * console has room */
+static void add_console_line(const type_t *type, const char *text, float room, rgb_t colour, float alpha)
+{
+  int starts[CONSOLE_WRAP_ROWS], lengths[CONSOLE_WRAP_ROWS], rows = 0, at = 0;
+  while (text[at] && rows < CONSOLE_WRAP_ROWS) {
+    while (text[at] == ' ')
+      at++;
+    if (!text[at])
+      break;
+    int taken = text_wrap(type, text + at, room), shown = taken;
+    while (shown > 1 && text[at + shown - 1] == ' ')
+      shown--;
+    starts[rows] = at;
+    lengths[rows++] = shown;
+    at += taken;
+  }
+  while (text[at] == ' ')
+    at++;
+  bool cut = text[at] != 0;
+  for (int i = rows - 1; i >= 0 && console_rows.count < console_rows.room; i--)
+    add_console_row(type, text + starts[i], lengths[i], cut && i == rows - 1, room, colour, alpha);
+}
+
+/* the rows shown: the status line at the bottom, then the newest lines still shown above it */
+static void collect_console_rows(const console_view_t *view, const type_t *type, float room, uint64_t now,
+                                 bool preview)
+{
+  console_rows.count = 0;
+  console_rows.room = console_lines(&view->settings);
+  if (view->status[0])
+    add_console_row(type, view->status, (int)strlen(view->status), false, room, dim_colour, 1);
+  for (int i = (int)view->count - 1; i >= 0 && console_rows.count < console_rows.room; i--) {
+    const console_line_t *line = &view->lines[i];
+    float alpha = preview ? 1 : console_line_alpha(&view->settings, line->time_ms, now);
+    if (alpha <= 0)
+      break; /* the older ones have gone too */
+    rgb_t colour = line->kind < CONSOLE_KIND_COUNT ? kind_colours[line->kind] : notice_colour;
+    add_console_line(type, line->text, room, colour, alpha);
+  }
+  if (preview && !console_rows.count)
+    add_console_row(type, NO_MESSAGES, (int)strlen(NO_MESSAGES), false, room, dim_colour, 1);
+}
+
+/* Its rows in its box at its edge, each row's band and text at the row's opacity, so that a fading line fades with
+ * its part of the box. `card`: the postcard's box (font pixels) to keep clear of, or NULL; `preview`: every line at
+ * full strength, for its settings pages. */
+static void draw_console(const console_view_t *view, nvn_rect_t area, const box_t *card, uint64_t now, bool preview)
+{
+  float fp = picture_fp(area);
+  layout_t l = layout_scaled(fp);
+  console_position_t position = (console_position_t)(view->settings.position % CONSOLE_POSITION_COUNT);
+  box_t box = sizes_console_box(position, console_lines(&view->settings), area.w / fp, card);
+  float pad_x = CONSOLE_PAD_X_FP * fp, pad_y = (float)(int)(CONSOLE_PAD_Y_FP * fp + 0.5f), row = CONSOLE_ROW_FP * fp;
+  collect_console_rows(view, &l.body, box.w * fp - 2 * pad_x, now, preview);
+  int count = console_rows.count;
+  const console_row_t *rows = &console_rows.rows[console_rows.room - count];
+  float x = (float)(int)(box.x * fp), w = (float)(int)(box.w * fp);
+  float top = position == CONSOLE_TOP ? box.y * fp + pad_y : (box.y + box.h) * fp - pad_y - count * row;
+  float opacity = console_opacity(&view->settings);
+  for (int i = 0; i < count; i++) {
+    float y = (float)(int)(top + i * row), next = (float)(int)(top + (i + 1) * row);
+    float band_top = i == 0 ? y - pad_y : y, band_bottom = i == count - 1 ? next + pad_y : next;
+    gpuui_set_opacity(opacity * rows[i].alpha);
+    gpuui_fill(x, band_top, w, band_bottom - band_top, to_gpu(box_colour, BOX_OPACITY));
+    draw_text(&l.body, rows[i].text, x + pad_x, baseline_in(&l.body, y, next - y), rows[i].colour);
+  }
+  gpuui_set_opacity(1);
+}
+
+/* --- a frame ---------------------------------------------------------------------------------------- */
+
+/* The panel when it is open; the postcard when it is on, with the panel closed or showing the postcard's
+ * settings (the card then shows what they do); the console when it is on, with the panel closed or showing the
+ * console's settings (every line at full strength, clear of where the card is once the panel closes, and under the
+ * panel, whose rows it would hide). */
+static void draw_frame(const panel_t *panel, const console_view_t *console, nvn_rect_t area, uint64_t now)
+{
+  bool card_on = panel->mode == PANEL_TRACKING && panel->postcard.shown;
+  box_t card = card_on ? sizes_card_box(&panel->postcard, panel->state.key_count, area.w / picture_fp(area))
+                       : (box_t){ 0, 0, 0, 0 };
+  bool preview = panel->menu && panel->browse.view == BROWSE_CONSOLE;
+  if (console->shown && preview)
+    draw_console(console, area, card_on ? &card : 0, now, true);
   if (panel->menu)
     draw_panel(panel, area);
-  bool card_wanted = !panel->menu || panel->browse.view == BROWSE_POSTCARD;
-  if (card_wanted && panel->mode == PANEL_TRACKING && panel->postcard.shown)
-    draw_postcard(panel, area);
+  if (card_on && (!panel->menu || panel->browse.view == BROWSE_POSTCARD))
+    draw_postcard(panel, &card, area);
+  if (console->shown && !panel->menu && console_view_showing(console, now))
+    draw_console(console, area, card_on ? &card : 0, now, false);
 }
 
 bool trackerui_record(nvn_obj_t *cmd, int slot, nvn_texture_t *texture, const nvn_texture_info_t *info,
-                      nvn_rect_t area, const panel_t *panel)
+                      nvn_rect_t area, const panel_t *panel, const console_view_t *console, uint64_t now)
 {
-  if (area.h <= 0 || panel->mode == PANEL_HIDDEN)
+  if (area.h <= 0 || (panel->mode == PANEL_HIDDEN && !console_view_showing(console, now)))
     return false;
   if (gpuui_atlas_resetting() && !slots_wait_idle())
     return false;
   gpuui_begin(texture, area, info->height, nvn_origin_lower_left(), slot);
   icons_step();
-  draw_frame(panel, area);
+  draw_frame(panel, console, area, now);
   return gpuui_end(cmd, nvn_game_texture_pool(), nvn_game_sampler_pool());
 }

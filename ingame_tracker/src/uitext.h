@@ -28,5 +28,10 @@ gpu_colour_t to_gpu(rgb_t colour, float alpha);
 rgb_t rgb_from_hex(uint32_t hex);
 /* The text with its pen at x on the baseline, kerned; returns its width. */
 float draw_text(const type_t *type, const char *text, float x, float baseline, rgb_t colour);
+/* The same, of the first `length` characters. */
+float draw_text_n(const type_t *type, const char *text, int length, float x, float baseline, rgb_t colour);
+/* How many of the text's first characters go on a line `room` pixels wide: up to and with the last space that fits,
+ * or as many characters as fit if no space does (at least one, if the text has any). */
+int text_wrap(const type_t *type, const char *text, float room);
 
 #endif

@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 
 from oot_rando.randomizer.randomizer_core import Settings, CHECKS, settings_identity, GENERATOR_VERSION, ADAPTER_VERSION
-from oot_rando.randomizer.randomizer_services import (ManualTracker, continued_save, generate_in_mods,
-                                                        read_artifact, validate_mod_directory)
+from oot_rando.randomizer.randomizer_services import (ManualTracker, _connection_file, continued_save,
+                                                        generate_in_mods, read_artifact, validate_mod_directory)
 from oot_rando.patching.randomize_kokiri import TITLE, BUILD
 
 
@@ -111,6 +111,45 @@ class ServiceTests(unittest.TestCase):
             title.mkdir()
             install(title, 'reinstalled once', slot, save_seed_id='first-seed')
             self.assertEqual(continued_save(title, ApSettings(slot)), 'first-seed')
+
+    def test_generating_again_keeps_the_connection_file(self):
+        connection = b'{"server": "host:1", "slot": "P3", "password": "pw", "auto_connect": true}\n'
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            mods = self.make_hookshot(base / 'Hookshot')
+            fake = lambda nup, output, settings, progress: self.make_artifact(output, settings.seed)
+            archive = base / 'archive'
+            first = generate_in_mods('game.nup', mods, Settings('first'), archive=archive, generate=fake)
+            (first / 'archipelago.json').write_bytes(connection)
+            again = generate_in_mods('game.nup', mods, Settings('first'), archive=archive, generate=fake)
+            self.assertEqual(again, first)   # the same folder: its replaced copy's file
+            self.assertEqual((again / 'archipelago.json').read_bytes(), connection)
+            read_artifact(again)             # no resource of the seed
+            other = generate_in_mods('game.nup', mods, Settings('other'), archive=archive, generate=fake)
+            self.assertFalse((other / 'archipelago.json').exists())
+
+    def test_a_seed_of_the_same_slot_hands_its_connection_file_on(self):
+        class ApSettings:
+            def __init__(self, patch):
+                self.archipelago = patch
+
+            def to_dict(self):
+                return {'archipelago': self.archipelago}
+        slot, other = {'seed_name': 'S1', 'slot_name': 'P3'}, {'seed_name': 'S2', 'slot_name': 'P3'}
+        connection = b'{"server": "host:1"}'
+        with tempfile.TemporaryDirectory() as directory:
+            title = Path(directory) / TITLE
+            title.mkdir()
+            for seed, patch in (('old version', slot), ('other slot', other)):
+                folder = self.make_artifact(title / ('OoT_Randomizer_' + settings_identity(Settings(seed))[:16]), seed)
+                manifest = json.loads((folder / 'manifest.json').read_text(encoding='utf-8'))
+                manifest['settings']['archipelago'] = patch
+                (folder / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+                (folder / 'archipelago.json').write_bytes(connection + seed.encode())
+            new = title / 'OoT_Randomizer_new'
+            self.assertEqual(_connection_file(new, title, ApSettings(slot)), connection + b'old version')
+            self.assertIsNone(_connection_file(new, title, ApSettings({'seed_name': 'S3'})))
+            self.assertIsNone(_connection_file(new, title, Settings('not archipelago')))
 
     def test_generate_in_mods_conflict_archives_the_new_seed(self):
         with tempfile.TemporaryDirectory() as directory:

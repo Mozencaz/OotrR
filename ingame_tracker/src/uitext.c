@@ -40,17 +40,41 @@ rgb_t rgb_from_hex(uint32_t hex)
   return (rgb_t){ (uint8_t)(hex >> 16), (uint8_t)(hex >> 8), (uint8_t)hex };
 }
 
-float draw_text(const type_t *type, const char *text, float x, float baseline, rgb_t colour)
+float draw_text_n(const type_t *type, const char *text, int length, float x, float baseline, rgb_t colour)
 {
   float pen = x;
-  for (; *text; text++) {
-    unsigned char c = (unsigned char)*text;
+  for (int i = 0; i < length; i++) {
+    unsigned char c = (unsigned char)text[i];
     float advance = gpuui_glyph_shadowed(type->face, type->em, c, pen, baseline, to_gpu(colour, 1));
     if (!advance && c != '?')
       advance = gpuui_glyph_shadowed(GF_REGULAR, type->em, '?', pen, baseline, to_gpu(colour, 1));
     pen += advance;
-    if (text[1])
-      pen += gamefont_kern(type->face, type->em, c, (unsigned char)text[1]) / KERN_UNITS;
+    if (i + 1 < length)
+      pen += gamefont_kern(type->face, type->em, c, (unsigned char)text[i + 1]) / KERN_UNITS;
   }
   return pen - x;
+}
+
+float draw_text(const type_t *type, const char *text, float x, float baseline, rgb_t colour)
+{
+  return draw_text_n(type, text, (int)strlen(text), x, baseline, colour);
+}
+
+int text_wrap(const type_t *type, const char *text, float room)
+{
+  int length = (int)strlen(text), last_space = -1;
+  float pen = 0;
+  for (int i = 0; i < length; i++) {
+    unsigned char c = (unsigned char)text[i];
+    const gf_glyph_t *glyph = gamefont_glyph(type->face, type->em, c);
+    float advance = glyph ? glyph->advance / KERN_UNITS : 0;
+    if (i)
+      pen += gamefont_kern(type->face, type->em, (unsigned char)text[i - 1], c) / KERN_UNITS;
+    if (i && pen + advance > room)
+      return last_space > 0 ? last_space + 1 : i;
+    pen += advance;
+    if (c == ' ')
+      last_space = i;
+  }
+  return length;
 }

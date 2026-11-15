@@ -1,8 +1,10 @@
 # Live test plan
 
-0.2.0's icons were seen in the game (13/11: upright, right colours, smooth); 0.2.1 to 0.4.0 (key rows, postcard, songs) were checked in the game on 1.1.1 in the Ryuchii emulator (14/11). Game 1.0.0 is untested. The PC tests (`make test`) cover the seed file's parser (versions 1 and 2), the state, a
-region's list of checks, the game-data reader over a fake GameData, the controls (repeat, what the game doesn't see), the browsing and the
-icons file's index.
+0.2.0's icons were seen in the game (13/11: upright, right colours, smooth); 0.2.1 to 0.4.0 (key rows, postcard, songs) were checked in the game on 1.1.1 in the Ryuchii emulator (14/11); 0.5.0's console was used in the game by two players in one room (items received and sent, hints, chat, notices), which is how other players' items were found missing. 0.6.0 (other players' items) and 0.6.1 (a row per kind on the Console page) are not yet tested in the game, nor is game 1.0.0. The PC tests (`make test`) cover the seed file's parser (versions 1 to 3), the state, a
+region's list of checks, the game-data reader over a fake GameData, the controls (repeat, what the game doesn't see), the browsing, the
+icons file's index, the postcard's and the console's settings and files, the console's lines and fading, its mailbox (half-written
+writes, a full ring, the status line) and where the console goes next to every postcard. OotrR's `tests/test_console_bridge.py` covers
+the client's side on fake game memory: finding the mailbox after main, the write order, the room left, another seed.
 These steps cover the rest. Back up the save first.
 
 ## Setup
@@ -65,9 +67,10 @@ With a seed this version made from your game (or one updated with `update-tracke
 
 ## 3d. The postcard
 
-- The regions end with a **Postcard** entry (Off at first, dim); the highlight reaches it by down in the last column or right from
-  the one before. A opens four rows: Postcard, Position, Size, Opacity, with `< value >`; up and down choose, left and right change
-  the value at once (Position wraps, Opacity goes 25, 50, 75, 100 %). B goes back to the regions.
+- The regions end with a **Settings** entry; the highlight reaches it by down in the last column or right from the one before. A
+  opens a page with Postcard (Off at first) and Console. A on Postcard opens four rows: Postcard, Position, Size, Opacity, with
+  `< value >`; up and down choose, left and right change the value at once (Position wraps, Opacity goes 25, 50, 75, 100 %). B goes
+  back to the Settings page, B again to the regions.
 - Turn it On: while the settings are shown the card appears in its corner (bottom right, small, 50 % by default) and follows each change
   of position, size and opacity. It shows the items, the stones and medallions, and the dungeons' keys; a `?` where the game has no flag.
 - B twice (the panel closes): the card stays, in the same place, and the game still gets every button (move, camera, A, B).
@@ -100,6 +103,46 @@ With a seed made or updated by 0.4.0, and `icons.bin` made from the game (`updat
 - A seed installed before 0.4.0 and not updated: the song cells show their letters with a `?`, and nothing else changes. After
   `update-tracker` the songs are tracked; its pictures need `--nup`.
 - Rename `icons.bin`: the songs show their letters (Mi, Bo, Se, Re, No, Pr, Lu, Ep, Sa, Su, ST, SS).
+
+## 3f. The console (0.5.0; other players' items 0.6.0; the kinds on the Console page 0.6.1)
+
+Needs an Archipelago seed made or updated by 0.5.0 (`update-tracker`; 0.6.0 for other players' items), OotrR's Archipelago
+client (the application's Archipelago page, or `ap-client`) on the same PC as the emulator, and a room to join. A second player (or a second slot of the same room in
+Archipelago's own text client) helps to send items and chat.
+
+- Boot the seed: the log's seed line ends `, an Archipelago seed`. With no client running, about 10 s after that line the bottom of
+  the screen shows a dim "Archipelago client not running" in a small box; nothing else of the console shows.
+- Connect from the application: within a second or two the status line becomes "Archipelago: connecting to <server> as <slot>", then
+  disappears once connected; the log says `console: the Archipelago client is writing to it`. Close the application (or Disconnect):
+  "Archipelago client not running" comes back after about 10 s.
+- Messages: have the other player send you an item (a gold line "<player> sent <item> to you ..."), find one of theirs (a green
+  line), type a chat line on either side (white), `!hint <item>` (blue) and watch a join or a part (grey). Each shows within about a
+  second, wraps if long, fades after 10 s.
+- Other players' items (0.6.0): with three players, or two where one finds their own item, an item that is neither for you nor
+  found by you shows as a lavender line. Untick "Other players' items" on the Console page (its last row): those lines go, the
+  rest stay. A `console.cfg` written by 0.5.0 (no `others=` line) keeps its ticks and shows
+  other players' items; after leaving the console's page the file has an `others=` line. A seed still on 0.5.0 (not updated) shows
+  none of them, not even as server notices.
+- The game keeps every button while the console shows; it never covers the panel (closed while the panel is open, except as the
+  preview).
+- Settings > Console (0.6.1): Console On (an Archipelago seed's default), Position, Opacity, Lines, Fade, then a ticked row per kind:
+  Items received, Items sent, Hints, Chat, Server notices, Other players' items. The page (eleven rows) fits the screen at 720p and
+  1080p, the hint line included. On a kind, A, left and right each tick or untick it; on a value, A does nothing. While this page is
+  open the console is drawn whole as a preview ("No messages yet" before the first), under the panel: a 12-line box at the bottom
+  shows behind the last rows, which stay readable. Check each position (bottom and top centre wide, left and right centre tall),
+  each opacity, 4/6/8/12 lines (a 12-line box at the left or the right fits the screen at 720p and 1080p), each fade (Permanent
+  keeps the lines), and that untick each kind hides its lines and only those. A `console.cfg` from 0.5.0 or 0.6.0 keeps its ticks.
+- With the postcard on in each corner and size: the console never overlaps the card (it moves aside, narrows, or goes above or
+  below it); check bottom centre with a large card bottom right at 4:3 if the emulator can show it.
+- Names with accents (é, ü) show as letters; others (Japanese, emoji) as `?`. This checks that the game's font has the Latin-1
+  letters: if they show as blanks or boxes, say so.
+- Quit and start again: the console's settings come back (`<user folder>/sdmc/ootrTracker/console.cfg`); delete it or fill it with
+  junk: the defaults, no crash. A local seed starts with the console Off, and turning it on there leaves the Archipelago default alone.
+- Auto-connect: on the Archipelago page tick "Connect automatically when the game runs this seed": `archipelago.json` appears in the
+  seed folder with the server, slot, password and `"auto_connect": true`. Close the application, open it, open the seed: the fields
+  are filled from the file. Start the game: within about 5 s of the seed line in the log, the application connects by itself.
+  Disconnect by hand: it doesn't connect again until the seed is opened again. Generate the seed again from the same patch: the file
+  is kept.
 
 ## 4. What it shows
 

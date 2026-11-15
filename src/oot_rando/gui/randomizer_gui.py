@@ -6,6 +6,7 @@ from pathlib import Path
 import queue
 import secrets
 import threading
+import time
 import webbrowser
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
@@ -159,6 +160,10 @@ class Application:
         self.ap_address = tk.StringVar(value=self.app_state.get('ap_address') or 'archipelago.gg:38281')
         self.ap_password, self.ap_slot, self.ap_chat = tk.StringVar(), tk.StringVar(), tk.StringVar()
         self.ap_status = tk.StringVar(value='Open a seed generated from an Archipelago patch to connect.')
+        # Connecting by itself (archipelago.json): paused after a manual disconnect or a fatal error until
+        # the seed is opened again or the box ticked again; the probe looks for the game running this seed.
+        self.ap_auto = tk.BooleanVar(value=False)
+        self.ap_folder, self.ap_auto_paused, self.ap_probe, self.ap_probing, self.ap_probe_at = None, False, None, False, 0.0
         self.slot = tk.StringVar(value='My game')
         self.status = tk.StringVar(value='Choose your game, then prepare your run.')
         self.result = tk.StringVar(value='No seed open. Generate a game or open an existing folder.')
@@ -763,6 +768,8 @@ class Application:
             ttk.Entry(field, textvariable=variable, width=width, **extra).pack(fill='x', pady=(5, 0))
         self.ap_button = ttk.Button(row, text='Connect', style='Accent.TButton', command=self.toggle_archipelago)
         self.ap_button.pack(side='left', anchor='s')
+        ttk.Checkbutton(body, text='Connect automatically when the game runs this seed (kept in the seed folder)',
+                        variable=self.ap_auto, command=self.toggle_archipelago_auto).pack(anchor='w', pady=(10, 0))
         ttk.Label(body, textvariable=self.ap_status, style='Small.TLabel', wraplength=640).pack(anchor='w', pady=(10, 8))
         self.ap_log = tk.Text(body, height=8, wrap='word', state='disabled', padx=12, pady=10)
         self.ap_log.pack(fill='x')
@@ -789,6 +796,9 @@ class Application:
         """A seed was opened: the client follows it only when it comes from an Archipelago patch."""
         from oot_rando.archipelago.client import ClientError, archipelago_info
         self.stop_archipelago()
+        from oot_rando.archipelago import autoconnect
+        self.ap_folder, self.ap_auto_paused, self.ap_probe = None, False, None
+        self.ap_auto.set(False)
         try:
             slot, _, _ = archipelago_info(manifest)
             self.ap_manifest = manifest
@@ -797,13 +807,65 @@ class Application:
         except ClientError as error:
             self.ap_manifest = None
             self.ap_status.set(str(error))
+        if self.ap_manifest and self.artifact:
+            self.ap_folder = self.artifact
+            saved = autoconnect.read(self.ap_folder)
+            if saved:
+                for variable, name in ((self.ap_address, 'server'), (self.ap_slot, 'slot')):
+                    if saved[name]:
+                        variable.set(saved[name])
+                self.ap_password.set(saved['password'])
+                self.ap_auto.set(saved['auto_connect'])
+            if os.name == 'nt':
+                from oot_rando.archipelago.console_bridge import ConsoleMailbox
+                self.ap_probe = ConsoleMailbox(manifest['seed_id'][:16])
+            if self.ap_auto.get():
+                self.ap_status.set('Connects automatically when the game runs this seed.')
         self.update_archipelago_controls()
+
+    def save_archipelago_connection(self):
+        """The page's fields into the seed's archipelago.json (the password is never shown in a message)."""
+        from oot_rando.archipelago import autoconnect
+        if not self.ap_folder:
+            return
+        try:
+            autoconnect.write(self.ap_folder, self.ap_address.get(), self.ap_slot.get(), self.ap_password.get(),
+                              self.ap_auto.get())
+        except OSError as error:
+            self.ap_status.set(f'{autoconnect.FILE_NAME} could not be written in the seed folder ({error.strerror}).')
+
+    def toggle_archipelago_auto(self):
+        if not self.ap_folder:
+            self.ap_auto.set(False)
+            return
+        self.ap_auto_paused = False
+        self.save_archipelago_connection()
+        if self.ap_auto.get() and not self.ap_client:
+            self.ap_status.set('Connects automatically when the game runs this seed.')
+
+    def auto_connect_archipelago(self):
+        """Every 5 s while it may: is the game running this seed (its console's mailbox says so)? Off the
+        Tk thread: finding the game scans the processes."""
+        if (not self.ap_auto.get() or not self.ap_manifest or not self.ap_probe or self.ap_client
+                or self.ap_auto_paused or self.ap_probing or time.monotonic() < self.ap_probe_at):
+            return
+        self.ap_probe_at, self.ap_probing, probe = time.monotonic() + 5, True, self.ap_probe
+
+        def run():
+            try:
+                found = probe.running_seed()
+            except Exception:  # noqa: BLE001 - the next probe tries again
+                found = False
+            self.events.put(('ap-seed-running', (probe, found)))
+        threading.Thread(target=run, name='archipelago-probe', daemon=True).start()
 
     def toggle_archipelago(self):
         from oot_rando.archipelago.client import ArchipelagoClient, ClientError
         if self.ap_client:
             self.stop_archipelago()
-            self.ap_status.set('Disconnected.')
+            self.ap_auto_paused = True
+            self.ap_status.set('Disconnected.' + (' Automatic connection paused until the seed is opened again.'
+                                                  if self.ap_auto.get() else ''))
             return
         if not self.ap_manifest:
             return
@@ -815,6 +877,8 @@ class Application:
             self.ap_status.set(str(error))
             return
         self.write_app_state(ap_address=self.ap_address.get().strip())
+        if self.ap_auto.get():
+            self.save_archipelago_connection()
         self.ap_client, self.ap_log_seen = client, 0
         self.ap_log.configure(state='normal')
         self.ap_log.delete('1.0', 'end')
@@ -847,6 +911,8 @@ class Application:
                 text += f' • in game: {info["delivery"]}'
         if info['goal']:
             text += ' • goal sent'
+        if client.console is not None and info['connected']:
+            text += ' • in-game console: ' + client.console.state
         self.ap_status.set(text)
         lines, count = list(client.log), client.log_count
         new = lines[max(0, len(lines) - (count - self.ap_log_seen)):]
@@ -859,6 +925,7 @@ class Application:
             self.ap_log.configure(state='disabled')
         if client.fatal:
             self.ap_client = None
+            self.ap_auto_paused = True
             self.update_archipelago_controls()
 
     # ------------------------------------------------------- app state
@@ -957,6 +1024,7 @@ class Application:
             self.refresh_tracker()
         if self.turbo and self.turbo.last_hold:
             self.turbo_status.set(self.turbo.status + ' — last: ' + self.turbo.last_hold)
+        self.auto_connect_archipelago()
         self.root.after(1000, self.tracker_tick)   # live memory: ~1 s; the save path is cheap to stat
 
     def refresh_tracker(self):
@@ -1841,6 +1909,12 @@ class Application:
                         messagebox.showerror('Update', str(payload[0]))
                 elif kind == 'ap-change':
                     self.render_archipelago()
+                elif kind == 'ap-seed-running':
+                    probe, found = payload
+                    self.ap_probing = False
+                    if (found and probe is self.ap_probe and self.ap_auto.get() and not self.ap_client
+                            and not self.ap_auto_paused):
+                        self.toggle_archipelago()
                 elif kind == 'progress':
                     self.status.set(payload)
                     self.log.configure(state='normal')

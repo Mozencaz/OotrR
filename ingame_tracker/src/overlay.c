@@ -1,5 +1,5 @@
-/* Before each of the game's presents (nvn.c): draws the panel, if it's shown, in the game's own style
- * (trackerui.c), as one command buffer on a slot (slots.c). The panel itself comes from the game's controller
+/* Before each of the game's presents (nvn.c): draws the panel and the console, if they're shown, in the game's own
+ * style (trackerui.c), as one command buffer on a slot (slots.c). What they show comes from the game's controller
  * thread (app.c). Adapted from sloperinaGZ's src/ootgz/nvn.c (GPL-3) through ocarinaMIDI's overlay.c (c599fa5). */
 #include "overlay.h"
 
@@ -12,32 +12,56 @@
 
 static enum { OV_NONE, OV_READY, OV_FAILED } state;
 
-/* --- the panel, from the game's controller thread to its present thread ------------------------- */
+/* --- the panel and the console, from the game's controller thread to its present thread ------ */
+
+/* A sequence lock: `seq` is odd while `to` is being written. */
+static void publish(void *to, uint32_t *seq, const void *from, size_t size)
+{
+  uint32_t now = __atomic_load_n(seq, __ATOMIC_RELAXED);
+  __atomic_store_n(seq, now + 1, __ATOMIC_RELAXED);
+  __atomic_thread_fence(__ATOMIC_RELEASE);
+  memcpy(to, from, size);
+  __atomic_store_n(seq, now + 2, __ATOMIC_RELEASE);
+}
+
+/* `newest` becomes `published` unless that is being written right now (it then stays the one read last time). */
+static void read_newest(void *newest, void *attempt, const void *published, const uint32_t *seq, size_t size)
+{
+  uint32_t before = __atomic_load_n(seq, __ATOMIC_ACQUIRE);
+  if (before & 1)
+    return;
+  memcpy(attempt, published, size);
+  __atomic_thread_fence(__ATOMIC_ACQUIRE);
+  if (__atomic_load_n(seq, __ATOMIC_RELAXED) == before)
+    memcpy(newest, attempt, size);
+}
 
 static panel_t published;
-static uint32_t published_seq; /* odd while `published` is being written */
+static uint32_t published_seq;
+static console_view_t published_console;
+static uint32_t published_console_seq;
 
 void overlay_publish(const panel_t *panel)
 {
-  uint32_t seq = __atomic_load_n(&published_seq, __ATOMIC_RELAXED);
-  __atomic_store_n(&published_seq, seq + 1, __ATOMIC_RELAXED);
-  __atomic_thread_fence(__ATOMIC_RELEASE);
-  memcpy(&published, panel, sizeof(published));
-  __atomic_store_n(&published_seq, seq + 2, __ATOMIC_RELEASE);
+  publish(&published, &published_seq, panel, sizeof(published));
 }
 
-/* The newest panel; the one read last time if it's being written right now. */
+void overlay_publish_console(const console_view_t *view)
+{
+  publish(&published_console, &published_console_seq, view, sizeof(published_console));
+}
+
 static const panel_t *newest_panel(void)
 {
-  static panel_t newest;
-  panel_t attempt;
-  uint32_t before = __atomic_load_n(&published_seq, __ATOMIC_ACQUIRE);
-  if (before & 1)
-    return &newest;
-  memcpy(&attempt, &published, sizeof(attempt));
-  __atomic_thread_fence(__ATOMIC_ACQUIRE);
-  if (__atomic_load_n(&published_seq, __ATOMIC_RELAXED) == before)
-    memcpy(&newest, &attempt, sizeof(newest));
+  static panel_t newest, attempt;
+  read_newest(&newest, &attempt, &published, &published_seq, sizeof(newest));
+  return &newest;
+}
+
+static const console_view_t *newest_console(void)
+{
+  static console_view_t newest, attempt;
+  read_newest(&newest, &attempt, &published_console, &published_console_seq, sizeof(newest));
   return &newest;
 }
 
@@ -52,8 +76,11 @@ static void overlay_fail(const char *why)
 void overlay_before_present(nvn_queue_t *queue, nvn_window_t *window, nvn_texture_t *texture)
 {
   const panel_t *panel = newest_panel();
+  const console_view_t *console = newest_console();
+  uint64_t now = sys_ms();
   nvn_texture_info_t info;
-  if (panel->mode == PANEL_HIDDEN || state == OV_FAILED || !nvn_texture_info(texture, &info))
+  bool console_shown = console_view_showing(console, now);
+  if ((panel->mode == PANEL_HIDDEN && !console_shown) || state == OV_FAILED || !nvn_texture_info(texture, &info))
     return;
   if (state == OV_NONE) {
     if (!slots_init(COMMAND_BYTES)) {
@@ -71,7 +98,7 @@ void overlay_before_present(nvn_queue_t *queue, nvn_window_t *window, nvn_textur
     return;
   }
   nvn_rect_t area = nvn_visible_area(window, &info);
-  if (trackerui_record(slots_begin(slot), slot, texture, &info, area, panel))
+  if (trackerui_record(slots_begin(slot), slot, texture, &info, area, panel, console, now))
     slots_submit(queue, slot);
   else
     slots_discard();

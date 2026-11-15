@@ -18,28 +18,35 @@ save has found:
   observed, so it isn't counted), and the enemy souls if the seed has them;
 - each region's checks by name, ticked when collected, so you can see what's still missing there;
 - the seed's id, a warning when the save isn't from this seed, and "Goal reached";
-- a **postcard**: a small card with only the icons (items, songs, temples, dungeon keys) in a corner of the screen while you play.
+- a **postcard**: a small card with only the icons (items, songs, temples, dungeon keys) in a corner of the screen while you play;
+- a **console** for Archipelago seeds: the items you receive and send, other players' items, hints, chat and the server's
+  notices, as a few lines over the game, written there by OotrR's Archipelago client.
 
-Version 0.4.0. Tested in the game (1.1.1, in the Ryuchii emulator): the panel, icons, postcard and songs. Game 1.0.0 is untested. See [docs/TESTING.md](docs/TESTING.md).
+Version 0.6.1. Tested in the game (1.1.1, in the Ryuchii emulator): the panel, icons, postcard and songs, and 0.5.0's console with two players. Other players' items (0.6.0) and the Console page's rows (0.6.1) are **not yet tested in the game**, nor is game 1.0.0. See [docs/TESTING.md](docs/TESTING.md).
 
 ## Controls
 
 | | |
 |---|---|
 | R + right stick up | open the panel, or close it |
-| D-pad or left stick | move the highlight over the regions and the Postcard entry after them; in a region's list, scroll (left and right: a page). Held, it repeats |
-| A | open the highlighted region's list of checks, or the postcard's settings |
-| B | back to the regions, or close the panel |
-| D-pad or left stick, in the postcard's settings | up and down choose a setting, left and right change its value |
+| D-pad or left stick | move the highlight over the regions and the Settings entry after them; in a region's list, scroll (left and right: a page). Held, it repeats |
+| A | open the highlighted region's list of checks, the Settings page or the page of the entry chosen on it; on the console's page, tick or untick the kind of message chosen |
+| B | back a page (a list and the Settings page: to the regions), or close the panel |
+| D-pad or left stick, on a settings page | up and down choose a setting, left and right change its value (on a kind of message, they or A tick or untick it) |
 
 While the panel is open the game doesn't see R, the right stick (so the camera stays still), A, B, the D-pad or the left
 stick (Link stands still); while the combination is held, it doesn't see R or the right stick. A button still held when the
 panel closes stays hidden from the game until it's let go, so closing with B doesn't also swing the sword. R + right stick
 down is sloperinaGZ's menu and is left alone.
 
+## Settings
+
+The last entry of the regions is **Settings**. A on it opens a page with two entries, **Postcard** and **Console**, each with
+its On or Off; A on one opens its settings.
+
 ## The postcard
 
-The last entry of the regions is **Postcard** (On or Off). A on it opens its settings:
+**Settings > Postcard**:
 
 | Setting | Values | Default |
 |---|---|---|
@@ -58,6 +65,40 @@ The settings are saved on the SD card, in `ootrTracker/postcard.cfg` (in an emul
 when the settings are left or the panel is closed, and read when the seed's file is loaded at start. A missing or damaged file
 means the defaults. If the SD card can't be mounted, the settings last until the game is closed.
 
+## The console
+
+**Settings > Console**:
+
+| Setting | Values | Default |
+|---|---|---|
+| Console | On, Off | On for an Archipelago seed, Off for a local one |
+| Position | Bottom centre, Top centre (wide); Left centre, Right centre (tall) | Bottom centre |
+| Opacity | 25 %, 50 %, 75 %, 100 % | 75 % |
+| Lines | 4, 6, 8, 12 | 6 |
+| Fade | 5 s, 10 s, 30 s, Permanent | 10 s |
+| Items received | ticked or not: shown or not | ticked |
+| Items sent | ticked or not | ticked |
+| Hints | ticked or not | ticked |
+| Chat | ticked or not | ticked |
+| Server notices | ticked or not | ticked |
+| Other players' items | ticked or not | ticked |
+
+The console shows the newest lines of the kinds ticked, oldest at the top, each in its kind's colour (gold received, green sent, blue
+hints, white chat, grey notices, lavender other players' items: one player finding their own item, or sending one to a third); a
+long line wraps over up to three rows. A line fades out after the Fade time; Permanent keeps the last lines. It is drawn whether
+the panel is open or not, takes no input, and keeps clear of the postcard: next to it, narrower, or above or below it. While the
+console's page is shown it is drawn whole as a preview, under the panel ("No messages yet" before the first line).
+Console is kept apart for local and Archipelago seeds, so turning it on for one leaves the other's default.
+
+Its lines come from OotrR's Archipelago client (the desktop application or `ap-client`), which finds the console's mailbox in
+this module's memory while the game runs and writes the room's messages there, with the connection's state and a heartbeat
+([the mailbox](../docs/ingame-tracker-format.md#the-consoles-mailbox)). A status line at the bottom says "Archipelago: connecting
+to ...", "Archipelago: not connected", or, after 10 s without the client's heartbeat on an Archipelago seed, "Archipelago client not
+running". The game's font has ASCII and Latin-1 letters; other characters show as `?`. The console keeps the last 32 lines; lines
+sent while the game wasn't running aren't shown.
+
+The settings are saved in `ootrTracker/console.cfg` next to the postcard's, when the console's page is left or the panel is closed.
+
 ## What it needs
 
 The module is shipped by the randomizer: the application copies it into each seed it generates, as `exefs/subsdk7` next to the
@@ -69,8 +110,8 @@ out, turn off "In-game tracker" in OotrR's install options (or pass `--no-ingame
 installed seed, with the songs' flags too (a seed made before 0.4.0 shows its songs as `?` until then, and as letters until
 its icons are updated with `--nup`).
 
-It reads the game's save data (GameData) in place and never writes to it or calls a game function. The only thing it writes is its
-own postcard settings file on the SD card. It knows main's
+It reads the game's save data (GameData) in place and never writes to it or calls a game function. The only things it writes are its
+own settings files on the SD card and its console's mailbox, in its own memory. It knows main's
 layout for the game builds 1.0.0 and 1.1.1; on another build the panel says "Game version not supported" and nothing
 else is read. It draws with the game's own font and UI shader, read from the game's RomFS when the panel is first
 opened (nothing of the game ships here), so the first opening pauses for a moment.
@@ -94,12 +135,14 @@ build to where the application reads it. The seed file's format is documented on
 ## Rules for changes
 
 - Read only: never write the game's memory, never call a game function. Every pointer is checked with `sys_mapped` before it is read.
+  The console's mailbox is the module's own data; what the client writes there is checked (the sequence, lengths, kinds) before use.
 - Game offsets live in `src/builds.c` only. A build not in it reads no memory.
 - A flag the game doesn't have is unknown, never false.
 - Every hook calls what its slot held before, unless the slot still points into main (lazy binding: never call main's PLT).
 - Our own NVN calls go through `nvn_proc`, never through a function an add-on's hook handed out.
 - The seed file's format is shared with the randomizer (`src/oot_rando/tracker/ingame_format.py`): change both, the format document and the
-  tests' fixture together (`tests/fixtures/real-seed.trk` was produced by the randomizer's exporter). The same goes for `icons.bin`
+  tests' fixture together (`tests/fixtures/real-seed.trk` was produced by the randomizer's exporter). The same goes for the console's
+  mailbox (`src/mailbox.h`, `src/oot_rando/archipelago/console_bridge.py`). The same goes for `icons.bin`
   (`ingame_icons.py`, `src/iconfile.c`).
 - Files adapted from sloperinaGZ and ocarinaMIDI keep their provenance headers; when sloperinaGZ changes, port from its master and note the commit.
 
@@ -115,6 +158,7 @@ GPL-3.0-or-later ([LICENSE](LICENSE)); this folder only, the rest of the reposit
   CONTRIBUTORS.md), itself based on **gz**, glankk's practice ROM for Ocarina of Time (N64). The game's memory layout
   (`builds.c`, `gamedata.c`) is what sloperinaGZ's group found.
 - The items' grid and the key labels follow the desktop tracker of the randomizer (`src/oot_rando/tracker/` in this repository, MIT).
+- The console's kinds of message, a check box each, follow sloperinaGZ's watch list (`src/ootgz/menus.c`, master 5b44a21).
 - `src/third_party` (see its README) holds [stb_truetype](https://github.com/nothings/stb) (public domain) and zstd's educational decoder
   (BSD or GPLv2, Meta Platforms), both as sloperinaGZ ships them.
 - No game files are included. You need your own copy of the game; the module reads its font and shader from it at run time,

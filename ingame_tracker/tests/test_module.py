@@ -1,5 +1,6 @@
 """The module's logic on the PC (tests/module_host.c): the seed file's parser, the tracker's state, the game-data
-reader over a fake GameData, the controls and the browsing. Needs a C compiler for the PC ($CC, cc, gcc or clang on the PATH, or
+reader over a fake GameData, the controls, the browsing, the postcard's and the console's settings, the console's
+lines and its mailbox. Needs a C compiler for the PC ($CC, cc, gcc or clang on the PATH, or
 LLVM in its default place on Windows)."""
 import os
 import shutil
@@ -11,7 +12,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
 REAL_SEED = FIXTURES / "real-seed.trk"
-SOURCES = ["trkfile.c", "tracker.c", "gamedata.c", "grid.c", "text.c", "controls.c", "browse.c", "iconfile.c", "postcard.c", "sizes.c"]
+SOURCES = ["trkfile.c", "tracker.c", "gamedata.c", "grid.c", "text.c", "controls.c", "browse.c", "iconfile.c", "postcard.c", "sizes.c",
+           "cfgtext.c", "console.c", "consolelog.c", "mailbox.c"]
 
 
 def find_compiler():

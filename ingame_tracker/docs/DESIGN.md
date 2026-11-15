@@ -1,13 +1,14 @@
 # How ootrTracker works
 
-The module reads, never writes: it does not call a game function and it does not change the save. It is
+The module reads, never writes: it does not call a game function and it does not change the save. (It writes its own
+memory only: its console's mailbox, which the desktop client fills.) It is
 [ocarinaMIDI](https://github.com/waze3174/ocarinaMIDI)'s skeleton (hooks, frame counting, drawing in the game's style) with the song
 player replaced by a reader of the game's save data. This file covers what differs; ocarinaMIDI's DESIGN.md has the rest at length
 (lazy binding, chaining with sloperinaGZ, the NVN hooks, the slots).
 
 ## Loading
 
-`subsdk7` in the game's exefs. rtld links it (imports: `nnMain`, `aligned_alloc` and `free` from main; nn::fs (also the SD card's mount, create, delete and write, for the postcard's settings), `nvnBootstrapLoader`,
+`subsdk7` in the game's exefs. rtld links it (imports: `nnMain`, `aligned_alloc` and `free` from main; nn::fs (also the SD card's mount, create, delete and write, for the postcard's and the console's settings), `nvnBootstrapLoader`,
 `snprintf` and a few libc functions from sdk; the list in `lib/imports.txt` is checked at link time) and calls
 `ootr_tracker_module_init` (DT_INIT). That does three things, with checked reads and unformatted logging only:
 
@@ -20,13 +21,14 @@ player replaced by a reader of the game's save data. This file covers what diffe
 Next to sloperinaGZ (`subsdk9`) and ocarinaMIDI (`subsdk8`) every hook calls what its slot held before, or the sdk's own function when
 the slot still points into main (a lazily bound import: calling it would crash). No symbol is shared: the module is linked with hidden
 visibility. It has no IPS patch and takes no game offset beyond the GameData ones in `builds.c`. It reads `content:` (the game's RomFS, mounted
-by the game) and, for the postcard's settings, mounts the SD card once as `ootrtrk` (a mount name can be used once, and sloperinaGZ
+by the game) and, for the postcard's and the console's settings, mounts the SD card once as `ootrtrk` (`sdfile.c`) (a mount name can be used once, and sloperinaGZ
 and ocarinaMIDI have their own).
 
 ## The seed file
 
 `content:/RandoTracker/seed.trk` ([docs/ingame-tracker-format.md](../../docs/ingame-tracker-format.md)): the seed's markers, the flags to watch by region with each check's name, the items' flags, the dungeons' key flags.
-Version 2 files name the checks; version 1 files (seeds made by the 0.1.0 exporter) are read too, and their checks are shown as "Check N".
+Version 3 files add a flags word (bit 0: an Archipelago seed, which turns the console on by default); version 2 files (no flags: a local
+seed) name the checks; version 1 files (seeds made by the 0.1.0 exporter) are read too, and their checks are shown as "Check N".
 It is read once, on the game thread, 10 s after the first frame, and again at a press of the combination if that first read found
 nothing (at most every 2 s). If it is missing or damaged (`trkfile.c` checks every offset and count) the module stays idle: the
 combination does nothing and the game sees every button. The bytes are kept for good, because the panel's names point into them.
@@ -94,6 +96,11 @@ sloperinaGZ's menu, R3 + D-pad is ocarinaMIDI's.
 three columns filled top to bottom: up and down step through them in that order, left and right jump a column (to the last region of a
 shorter last column). In a list, up and down step one check and left and right a page, and the list scrolls to keep the highlight shown.
 B goes back to the regions, and B there closes the panel. Opening the panel shows the regions again, with the highlight where it was.
+
+After the regions comes the **Settings** entry (the region count). A opens `BROWSE_SETTINGS`, whose two rows (`browse_t.entry`) open
+`BROWSE_POSTCARD` and `BROWSE_CONSOLE` (`browse_t.setting`); the console's rows after Fade are its kinds of message
+(`CONSOLE_SETTING_FIRST_KIND` on), which A or left and right tick. B goes back one page: Postcard and Console to Settings, Settings
+to the regions. Each page's highlight starts at its first row when it is opened, and is kept when a page below it is left.
 
 ## Drawing
 
@@ -183,6 +190,35 @@ A small card with the items' grid, the songs under it and the dungeons' keys, dr
   the box, the glyphs and the icons fade together. Quads overlap as they do at full opacity (text over a fainter box), so it reads as one
   translucent card, not a flattened image.
 
+## The console
+
+A few lines of Archipelago messages over the game, written into the module's memory by the desktop client (its layout and protocol
+are in [the format document](../../docs/ingame-tracker-format.md#the-consoles-mailbox)). Its parts:
+
+- `mailbox.c`: the mailbox is a static `mailbox_t` in the module's data with its header filled in (so its magic is in memory from the
+  start). Each frame `app_frame` calls `mailbox_poll`: the heartbeat is read on its own; when the sequence is even and new, the status
+  and the entries from the module's read head to the client's head (at most the last 32: a client faster than the module loses the
+  oldest, never shows a half-written one) are copied, and kept only if the sequence is unchanged after the copy. A kind it doesn't know
+  is a server notice; a length over the entry's room is cut to it. `mailbox_set_seed` writes the seed id once the seed file is read.
+- `consolelog.c` is pure: the last 32 lines with their kind and the time they came, made drawable on arrival (`console_sanitize`:
+  UTF-8 to the font's characters, ASCII and Latin-1 as one byte each, others `?`, tabs and line ends to spaces, controls dropped); the
+  view of the newest lines of the kinds ticked; each line's fade (full for the Fade time, then out over a second).
+- `console.c` is pure: the settings (on for local and for Archipelago seeds kept apart, position, opacity, lines, fade, the kinds as
+  bits), their text, stepping, and `console.cfg`'s text (`version=1` first, then `name=number` lines; a file without `version=1` is
+  ignored whole, a bad line or value is skipped). `cfgtext.c` is the `name=number` reader and writer it shares with `postcard.c`;
+  `consolefile.c` reads and writes the file through `sdfile.c`, as the postcard's (on loading the seed; when the console's page is left
+  or the panel is closed).
+- `app.c` publishes a `console_view_t` (settings, on or off for this seed, status line, the lines to show) to the present thread
+  through its own seqlock (`overlay_publish_console`) when a line, the status line or a setting changes. The status line comes from
+  `mailbox_status_line`: "Archipelago client not running" after 10 s without a heartbeat (for an Archipelago seed counted from loading
+  the seed, for a local one only once a client was heard), else "connecting to ..." or "not connected" while the client says so.
+- Drawing: `sizes_console_box` places the box (wide 380 font pixels at the top or the bottom, 180 tall at either side, a row of 10 per
+  line) and keeps it clear of the postcard's box: sideways, then narrower (down to 260), then above or below it; a tall one up or down,
+  then beside it. The rows are collected from the bottom (the status line, then the newest lines, each wrapped over at most 3 rows) until
+  the box is full; each row has its own band, so a short console doesn't darken an empty box. The opacity and each line's fade multiply
+  through `gpuui_set_opacity`. While the panel is open it is drawn only as the preview on the console's page (whole, at full fade).
+  With the console's 12 rows and the postcard the frame stays under `MAX_QUADS`; the console is never drawn with the regions' panel.
+
 ## Failure modes
 
 Each is logged once and leaves the game alone: no `seed.trk` or a damaged one (idle); an unknown build (the panel opens and says so);
@@ -193,7 +229,10 @@ that NVN won't take (that item shows as its letters).
 
 ## Known limits
 
-- The postcard's settings are written when their page is left: if the game is closed on that page, the last changes are lost.
+- The postcard's and the console's settings are written when their page is left: if the game is closed on that page, the last
+  changes are lost.
+- The console shows only what the client writes while the game runs: lines from before the game started, or from while the module
+  couldn't take them (the client keeps up to 200 waiting), are not shown later.
 
 - Nothing was tested in the game when this was written (TESTING.md has the plan).
 - Only ASCII is drawn (other characters show as `?`, one per byte); region and check names are ASCII in full-randomizer seeds (the

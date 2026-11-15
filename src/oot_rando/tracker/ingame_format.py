@@ -1,16 +1,18 @@
 """Binary seed file read by the in-game tracker module (``RandoTracker/seed.trk``).
 
 The layout is documented in ``docs/ingame-tracker-format.md``; the module parses exactly this.
-Little-endian. ``build`` writes version 2 (version 1 without the checks' names), ``parse`` is the
-reference reader the tests use and reads both (the module validates the same bounds).
+Little-endian. ``build`` writes version 3 (version 2 without the flags word after the header's
+tables, version 1 without the checks' names either), ``parse`` is the reference reader the tests use
+and reads all three (the module validates the same bounds).
 """
 import struct
 
 MAGIC = b'RTRK'
-VERSION = 2
-READABLE_VERSIONS = (1, 2)   # version 1: the checks have no names
+VERSION = 3
+READABLE_VERSIONS = (1, 2, 3)   # version 1: the checks have no names; versions 1 and 2: no flags
 
-HEADER = struct.Struct('<4sHH16I')
+HEADER = struct.Struct('<4sHH17I')
+HEADER_V2 = struct.Struct('<4sHH16I')   # versions 1 and 2
 REGION = struct.Struct('<III')       # name offset, first check, check count
 CHECK = struct.Struct('<QII')        # key, kind, name offset (reserved and 0 in version 1)
 ITEM = struct.Struct('<IHH')         # name offset, first rule, rule count
@@ -18,6 +20,7 @@ RULE = struct.Struct('<IHH')         # Bool hash, level, reserved
 KEYS = struct.Struct('<IBBHIIII')    # name offset, flags, small key total, reserved, found, held, ring, boss
 
 KIND_BOOL, KIND_BOOL64 = 1, 2
+FLAG_ARCHIPELAGO = 1                 # the seed comes from an Archipelago patch (the console is on by default)
 KEY_SMALL, KEY_BOSS, KEY_SMALL_ALL, KEY_BOSS_ALL = 1, 2, 4, 8
 MAX_U8, MAX_U16, MAX_U32, MAX_U64 = 0xFF, 0xFFFF, 0xFFFFFFFF, (1 << 64) - 1
 STRING_ALIGNMENT = 4
@@ -27,7 +30,7 @@ MAX_REGIONS, MAX_KEY_ROWS = 64, 16
 # Tables in file order: (name, record layout). The header holds ``<singular>_offset`` and ``<singular>_count``.
 TABLES = (('region', REGION), ('check', CHECK), ('item', ITEM), ('rule', RULE), ('key', KEYS))
 HEADER_FIELDS = (('file_size', 'seed_marker', 'goal_marker', 'seed_id_offset', 'strings_offset', 'strings_size')
-                 + tuple(f'{name}_{part}' for name, _ in TABLES for part in ('offset', 'count')))
+                 + tuple(f'{name}_{part}' for name, _ in TABLES for part in ('offset', 'count')) + ('flags',))
 
 
 class _Strings:
@@ -51,11 +54,11 @@ def _bounded(value, limit, what):
     return value
 
 
-def build(seed_id, seed_marker, goal_marker, regions, items, keys):
+def build(seed_id, seed_marker, goal_marker, regions, items, keys, flags=0):
     """Serialise the seed file.
 
     ``regions``: ``[(name, [(kind, key, check name)])]``; ``items``: ``[(name, [(hash, level)])]``;
-    ``keys``: ``[{'name', 'flags', 'total', 'found', 'held', 'ring', 'boss'}]``.
+    ``keys``: ``[{'name', 'flags', 'total', 'found', 'held', 'ring', 'boss'}]``; ``flags``: FLAG_*.
     """
     if len(regions) > MAX_REGIONS or len(keys) > MAX_KEY_ROWS:
         raise ValueError('More regions or dungeons than the in-game tracker can show.')
@@ -78,7 +81,8 @@ def build(seed_id, seed_marker, goal_marker, regions, items, keys):
     padded = blob + b'\0' * (-len(blob) % STRING_ALIGNMENT)
     values = {'seed_marker': _bounded(seed_marker, MAX_U32, 'seed marker'),
               'goal_marker': _bounded(goal_marker, MAX_U32, 'goal marker'),
-              'seed_id_offset': seed_id_offset, 'strings_offset': HEADER.size, 'strings_size': len(blob)}
+              'seed_id_offset': seed_id_offset, 'strings_offset': HEADER.size, 'strings_size': len(blob),
+              'flags': _bounded(flags, MAX_U32, 'flags')}
     offset = HEADER.size + len(padded)
     tables = dict(zip((name for name, _ in TABLES), (region_rows, check_rows, item_rows, rule_rows, key_rows)))
     for name, rows in tables.items():
@@ -102,22 +106,23 @@ def _string(data, header, offset):
 
 def _read_table(data, header, name, record):
     count, offset = header[name + '_count'], header[name + '_offset']
-    if offset < HEADER.size or offset + count * record.size > header['file_size']:
+    if offset < header['header_size'] or offset + count * record.size > header['file_size']:
         raise ValueError(f'The {name} table leaves the file.')
     return [record.unpack_from(data, offset + i * record.size) for i in range(count)]
 
 
 def parse(data):
     """Read and validate a seed file; returns the arguments ``build`` takes."""
-    if len(data) < HEADER.size:
+    if len(data) < HEADER_V2.size:
         raise ValueError('File shorter than its header.')
-    magic, version, header_size, *fields = HEADER.unpack_from(data)
-    if magic != MAGIC or version not in READABLE_VERSIONS or header_size != HEADER.size:
+    magic, version, header_size = struct.unpack_from('<4sHH', data)
+    layout = HEADER if version >= 3 else HEADER_V2
+    if magic != MAGIC or version not in READABLE_VERSIONS or header_size != layout.size or len(data) < layout.size:
         raise ValueError('Not a seed file of a version this reader knows.')
-    header = dict(zip(HEADER_FIELDS, fields))
+    header = {'flags': 0, **dict(zip(HEADER_FIELDS, layout.unpack_from(data)[3:])), 'header_size': layout.size}
     if header['file_size'] != len(data):
         raise ValueError('File size differs from the header.')
-    if header['strings_offset'] < HEADER.size or header['strings_offset'] + header['strings_size'] > len(data):
+    if header['strings_offset'] < layout.size or header['strings_offset'] + header['strings_size'] > len(data):
         raise ValueError('The string table leaves the file.')
     regions, checks, items, rules, keys = (_read_table(data, header, name, record) for name, record in TABLES)
     for table, children in ((regions, checks), (items, rules)):
@@ -126,7 +131,7 @@ def parse(data):
     named = [(kind, key, _string(data, header, check_name)) for key, kind, check_name in checks]
     return {
         'seed_id': _string(data, header, header['seed_id_offset']),
-        'seed_marker': header['seed_marker'], 'goal_marker': header['goal_marker'],
+        'seed_marker': header['seed_marker'], 'goal_marker': header['goal_marker'], 'flags': header['flags'],
         'regions': [(_string(data, header, name), named[first:first + count]) for name, first, count in regions],
         'items': [(_string(data, header, name), [(h, level) for h, level, _ in rules[first:first + count]])
                   for name, first, count in items],

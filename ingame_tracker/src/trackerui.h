@@ -7,6 +7,7 @@
 
 #include <stdbool.h>
 
+#include "consolelog.h"
 #include "nvn.h"
 #include "panel.h"
 
@@ -16,8 +17,9 @@ void trackerui_load(void);
 /* Render thread: whether the panel can be drawn now (the first time after a successful trackerui_load, sets
  * up the GPU side). */
 bool trackerui_usable(void);
-/* Records the panel into `cmd` (a slot's, slots.h); false if there is nothing to draw. */
+/* Records the panel, the postcard and the console as they are at `now` into `cmd` (a slot's, slots.h); false if
+ * there is nothing to draw. */
 bool trackerui_record(nvn_obj_t *cmd, int slot, nvn_texture_t *texture, const nvn_texture_info_t *info,
-                      nvn_rect_t area, const panel_t *panel);
+                      nvn_rect_t area, const panel_t *panel, const console_view_t *console, uint64_t now);
 
 #endif

@@ -48,5 +48,8 @@ ootrTracker: counting frames from reads of controller style 0, NpadIdType 0x0
 ootrTracker: seed 76069ecc4740cec6: 35 regions, 840 checks, 44 items      (10 s after the first frame)
 ```
 
+An Archipelago seed's line ends `, an Archipelago seed`. With OotrR's Archipelago client connected, `console: the Archipelago client
+is writing to it` follows once, and `console: its first line came` at its first message.
+
 "calls another module" instead of "calls the sdk" means another add-on hooked that import first and ours wraps it.
 `no content:/RandoTracker/seed.trk: the tracker stays off` means the seed folder has no data file (an older seed) or the RomFS doesn't show it.

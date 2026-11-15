@@ -3,6 +3,7 @@
 #define PANEL_H
 
 #include "browse.h"
+#include "console.h"
 #include "postcard.h"
 #include "tracker.h"
 
@@ -21,6 +22,8 @@ typedef struct {
   char seed_id[SEED_ID_ROOM];
   tracker_state_t state; /* only meaningful when tracking; its names point into the seed file, kept for good */
   postcard_settings_t postcard;
+  console_settings_t console; /* for the Settings and Console pages; the console's lines are its own (consolelog.h) */
+  bool archipelago;           /* the seed is an Archipelago seed (its console's On/Off) */
   browse_t browse;
   uint32_t row_count;    /* with a region's list open: its checks from browse.top */
   check_row_t rows[BROWSE_CHECK_ROWS];

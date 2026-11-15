@@ -166,12 +166,8 @@ def _move_to_archive(directory, archive, suffix):
     return target
 
 
-def continued_save(title_directory, settings):
-    """Seed id that saves of the same Archipelago slot are bound to, from a seed installed
-    in ``title_directory``, or None.
-
-    A newer version of the application gives the same patch a new seed id. The placements
-    come from the patch, so the new seed keeps the old binding and those saves go on."""
+def _same_slot_seed(title_directory, settings):
+    """(folder, manifest) of a seed installed in ``title_directory`` from the same Archipelago patch, or None."""
     if settings.archipelago is None or not Path(title_directory).is_dir():
         return None
     patch = settings.to_dict()['archipelago']
@@ -180,8 +176,28 @@ def continued_save(title_directory, settings):
             continue
         manifest = json.loads((other / 'manifest.json').read_text(encoding='utf-8'))
         if manifest.get('settings', {}).get('archipelago') == patch:
-            return manifest.get('save_seed_id') or manifest['seed_id']
+            return other, manifest
     return None
+
+
+def continued_save(title_directory, settings):
+    """Seed id that saves of the same Archipelago slot are bound to, from a seed installed
+    in ``title_directory``, or None.
+
+    A newer version of the application gives the same patch a new seed id. The placements
+    come from the patch, so the new seed keeps the old binding and those saves go on."""
+    found = _same_slot_seed(title_directory, settings)
+    return (found[1].get('save_seed_id') or found[1]['seed_id']) if found else None
+
+
+def _connection_file(destination, title_directory, settings):
+    """The ``archipelago.json`` a seed generated again keeps: the replaced copy's, else that of the
+    seed of the same slot it replaces (bytes, or None)."""
+    from oot_rando.archipelago import autoconnect
+    if destination.exists():
+        return autoconnect.raw(destination)
+    found = _same_slot_seed(title_directory, settings)
+    return autoconnect.raw(found[0]) if found else None
 
 
 def generate_in_mods(nup, title_directory, settings, progress=None, archive=None, generate=None,
@@ -194,7 +210,8 @@ def generate_in_mods(nup, title_directory, settings, progress=None, archive=None
     to ``archive`` first (never deleted). Earlier seeds of this application are then
     archived too. A seed sharing resources with another mod is moved to the archive
     and installation stops. An Archipelago seed keeps the saves of the seed of the same
-    slot it replaces (:func:`continued_save`). ``ingame_tracker=False`` leaves the in-game
+    slot it replaces (:func:`continued_save`), and its ``archipelago.json`` (how to connect,
+    ``archipelago.autoconnect``). ``ingame_tracker=False`` leaves the in-game
     tracker module and its data out of the seed. Returns the seed folder.
     """
     if generate is None:
@@ -204,6 +221,7 @@ def generate_in_mods(nup, title_directory, settings, progress=None, archive=None
     name = 'OoT_Randomizer_' + settings_identity(settings)[:16]
     destination = title_directory / name
     save_seed_id = continued_save(title_directory, settings)
+    connection = _connection_file(destination, title_directory, settings)
     if destination.exists():
         if archive is None or not is_randomizer_seed(destination):
             raise ValueError('Folder ' + name + ' already exists in the mods.')
@@ -222,6 +240,10 @@ def generate_in_mods(nup, title_directory, settings, progress=None, archive=None
             _move_to_archive(destination, Path(archive), '')
         raise ValueError('Resources shared with: ' + ', '.join(conflicts)
                          + '. Move these mods out of the title folder, then generate again.')
+    if connection is not None:
+        from oot_rando.archipelago.autoconnect import FILE_NAME
+        if not (destination / FILE_NAME).exists():
+            (destination / FILE_NAME).write_bytes(connection)
     if archive is not None:
         archive_previous_seeds(title_directory, Path(archive), keep=name)
     warning = qol_seed_warning(title_directory)

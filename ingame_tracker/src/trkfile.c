@@ -1,7 +1,8 @@
 #include "trkfile.h"
 
 #define MAGIC            0x4B525452u /* "RTRK" read as a little-endian word */
-#define HEADER_SIZE      72
+#define HEADER_SIZE      72 /* versions 1 and 2 */
+#define HEADER_SIZE_V3   76 /* the flags after it */
 #define REGION_SIZE      12
 #define CHECK_SIZE       16
 #define ITEM_SIZE        8
@@ -14,7 +15,7 @@ enum {
   H_MAGIC = 0, H_VERSION = 4, H_HEADER_SIZE = 6, H_FILE_SIZE = 8, H_SEED_MARKER = 12, H_GOAL_MARKER = 16,
   H_SEED_ID = 20, H_STRINGS_AT = 24, H_STRINGS_SIZE = 28, H_REGIONS_AT = 32, H_REGION_COUNT = 36,
   H_CHECKS_AT = 40, H_CHECK_COUNT = 44, H_ITEMS_AT = 48, H_ITEM_COUNT = 52, H_RULES_AT = 56,
-  H_RULE_COUNT = 60, H_KEYS_AT = 64, H_KEY_COUNT = 68,
+  H_RULE_COUNT = 60, H_KEYS_AT = 64, H_KEY_COUNT = 68, H_FLAGS = 72,
 };
 
 static uint16_t le16(const uint8_t *p)
@@ -32,10 +33,16 @@ static uint64_t le64(const uint8_t *p)
   return le32(p) | (uint64_t)le32(p + 4) << 32;
 }
 
-/* [at, at + count * record) lies in the file, after the header */
-static bool table_fits(size_t size, uint32_t at, uint32_t count, uint32_t record)
+static uint32_t header_size_of(uint16_t version)
 {
-  return at >= HEADER_SIZE && at <= size && count <= MAX_RECORDS && (uint64_t)count * record <= size - at;
+  return version >= 3 ? HEADER_SIZE_V3 : HEADER_SIZE;
+}
+
+/* [at, at + count * record) lies in the file, after the header */
+static bool table_fits(const trk_t *trk, uint32_t at, uint32_t count, uint32_t record)
+{
+  size_t size = trk->size;
+  return at >= trk->header_size && at <= size && count <= MAX_RECORDS && (uint64_t)count * record <= size - at;
 }
 
 /* every region's checks lie in the check table */
@@ -76,7 +83,8 @@ static bool header_ok(const uint8_t *data, size_t size, const char **why)
     return false;
   }
   uint16_t version = le16(data + H_VERSION);
-  if (version < TRK_OLDEST_VERSION || version > TRK_VERSION || le16(data + H_HEADER_SIZE) != HEADER_SIZE) {
+  if (version < TRK_OLDEST_VERSION || version > TRK_VERSION || le16(data + H_HEADER_SIZE) != header_size_of(version) ||
+      size < header_size_of(version)) {
     *why = "another version of the seed file";
     return false;
   }
@@ -89,8 +97,10 @@ static bool header_ok(const uint8_t *data, size_t size, const char **why)
 
 static void read_header(trk_t *trk, const uint8_t *data, size_t size)
 {
+  uint16_t version = le16(data + H_VERSION);
   *trk = (trk_t){
-    .data = data, .size = size, .version = le16(data + H_VERSION),
+    .data = data, .size = size, .version = version, .header_size = header_size_of(version),
+    .flags = version >= 3 ? le32(data + H_FLAGS) : 0,
     .seed_marker = le32(data + H_SEED_MARKER), .goal_marker = le32(data + H_GOAL_MARKER),
     .seed_id = le32(data + H_SEED_ID),
     .strings_at = le32(data + H_STRINGS_AT), .strings_size = le32(data + H_STRINGS_SIZE),
@@ -107,17 +117,17 @@ bool trk_parse(trk_t *trk, const uint8_t *data, size_t size, const char **why)
   if (!header_ok(data, size, why))
     return false;
   read_header(trk, data, size);
-  bool strings_fit = trk->strings_at >= HEADER_SIZE && trk->strings_at <= size &&
+  bool strings_fit = trk->strings_at >= trk->header_size && trk->strings_at <= size &&
                      trk->strings_size <= size - trk->strings_at && trk->strings_size > 0;
   if (!strings_fit || data[trk->strings_at + trk->strings_size - 1] != 0) {
     *why = "the string table is damaged";
     return false;
   }
-  if (!table_fits(size, trk->regions_at, trk->region_count, REGION_SIZE) ||
-      !table_fits(size, trk->checks_at, trk->check_count, CHECK_SIZE) ||
-      !table_fits(size, trk->items_at, trk->item_count, ITEM_SIZE) ||
-      !table_fits(size, trk->rules_at, trk->rule_count, RULE_SIZE) ||
-      !table_fits(size, trk->keys_at, trk->key_count, KEYS_SIZE)) {
+  if (!table_fits(trk, trk->regions_at, trk->region_count, REGION_SIZE) ||
+      !table_fits(trk, trk->checks_at, trk->check_count, CHECK_SIZE) ||
+      !table_fits(trk, trk->items_at, trk->item_count, ITEM_SIZE) ||
+      !table_fits(trk, trk->rules_at, trk->rule_count, RULE_SIZE) ||
+      !table_fits(trk, trk->keys_at, trk->key_count, KEYS_SIZE)) {
     *why = "a table leaves the file";
     return false;
   }

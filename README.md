@@ -90,9 +90,11 @@ items (with the game's own icons and their levels), the twelve ocarina songs, th
 the enemy souls, and a warning when the loaded save is not from this seed. The D-pad or the left stick moves
 over the regions, **A** opens a region's checks by name (ticked when collected), **B** goes back. While it is
 open the game does not see R, the right stick, A, B, the D-pad or the left stick. The last entry of the
-regions, **Postcard**, turns on a small card with only the icons (items, songs, temples, dungeon keys) in a corner of the screen; its
-position, size and opacity are set there and kept in a small file on the SD card. It only reads the game's
-save data; it never changes the game or the save.
+regions, **Settings**, has two pages. **Postcard** turns on a small card with only the icons (items, songs, temples, dungeon keys) in a
+corner of the screen; its position, size and opacity are set there. **Console** shows Archipelago messages over the game (on by
+default for an Archipelago seed, see [below](#archipelago-multiworld)); its position, opacity, lines, fade and the kinds of message
+shown are set there. Both are kept in small files on the SD card. It only reads the game's save data; it never changes the game or
+the save.
 
 The seed folder gets `romfs/RandoTracker/seed.trk` (the flags to watch, no item placements; the format is in
 [docs/ingame-tracker-format.md](docs/ingame-tracker-format.md)), `exefs/subsdk7`, the module, and
@@ -160,6 +162,20 @@ world, with the same locations, item pool and glitchless rules as the built-in f
    Windows) and the goal (Ganon defeated, read live: set just before the ending). The row
    also shows the server messages and takes chat or server commands (`!hint`…).
    Checks ticked by hand in the tracker are sent too.
+6. **Connect automatically when the game runs this seed** (under Connect) writes the server, slot and
+   password to `archipelago.json` in the seed folder, fills the row from it whenever the seed is opened,
+   and connects by itself once the emulator runs the seed. **The password is kept there as plain text**:
+   leave the box unticked on a shared PC, or remove the password from the file. A disconnect by hand
+   pauses it until the seed is opened again. The file can be edited by hand and is kept when the seed
+   is generated again from the same patch (format in [docs/ingame-tracker-format.md](docs/ingame-tracker-format.md#archipelagojson)).
+
+**In-game console.** While the client is connected and the emulator runs the seed (in-game tracker
+0.5.0 or later; Windows), the room's messages show over the game: items you
+receive (gold) and send (green), other players' items (lavender, 0.6.0 and later), hints (blue), chat
+(white) and the server's notices (grey), each fading after 10 s. A line at the bottom says when the
+client is connecting, not connected, or not running.
+The client writes them into the in-game tracker's memory; Settings > Console in the game's tracker
+turns it off or changes its place, size and fading. Characters the game's font lacks show as `?`.
 
 Items of other players show in game as an Archipelago medallion with the item and player
 name. Items of this game found in other worlds are handed over in game by the client

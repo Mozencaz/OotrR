@@ -54,12 +54,18 @@ def _keys(rows, key_actors=()):
     return result
 
 
+def is_archipelago(manifest):
+    """Whether the seed comes from an Archipelago patch (the client's own test: client.archipelago_info)."""
+    return bool((manifest.get('archipelago') or {}).get('location_ids'))
+
+
 def seed_file(manifest, checks, tracking, key_actors=()):
     """Bytes of ``seed.trk`` from a seed's manifest, check catalogue and tracking data (``key_actors``:
     the seed's key ring and boss key actors, for seeds whose key rows predate owned_key_flags)."""
     return fmt.build(manifest['seed_id'][:SEED_ID_LENGTH], int(tracking['seed_marker']),
                      int(tracking.get('goal_marker') or 0), _regions(checks, tracking['checks']),
-                     _items(inventory_rules(tracking['inventory'])), _keys(tracking.get('keys'), key_actors))
+                     _items(inventory_rules(tracking['inventory'])), _keys(tracking.get('keys'), key_actors),
+                     flags=fmt.FLAG_ARCHIPELAGO if is_archipelago(manifest) else 0)
 
 
 def module_binary():

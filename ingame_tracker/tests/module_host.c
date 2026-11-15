@@ -8,10 +8,13 @@
 #include <string.h>
 
 #include "../src/browse.h"
+#include "../src/console.h"
+#include "../src/consolelog.h"
 #include "../src/controls.h"
 #include "../src/gamedata.h"
 #include "../src/grid.h"
 #include "../src/iconfile.h"
+#include "../src/mailbox.h"
 #include "../src/npad.h"
 #include "../src/postcard.h"
 #include "../src/sizes.h"
@@ -31,7 +34,8 @@ static char failure[256];
 
 /* --- a seed file made in memory --------------------------------------------------------------- */
 
-#define HEADER_BYTES 72
+#define HEADER_BYTES 72 /* versions 1 and 2; version 3 has its flags after them */
+#define HEADER_V3    76
 #define BLOB_MAX     4096
 
 typedef struct { uint8_t bytes[BLOB_MAX]; size_t size; } blob_t;
@@ -58,9 +62,10 @@ enum { SEED_MARKER = 4000, GOAL_MARKER = 5000, BOOL_A = 100, BOOL_B = 200, BOW_L
 static const char *const check_names[3] = { "Mido's House Chest", "Kokiri Sword Chest", "Deku Tree Map Chest" };
 
 /* Two regions (2 and 1 checks), seven items (the last three are songs), two dungeons with keys; the strings come
- * first. Version 1 has no check names. */
-static blob_t synthetic_of_version(int version)
+ * first. Version 1 has no check names, versions 1 and 2 no flags. */
+static blob_t synthetic_with(int version, uint32_t flags)
 {
+  uint32_t header = version >= 3 ? HEADER_V3 : HEADER_BYTES;
   blob_t blob = { { 0 }, 0 };
   strings_t strings = { { 0 }, 1 };
   uint32_t seed_id = add_string(&strings, "abc123");
@@ -74,24 +79,26 @@ static blob_t synthetic_of_version(int version)
   for (int i = 0; version >= 2 && i < 3; i++)
     names[i] = add_string(&strings, check_names[i]);
   uint32_t strings_padded = (strings.size + 3) & ~3u;
-  uint32_t regions_at = HEADER_BYTES + strings_padded, checks_at = regions_at + 2 * 12, items_at = checks_at + 3 * 16;
+  uint32_t regions_at = header + strings_padded, checks_at = regions_at + 2 * 12, items_at = checks_at + 3 * 16;
   uint32_t rules_at = items_at + 7 * 8, keys_at = rules_at + 8 * 8, size = keys_at + 2 * 24;
   uint8_t *b = blob.bytes;
   memcpy(b, "RTRK", 4);
   put16(b + 4, (uint32_t)version);
-  put16(b + 6, HEADER_BYTES);
+  put16(b + 6, header);
   put32(b + 8, size);
   put32(b + 12, SEED_MARKER);
   put32(b + 16, GOAL_MARKER);
   put32(b + 20, seed_id);
-  put32(b + 24, HEADER_BYTES);
+  put32(b + 24, header);
   put32(b + 28, strings.size);
   put32(b + 32, regions_at); put32(b + 36, 2);
   put32(b + 40, checks_at); put32(b + 44, 3);
   put32(b + 48, items_at); put32(b + 52, 7);
   put32(b + 56, rules_at); put32(b + 60, 8);
   put32(b + 64, keys_at); put32(b + 68, 2);
-  memcpy(b + HEADER_BYTES, strings.bytes, strings.size);
+  if (version >= 3)
+    put32(b + HEADER_BYTES, flags);
+  memcpy(b + header, strings.bytes, strings.size);
   uint32_t regions[2][3] = { { kokiri, 0, 2 }, { deku, 2, 1 } };
   for (int i = 0; i < 2; i++)
     for (int f = 0; f < 3; f++)
@@ -127,6 +134,11 @@ static blob_t synthetic_of_version(int version)
   return blob;
 }
 
+static blob_t synthetic_of_version(int version)
+{
+  return synthetic_with(version, 0);
+}
+
 static blob_t synthetic(void)
 {
   return synthetic_of_version(TRK_VERSION);
@@ -154,7 +166,8 @@ static int test_parse_reads_every_table(void)
   CHECK(!strcmp(trk_string(&trk, deku.name), "Deku Tree") && deku.first_check == 2 && deku.check_count == 1);
   trk_check_t check = trk_check(&trk, 1);
   CHECK(check.key == BOOL64_KEY && check.kind == TRK_KIND_BOOL64);
-  CHECK(trk.version == 2 && !strcmp(trk_string(&trk, check.name), "Kokiri Sword Chest"));
+  CHECK(trk.version == 3 && !strcmp(trk_string(&trk, check.name), "Kokiri Sword Chest"));
+  CHECK(trk.flags == 0 && !(trk.flags & TRK_FLAG_ARCHIPELAGO));
   trk_item_t bow = trk_item(&trk, 0);
   CHECK(bow.rule_count == 2 && trk_rule(&trk, 1).hash == BOW_L2 && trk_rule(&trk, 1).level == 2);
   trk_keys_t well = trk_keys(&trk, 1);
@@ -167,7 +180,8 @@ static int test_parse_reads_every_table(void)
 static int test_parse_refuses_damage(void)
 {
   struct { const char *what; size_t at; uint32_t value; int bytes; } damage[] = {
-    { "magic", 0, 0x58585858, 4 },       { "version", 4, 3, 2 },        { "header size", 6, 64, 2 },
+    { "magic", 0, 0x58585858, 4 },       { "version", 4, 4, 2 },        { "header size", 6, 64, 2 },
+    { "a version 2 header's size", 6, HEADER_BYTES, 2 },
     { "version 0", 4, 0, 2 },
     { "file size", 8, 100, 4 },          { "strings outside", 24, 100000, 4 },
     { "strings size", 28, 100000, 4 },   { "regions outside", 32, 100000, 4 },
@@ -203,6 +217,27 @@ static int test_parse_refuses_a_row_leaving_its_table(void)
   return 0;
 }
 
+static int test_parse_reads_the_archipelago_flag_and_older_versions_as_local(void)
+{
+  blob_t blob = synthetic_with(3, TRK_FLAG_ARCHIPELAGO);
+  trk_t trk;
+  const char *why = "";
+  CHECK(trk_parse(&trk, blob.bytes, blob.size, &why));
+  CHECK(trk.version == 3 && trk.header_size == HEADER_V3 && (trk.flags & TRK_FLAG_ARCHIPELAGO));
+  CHECK(trk.region_count == 2 && !strcmp(trk_string(&trk, trk.seed_id), "abc123"));
+  for (int version = 1; version <= 2; version++) {
+    blob = synthetic_of_version(version);
+    CHECK(trk_parse(&trk, blob.bytes, blob.size, &why));
+    CHECK(trk.version == (uint32_t)version && trk.header_size == HEADER_BYTES && trk.flags == 0);
+    put16(blob.bytes + 4, 3); /* a version 3 file must have the longer header */
+    CHECK(!parses(&blob));
+  }
+  blob = synthetic_with(3, 0);
+  put32(blob.bytes + 32, HEADER_BYTES); /* the regions over the flags */
+  CHECK(!parses(&blob));
+  return 0;
+}
+
 static int test_parse_reads_version_1_without_names(void)
 {
   blob_t blob = synthetic_of_version(1);
@@ -234,7 +269,7 @@ static int test_parse_refuses_truncation_and_an_unterminated_string(void)
   for (size_t cut = 0; cut < blob.size; cut += 7)
     CHECK(!trk_parse(&trk, blob.bytes, cut, &why));
   CHECK(trk_parse(&trk, blob.bytes, blob.size, &why));
-  blob.bytes[HEADER_BYTES + trk.strings_size - 1] = 'x';
+  blob.bytes[trk.strings_at + trk.strings_size - 1] = 'x';
   CHECK(!parses(&blob));
   return 0;
 }
@@ -766,8 +801,8 @@ static int test_buttons_held_at_closing_stay_hidden_until_let_go(void)
 
 static int test_the_highlight_moves_over_the_regions_columns(void)
 {
-  /* 35 regions and the Postcard entry (35) in 3 columns of 12: 0-11, 12-23, 24-35 */
-  browse_t b = { BROWSE_REGIONS, 0, 0, 0, 0 };
+  /* 35 regions and the Settings entry (35) in 3 columns of 12: 0-11, 12-23, 24-35 */
+  browse_t b = { BROWSE_REGIONS, 0, 0, 0, 0, 0 };
   CHECK(browse_region_rows(35) == 12 && browse_region_rows(36) == 13 && browse_region_rows(1) == 1);
   CHECK(browse_region_rows(0) == 1);
   browse_move(&b, NAV_UP, 35, 0);
@@ -789,26 +824,26 @@ static int test_the_highlight_moves_over_the_regions_columns(void)
   CHECK(b.region == 12); /* down from a column's foot: the next column's head */
   b.region = 23;
   browse_move(&b, NAV_RIGHT, 35, 0);
-  CHECK(b.region == 35); /* the last column's foot: the Postcard entry */
+  CHECK(b.region == 35); /* the last column's foot: the Settings entry */
   browse_move(&b, NAV_DOWN, 35, 0);
   CHECK(b.region == 35);
-  b.region = 5; /* 7 regions and the Postcard entry: columns of 3, 3 and 2 */
+  b.region = 5; /* 7 regions and the Settings entry: columns of 3, 3 and 2 */
   browse_move(&b, NAV_RIGHT, 7, 0);
   CHECK(b.region == 7); /* the shorter last column: its last entry */
   b.region = 0;
-  browse_move(&b, NAV_DOWN, 0, 0); /* no regions: the Postcard entry is the only one */
+  browse_move(&b, NAV_DOWN, 0, 0); /* no regions: the Settings entry is the only one */
   CHECK(b.region == 0);
   b.region = 35;
-  browse_show_regions(&b, 20); /* fewer regions than the highlight: kept inside, at the Postcard entry */
+  browse_show_regions(&b, 20); /* fewer regions than the highlight: kept inside, at the Settings entry */
   CHECK(b.view == BROWSE_REGIONS && b.region == 20);
   return 0;
 }
 
 static int test_a_list_opens_scrolls_and_goes_back(void)
 {
-  browse_t b = { BROWSE_REGIONS, 4, 7, 3, 0 };
+  browse_t b = { BROWSE_REGIONS, 4, 7, 3, 0, 0 };
   browse_open(&b, 3);
-  CHECK(b.view == BROWSE_REGIONS); /* the highlight is past the regions and the Postcard entry */
+  CHECK(b.view == BROWSE_REGIONS); /* the highlight is past the regions and the Settings entry */
   b.region = 2;
   browse_open(&b, 3);
   CHECK(b.view == BROWSE_CHECKS && b.region == 2 && b.check == 0 && b.top == 0);
@@ -839,27 +874,47 @@ static int test_a_list_opens_scrolls_and_goes_back(void)
   return 0;
 }
 
-static int test_the_postcard_entry_opens_its_settings(void)
+static int test_the_settings_entry_opens_the_postcard_and_the_console(void)
 {
-  browse_t b = { BROWSE_REGIONS, 3, 7, 3, 2 };
-  browse_open(&b, 3); /* the region count is the Postcard entry */
-  CHECK(b.view == BROWSE_POSTCARD && b.region == 3 && b.setting == 0);
+  browse_t b = { BROWSE_REGIONS, 3, 7, 3, 1, 2 };
+  browse_open(&b, 3); /* the region count is the Settings entry */
+  CHECK(b.view == BROWSE_SETTINGS && b.region == 3 && b.entry == SETTINGS_POSTCARD);
+  CHECK(browse_page_rows(BROWSE_SETTINGS) == SETTINGS_ENTRY_COUNT && browse_page_row(&b) == 0);
   browse_move(&b, NAV_UP, 3, 0);
-  CHECK(b.setting == 0);
+  CHECK(b.entry == SETTINGS_POSTCARD);
+  browse_move(&b, NAV_DOWN, 3, 0);
+  browse_move(&b, NAV_DOWN, 3, 0);
+  CHECK(b.entry == SETTINGS_CONSOLE); /* the last stays */
+  browse_move(&b, NAV_UP, 3, 0);
+  browse_open(&b, 3);
+  CHECK(b.view == BROWSE_POSTCARD && b.setting == 0);
   for (int i = 0; i < POSTCARD_SETTING_COUNT + 2; i++)
     browse_move(&b, NAV_DOWN, 3, 0);
-  CHECK(b.setting == POSTCARD_SETTING_COUNT - 1);
+  CHECK(b.setting == POSTCARD_SETTING_COUNT - 1 && browse_page_row(&b) == POSTCARD_SETTING_COUNT - 1);
   browse_move(&b, NAV_UP, 3, 0);
-  CHECK(b.setting == POSTCARD_SETTING_COUNT - 2);
   browse_move(&b, NAV_LEFT, 3, 0); /* a value changes in app.c; the highlight stays */
   browse_move(&b, NAV_RIGHT, 3, 0);
   CHECK(b.setting == POSTCARD_SETTING_COUNT - 2 && b.view == BROWSE_POSTCARD);
-  browse_open(&b, 3); /* A in the settings does nothing */
+  browse_open(&b, 3); /* A in the postcard's settings does nothing */
   CHECK(b.view == BROWSE_POSTCARD && b.setting == POSTCARD_SETTING_COUNT - 2);
+  CHECK(browse_back(&b) && b.view == BROWSE_SETTINGS && b.entry == SETTINGS_POSTCARD); /* back to Settings */
   CHECK(browse_back(&b) && b.view == BROWSE_REGIONS && b.region == 3);
   CHECK(!browse_back(&b));
   browse_open(&b, 3);
-  CHECK(b.setting == 0); /* opened afresh from the first setting */
+  CHECK(b.view == BROWSE_SETTINGS && b.entry == 0); /* opened afresh from the first entry */
+  browse_move(&b, NAV_DOWN, 3, 0);
+  browse_open(&b, 3);
+  CHECK(b.view == BROWSE_CONSOLE && b.setting == 0 && browse_page_rows(BROWSE_CONSOLE) == CONSOLE_SETTING_COUNT);
+  browse_open(&b, 3); /* A on a value: nothing */
+  CHECK(b.view == BROWSE_CONSOLE);
+  for (int i = 0; i < CONSOLE_SETTING_COUNT + 1; i++)
+    browse_move(&b, NAV_DOWN, 3, 0);
+  CHECK(b.setting == CONSOLE_SETTING_COUNT - 1 && browse_page_row(&b) == CONSOLE_SETTING_COUNT - 1); /* the last kind */
+  CHECK(console_setting_kind((console_setting_t)b.setting) == CONSOLE_OTHERS);
+  browse_open(&b, 3); /* A on a kind ticks it in app.c; the page stays */
+  CHECK(b.view == BROWSE_CONSOLE && b.setting == CONSOLE_SETTING_COUNT - 1);
+  CHECK(browse_back(&b) && b.view == BROWSE_SETTINGS && b.entry == SETTINGS_CONSOLE);
+  CHECK(browse_page_rows(BROWSE_REGIONS) == 0 && browse_page_rows(BROWSE_CHECKS) == 0);
   return 0;
 }
 
@@ -1015,6 +1070,446 @@ static int test_the_icons_state_is_the_full_states_cells_and_keys(void)
   return 0;
 }
 
+/* --- the console ------------------------------------------------------------------------------- */
+
+static int test_console_defaults_and_values(void)
+{
+  console_settings_t s = console_defaults();
+  CHECK(!console_shown(&s, false) && console_shown(&s, true)); /* off for local seeds, on for Archipelago ones */
+  CHECK(s.position == CONSOLE_BOTTOM && console_opacity(&s) == 0.75f && console_lines(&s) == 6);
+  CHECK(console_fade_ms(&s) == 10000);
+  for (int kind = 0; kind < CONSOLE_KIND_COUNT; kind++)
+    CHECK(console_kind_shown(&s, (console_kind_t)kind));
+  CHECK(!console_kind_shown(&s, CONSOLE_KIND_COUNT));
+  CHECK(!strcmp(console_value_text(&s, CONSOLE_SETTING_SHOWN, true), "On"));
+  CHECK(!strcmp(console_value_text(&s, CONSOLE_SETTING_SHOWN, false), "Off"));
+  CHECK(!strcmp(console_value_text(&s, CONSOLE_SETTING_POSITION, true), "Bottom centre"));
+  CHECK(!strcmp(console_value_text(&s, CONSOLE_SETTING_OPACITY, true), "75 %"));
+  CHECK(!strcmp(console_value_text(&s, CONSOLE_SETTING_LINES, true), "6"));
+  CHECK(!strcmp(console_value_text(&s, CONSOLE_SETTING_FADE, true), "10 s"));
+  CHECK(!strcmp(console_setting_name(CONSOLE_SETTING_SHOWN), "Console"));
+  CHECK(!strcmp(console_setting_name(CONSOLE_SETTING_FADE), "Fade"));
+  CHECK(!strcmp(console_setting_name(CONSOLE_SETTING_COUNT), ""));
+  CHECK(!console_setting_is_kind(CONSOLE_SETTING_FADE) && !console_setting_is_kind(CONSOLE_SETTING_COUNT));
+  CHECK(console_setting_kind(CONSOLE_SETTING_COUNT) == CONSOLE_KIND_COUNT);
+  /* the page's rows after Fade: one per kind, in the mailbox's order, with a tick box (no value) */
+  const char *kinds[CONSOLE_KIND_COUNT] = { "Items received", "Items sent", "Hints", "Chat", "Server notices",
+                                           "Other players' items" };
+  CHECK(CONSOLE_SETTING_COUNT == CONSOLE_SETTING_FIRST_KIND + CONSOLE_KIND_COUNT && CONSOLE_SETTING_FIRST_KIND == 5);
+  for (int kind = 0; kind < CONSOLE_KIND_COUNT; kind++) {
+    console_setting_t row = (console_setting_t)(CONSOLE_SETTING_FIRST_KIND + kind);
+    CHECK(console_setting_is_kind(row) && console_setting_kind(row) == (console_kind_t)kind);
+    CHECK(!strcmp(console_kind_name((console_kind_t)kind), kinds[kind]));
+    CHECK(!strcmp(console_setting_name(row), kinds[kind]) && console_value_text(&s, row, true) == 0);
+  }
+  return 0;
+}
+
+static int test_console_settings_cycle_and_each_kind_of_seed_has_its_own_switch(void)
+{
+  console_settings_t s = console_defaults();
+  console_step(&s, CONSOLE_SETTING_SHOWN, 1, true);
+  CHECK(!console_shown(&s, true) && !console_shown(&s, false)); /* the Archipelago one only */
+  console_step(&s, CONSOLE_SETTING_SHOWN, -1, false);
+  CHECK(console_shown(&s, false) && !console_shown(&s, true));
+  const char *positions[CONSOLE_POSITION_COUNT] = { "Bottom centre", "Top centre", "Left centre", "Right centre" };
+  for (int i = 0; i < CONSOLE_POSITION_COUNT; i++) {
+    CHECK(!strcmp(console_value_text(&s, CONSOLE_SETTING_POSITION, false), positions[i]));
+    console_step(&s, CONSOLE_SETTING_POSITION, 1, false);
+  }
+  CHECK(s.position == CONSOLE_BOTTOM); /* a full turn */
+  console_step(&s, CONSOLE_SETTING_POSITION, -1, false);
+  CHECK(s.position == CONSOLE_RIGHT);
+  const int lines[CONSOLE_STEPS] = { 8, 12, 4, 6 };
+  const char *fades[CONSOLE_STEPS] = { "30 s", "Permanent", "5 s", "10 s" };
+  const uint32_t fade_ms[CONSOLE_STEPS] = { 30000, 0, 5000, 10000 };
+  for (int i = 0; i < CONSOLE_STEPS; i++) {
+    console_step(&s, CONSOLE_SETTING_LINES, 1, false);
+    console_step(&s, CONSOLE_SETTING_FADE, 1, false);
+    CHECK(console_lines(&s) == lines[i] && console_fade_ms(&s) == fade_ms[i]);
+    CHECK(!strcmp(console_value_text(&s, CONSOLE_SETTING_FADE, false), fades[i]));
+  }
+  console_step(&s, CONSOLE_SETTING_OPACITY, 1, false);
+  CHECK(console_opacity(&s) == 1.0f);
+  console_step(&s, CONSOLE_SETTING_OPACITY, 1, false);
+  CHECK(console_opacity(&s) == 0.25f); /* 100 % wraps to 25 % */
+  console_settings_t before = s;
+  console_step(&s, CONSOLE_SETTING_COUNT, 1, false); /* past the rows: nothing */
+  CHECK(!memcmp(&before, &s, sizeof(s)));
+  /* a kind's row ticks or unticks it either way, and only it */
+  console_step(&s, (console_setting_t)(CONSOLE_SETTING_FIRST_KIND + CONSOLE_CHAT), 1, false);
+  console_step(&s, (console_setting_t)(CONSOLE_SETTING_FIRST_KIND + CONSOLE_HINT), -1, false);
+  CHECK(!console_kind_shown(&s, CONSOLE_CHAT) && !console_kind_shown(&s, CONSOLE_HINT));
+  CHECK(console_kind_shown(&s, CONSOLE_RECEIVED) && console_kind_shown(&s, CONSOLE_OTHERS));
+  CHECK(s.position == before.position && s.opacity == before.opacity && s.shown[0] == before.shown[0]);
+  console_step(&s, (console_setting_t)(CONSOLE_SETTING_FIRST_KIND + CONSOLE_CHAT), -1, false);
+  CHECK(console_kind_shown(&s, CONSOLE_CHAT));
+  console_step(&s, (console_setting_t)(CONSOLE_SETTING_FIRST_KIND + CONSOLE_OTHERS), 1, false);
+  CHECK(!console_kind_shown(&s, CONSOLE_OTHERS) && console_kind_shown(&s, CONSOLE_SERVER));
+  return 0;
+}
+
+static bool console_equal(console_settings_t a, console_settings_t b)
+{
+  return a.shown[0] == b.shown[0] && a.shown[1] == b.shown[1] && a.position == b.position && a.opacity == b.opacity &&
+         a.lines == b.lines && a.fade == b.fade && a.kinds == b.kinds;
+}
+
+static console_settings_t console_read(const char *text)
+{
+  console_settings_t s = console_defaults();
+  console_parse(&s, text, strlen(text));
+  return s;
+}
+
+static int test_console_file_text(void)
+{
+  char text[256];
+  console_settings_t defaults = console_defaults();
+  size_t length = console_format(&defaults, text, sizeof(text));
+  CHECK(length == strlen(text));
+  CHECK(!strcmp(text, "version=1\non_local=0\non_archipelago=1\nposition=0\nopacity=75\nlines=6\nfade=10\n"
+                      "received=1\nsent=1\nhints=1\nchat=1\nserver=1\nothers=1\n"));
+  for (int combination = 0; combination < 4 * 4 * 4 * 4 * 64; combination += 7) {
+    console_settings_t s = { { combination & 1, combination >> 1 & 1 }, (uint8_t)(combination >> 2 & 3),
+                             (uint8_t)(combination >> 4 & 3), (uint8_t)(combination >> 6 & 3),
+                             (uint8_t)(combination >> 8 & 3), (uint8_t)(combination >> 3 & 63) };
+    console_settings_t read = console_defaults();
+    console_format(&s, text, sizeof(text));
+    console_parse(&read, text, strlen(text));
+    CHECK(console_equal(read, s));
+  }
+  CHECK(console_format(&defaults, text, 12) == 10 && !strcmp(text, "version=1\n")); /* whole lines only */
+  return 0;
+}
+
+static int test_console_file_without_its_version_or_damaged_leaves_the_defaults(void)
+{
+  console_settings_t defaults = console_defaults();
+  CHECK(console_equal(console_read(""), defaults));
+  CHECK(console_equal(console_read("position=2\nlines=12\n"), defaults)); /* no version: an older file, ignored */
+  CHECK(console_equal(console_read("version=2\nposition=2\n"), defaults)); /* a later version's */
+  CHECK(console_equal(console_read("garbage\n\n=1\n"), defaults));
+  console_settings_t s = console_read("version=1\r\non_local=1\r\nposition=3\r\nfade=0\r\nchat=0\r\nlines=12");
+  CHECK(console_shown(&s, false) && console_shown(&s, true) && s.position == CONSOLE_RIGHT);
+  CHECK(console_fade_ms(&s) == 0 && console_lines(&s) == 12 && !console_kind_shown(&s, CONSOLE_CHAT));
+  s = console_read("version=1\nposition=4\nopacity=60\nlines=5\nfade=11\nchat=2\non_archipelago=7\n");
+  CHECK(console_equal(s, defaults)); /* each bad value skipped */
+  s = console_read("lines=4\nversion=1\n"); /* the version can come anywhere */
+  CHECK(console_lines(&s) == 4);
+  return 0;
+}
+
+static int test_console_file_of_0_5_0_shows_other_players_items(void)
+{
+  /* 0.5.0's file has no "others" line: that kind keeps its default, and the kinds it has keep their bits */
+  console_settings_t s = console_read("version=1\non_local=0\non_archipelago=1\nposition=0\nopacity=75\nlines=6\n"
+                                      "fade=10\nreceived=1\nsent=0\nhints=1\nchat=0\nserver=1\n");
+  CHECK(console_kind_shown(&s, CONSOLE_OTHERS) && console_kind_shown(&s, CONSOLE_SERVER));
+  CHECK(!console_kind_shown(&s, CONSOLE_SENT) && !console_kind_shown(&s, CONSOLE_CHAT));
+  CHECK(console_kind_shown(&s, CONSOLE_RECEIVED) && console_kind_shown(&s, CONSOLE_HINT));
+  s = console_read("version=1\nothers=0\n");
+  CHECK(!console_kind_shown(&s, CONSOLE_OTHERS) && console_kind_shown(&s, CONSOLE_SERVER));
+  return 0;
+}
+
+static int test_console_text_is_what_the_font_draws(void)
+{
+  char out[CONSOLE_TEXT_ROOM];
+  const char *ascii = "Link sent Hookshot to Zelda (Kokiri Forest)";
+  CHECK(console_sanitize(out, sizeof(out), (const uint8_t *)ascii, strlen(ascii)) == strlen(ascii) && !strcmp(out, ascii));
+  const char *accents = "Ren\xC3\xA9" "e \xC3\x9C\xC3\xA7"; /* Latin-1 letters stay, a byte each */
+  CHECK(console_sanitize(out, sizeof(out), (const uint8_t *)accents, strlen(accents)) == 8);
+  CHECK(!strcmp(out, "Ren\xE9" "e \xDC\xE7"));
+  const char *others = "\xE2\x86\x92 \xF0\x9F\x8E\x89 \xE6\x97\xA5x";        /* an arrow, an emoji, a kanji */
+  console_sanitize(out, sizeof(out), (const uint8_t *)others, strlen(others));
+  CHECK(!strcmp(out, "? ? ?x")); /* one '?' each */
+  const char *broken = "a\xC3" "b\xFF" "c\x80" "d\xE2\x86";                  /* a lead without its byte, bytes that lead nothing, a cut end */
+  console_sanitize(out, sizeof(out), (const uint8_t *)broken, strlen(broken));
+  CHECK(!strcmp(out, "a?b?c?d??"));
+  const char *controls = "one\ttwo\nthree\x01\x7F\xC2\xAD" "four\xC2\xA0" "five";
+  console_sanitize(out, sizeof(out), (const uint8_t *)controls, strlen(controls));
+  CHECK(!strcmp(out, "one two threefour five"));
+  char small[5];
+  CHECK(console_sanitize(small, sizeof(small), (const uint8_t *)ascii, strlen(ascii)) == 4 && !strcmp(small, "Link"));
+  const uint8_t nul[] = { 'a', 0, 'b' };
+  CHECK(console_sanitize(out, sizeof(out), nul, sizeof(nul)) == 1); /* stops at a NUL */
+  return 0;
+}
+
+static void add_line(console_log_t *log, console_kind_t kind, const char *text, uint64_t now)
+{
+  consolelog_add(log, kind, (const uint8_t *)text, strlen(text), now);
+}
+
+static int test_console_view_has_the_newest_lines_of_the_kinds_shown(void)
+{
+  static console_log_t log;
+  static console_view_t view;
+  memset(&log, 0, sizeof(log));
+  console_settings_t s = console_defaults();
+  consolelog_view(&log, &s, &view);
+  CHECK(view.count == 0);
+  add_line(&log, CONSOLE_RECEIVED, "", 1); /* empty: not kept */
+  add_line(&log, CONSOLE_RECEIVED, "\x01\x02", 1);
+  CHECK(log.count == 0);
+  for (int i = 0; i < 40; i++) {
+    char text[16];
+    snprintf(text, sizeof(text), "line %d", i);
+    add_line(&log, i % 2 ? CONSOLE_CHAT : CONSOLE_RECEIVED, text, 1000 + (uint64_t)i);
+  }
+  CHECK(log.count == 40);
+  consolelog_view(&log, &s, &view);
+  CHECK(view.count == CONSOLE_MAX_LINES);
+  CHECK(!strcmp(view.lines[0].text, "line 28") && !strcmp(view.lines[CONSOLE_MAX_LINES - 1].text, "line 39"));
+  CHECK(view.lines[CONSOLE_MAX_LINES - 1].kind == CONSOLE_CHAT && view.lines[0].time_ms == 1028);
+  console_toggle_kind(&s, CONSOLE_CHAT);
+  consolelog_view(&log, &s, &view);
+  CHECK(view.count == CONSOLE_MAX_LINES && !strcmp(view.lines[0].text, "line 16")); /* only the even ones */
+  CHECK(!strcmp(view.lines[CONSOLE_MAX_LINES - 1].text, "line 38"));
+  for (int kind = 0; kind < CONSOLE_KIND_COUNT; kind++)
+    if (console_kind_shown(&s, (console_kind_t)kind))
+      console_toggle_kind(&s, (console_kind_t)kind);
+  consolelog_view(&log, &s, &view);
+  CHECK(view.count == 0);
+  s = console_defaults();
+  console_toggle_kind(&s, CONSOLE_RECEIVED);
+  consolelog_view(&log, &s, &view);
+  CHECK(view.count == CONSOLE_MAX_LINES && !strcmp(view.lines[0].text, "line 17")); /* the history keeps 32: 8-39 */
+  return 0;
+}
+
+static int test_console_lines_fade_after_their_time(void)
+{
+  console_settings_t s = console_defaults(); /* 10 s */
+  CHECK(console_line_alpha(&s, 1000, 1000) == 1 && console_line_alpha(&s, 1000, 10000) == 1);
+  CHECK(console_line_alpha(&s, 1000, 10500) == 0.5f); /* its last second */
+  CHECK(console_line_alpha(&s, 1000, 11000) == 0 && console_line_alpha(&s, 1000, 90000) == 0);
+  CHECK(console_line_alpha(&s, 5000, 1000) == 1); /* a clock read before the line came */
+  s.fade = 3; /* permanent */
+  CHECK(console_line_alpha(&s, 1000, 1000000000) == 1);
+  static console_view_t view;
+  memset(&view, 0, sizeof(view));
+  view.settings = console_defaults();
+  view.shown = true;
+  CHECK(!console_view_showing(&view, 0));
+  view.count = 1;
+  view.lines[0].time_ms = 1000;
+  CHECK(console_view_showing(&view, 5000) && !console_view_showing(&view, 11000));
+  memcpy(view.status, "x", 2);
+  CHECK(console_view_showing(&view, 11000)); /* the status line stays */
+  view.shown = false;
+  CHECK(!console_view_showing(&view, 5000));
+  return 0;
+}
+
+/* --- the mailbox ------------------------------------------------------------------------------- */
+
+/* what the desktop client does: the sequence odd, the entries, the head and the status, the sequence even */
+static void client_writes(mailbox_t *box, const char *const *texts, const uint8_t *kinds, int count, uint8_t status,
+                          const char *status_text)
+{
+  box->sequence |= 1;
+  for (int i = 0; i < count; i++) {
+    mailbox_entry_t *entry = &box->entries[(box->head + (uint32_t)i) % MAILBOX_CAPACITY];
+    memset(entry, 0, sizeof(*entry));
+    entry->kind = kinds[i];
+    entry->length = (uint8_t)strlen(texts[i]);
+    memcpy(entry->text, texts[i], entry->length);
+  }
+  box->head += (uint32_t)count;
+  box->status = status;
+  snprintf(box->status_text, sizeof(box->status_text), "%s", status_text);
+  box->sequence++;
+}
+
+static int test_mailbox_header_is_the_documented_one(void)
+{
+  static mailbox_t box;
+  mailbox_blank(&box);
+  CHECK(!memcmp(box.magic, "OOTRCON1", 8) && box.version == MAILBOX_VERSION && box.header_size == 0x80);
+  CHECK(box.capacity == MAILBOX_CAPACITY && box.entry_size == MAILBOX_ENTRY_SIZE && sizeof(box) == 0x80 + 32 * 168);
+  CHECK(box.module_version == MAILBOX_MODULE_VERSION && box.sequence == 0 && box.head == 0 && !box.seed_id[0]);
+  CHECK(!memcmp(mailbox_shared()->magic, "OOTRCON1", 8) && mailbox_shared()->capacity == MAILBOX_CAPACITY);
+  mailbox_set_seed(&box, "76069ecc4740cec6");
+  CHECK(!strcmp(box.seed_id, "76069ecc4740cec6"));
+  mailbox_set_seed(&box, "0123456789abcdef0123456789abcdef");
+  CHECK(strlen(box.seed_id) == MAILBOX_SEED_ID_ROOM - 1);
+  return 0;
+}
+
+static int test_mailbox_lines_are_taken_once_and_never_while_written(void)
+{
+  static mailbox_t box;
+  static console_log_t log;
+  mailbox_client_t client;
+  memset(&log, 0, sizeof(log));
+  memset(&client, 0, sizeof(client));
+  mailbox_blank(&box);
+  CHECK(!mailbox_poll(&box, &client, &log, 10)); /* nothing written yet */
+  const char *texts[3] = { "You received Bow from Zelda", "You sent Hookshot to Zelda", "Zelda: hi" };
+  const uint8_t kinds[3] = { 1, 2, 4 };
+  client_writes(&box, texts, kinds, 3, MAILBOX_STATUS_CONNECTED, "archipelago.gg:38281 as Link");
+  box.sequence |= 1; /* still writing */
+  CHECK(!mailbox_poll(&box, &client, &log, 20) && log.count == 0 && box.read_head == 0);
+  box.sequence++;
+  CHECK(mailbox_poll(&box, &client, &log, 30) && log.count == 3 && box.read_head == 3);
+  CHECK(!strcmp(log.lines[0].text, texts[0]) && log.lines[0].kind == CONSOLE_RECEIVED && log.lines[0].time_ms == 30);
+  CHECK(log.lines[1].kind == CONSOLE_SENT && log.lines[2].kind == CONSOLE_CHAT);
+  CHECK(client.status == MAILBOX_STATUS_CONNECTED && !strcmp(client.status_text, "archipelago.gg:38281 as Link"));
+  CHECK(!mailbox_poll(&box, &client, &log, 40) && log.count == 3); /* the same sequence: nothing new */
+  const char *more[3] = { "a hint", "Saria found her Fairy Bow", "a server notice" };
+  const uint8_t other_kinds[3] = { 3, 6, 9 }; /* 9: a kind of a later client, shown as a server notice */
+  client_writes(&box, more, other_kinds, 3, MAILBOX_STATUS_CONNECTED, "archipelago.gg:38281 as Link");
+  CHECK(mailbox_poll(&box, &client, &log, 50) && log.count == 6);
+  CHECK(log.lines[3].kind == CONSOLE_HINT && log.lines[4].kind == CONSOLE_OTHERS && log.lines[5].kind == CONSOLE_SERVER);
+  client_writes(&box, more, other_kinds, 0, MAILBOX_STATUS_DISCONNECTED, "");
+  CHECK(mailbox_poll(&box, &client, &log, 60) && log.count == 6 && client.status == MAILBOX_STATUS_DISCONNECTED);
+  return 0;
+}
+
+static int test_mailbox_keeps_up_with_a_full_ring_and_a_client_that_starts_again(void)
+{
+  static mailbox_t box;
+  static console_log_t log;
+  mailbox_client_t client;
+  memset(&log, 0, sizeof(log));
+  memset(&client, 0, sizeof(client));
+  mailbox_blank(&box);
+  for (int i = 0; i < MAILBOX_CAPACITY + 8; i++) { /* more than the ring holds before the module reads */
+    char text[16];
+    const char *texts[1] = { text };
+    const uint8_t kinds[1] = { 5 };
+    snprintf(text, sizeof(text), "notice %d", i);
+    client_writes(&box, texts, kinds, 1, MAILBOX_STATUS_CONNECTED, "");
+  }
+  CHECK(mailbox_poll(&box, &client, &log, 10));
+  CHECK(log.count == MAILBOX_CAPACITY && !strcmp(log.lines[0].text, "notice 8")); /* the last 32 */
+  CHECK(box.read_head == MAILBOX_CAPACITY + 8);
+  mailbox_entry_t *entry = &box.entries[box.head % MAILBOX_CAPACITY];
+  box.sequence |= 1;
+  entry->kind = 1;
+  entry->length = 200; /* longer than its room: only the room is read */
+  memset(entry->text, 'x', sizeof(entry->text));
+  box.head++;
+  box.sequence++;
+  CHECK(mailbox_poll(&box, &client, &log, 20) && strlen(log.lines[MAILBOX_CAPACITY % CONSOLE_HISTORY].text) == CONSOLE_TEXT_ROOM - 1);
+  uint32_t before = log.count;
+  box.sequence += 2;
+  box.head = 1; /* a client that counts from the start again */
+  CHECK(!mailbox_poll(&box, &client, &log, 30) && log.count == before && box.read_head == 1);
+  return 0;
+}
+
+static int test_mailbox_status_line(void)
+{
+  static mailbox_t box;
+  mailbox_client_t client;
+  char line[CONSOLE_STATUS_ROOM];
+  memset(&client, 0, sizeof(client));
+  mailbox_blank(&box);
+  client.heartbeat_ms = 1000; /* the seed file was read at 1 s */
+  mailbox_status_line(&client, true, 5000, line, sizeof(line));
+  CHECK(!strcmp(line, "")); /* not yet 10 s */
+  mailbox_status_line(&client, true, 11000, line, sizeof(line));
+  CHECK(!strcmp(line, "Archipelago client not running"));
+  mailbox_status_line(&client, false, 11000, line, sizeof(line));
+  CHECK(!strcmp(line, "")); /* a local seed: only once a client was heard */
+  static console_log_t log;
+  memset(&log, 0, sizeof(log));
+  box.heartbeat = 7;
+  const uint8_t kinds[1] = { 1 };
+  const char *texts[1] = { "x" };
+  client_writes(&box, texts, kinds, 0, MAILBOX_STATUS_CONNECTING, "archipelago.gg:38281 \xE2\x86\x92 Link");
+  mailbox_poll(&box, &client, &log, 12000);
+  CHECK(client.heard && client.heartbeat_ms == 12000);
+  mailbox_status_line(&client, false, 12500, line, sizeof(line));
+  CHECK(!strcmp(line, "Archipelago: connecting to archipelago.gg:38281 ? Link"));
+  client_writes(&box, texts, kinds, 0, MAILBOX_STATUS_DISCONNECTED, "");
+  mailbox_poll(&box, &client, &log, 13000);
+  mailbox_status_line(&client, false, 13000, line, sizeof(line));
+  CHECK(!strcmp(line, "Archipelago: not connected"));
+  client_writes(&box, texts, kinds, 0, MAILBOX_STATUS_CONNECTED, "");
+  mailbox_poll(&box, &client, &log, 14000);
+  mailbox_status_line(&client, false, 14000, line, sizeof(line));
+  CHECK(!strcmp(line, ""));
+  mailbox_status_line(&client, false, 22000, line, sizeof(line));
+  CHECK(!strcmp(line, "Archipelago client not running")); /* heard, then silent for 10 s */
+  box.heartbeat++;
+  mailbox_poll(&box, &client, &log, 23000);
+  mailbox_status_line(&client, false, 23000, line, sizeof(line));
+  CHECK(!strcmp(line, "")); /* back */
+  mailbox_status_line(&client, false, 23000, line, 8);
+  CHECK(strlen(line) <= 7);
+  return 0;
+}
+
+/* --- where the console goes ------------------------------------------------------------------- */
+
+static bool boxes_apart(box_t a, box_t b)
+{
+  return a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
+}
+
+static bool box_on_screen(box_t b, float area_w)
+{
+  return b.x >= MARGIN_FP - 0.01f && b.y >= MARGIN_FP - 0.01f && b.x + b.w <= area_w - MARGIN_FP + 0.01f &&
+         b.y + b.h <= PICTURE_HEIGHT_FP - MARGIN_FP + 0.01f;
+}
+
+static int test_the_console_sits_at_its_edge(void)
+{
+  float area_w = 640; /* 16:9 */
+  box_t bottom = sizes_console_box(CONSOLE_BOTTOM, 6, area_w, 0), top = sizes_console_box(CONSOLE_TOP, 6, area_w, 0);
+  CHECK(bottom.w == CONSOLE_WIDE_W_FP && bottom.x == (area_w - bottom.w) / 2);
+  CHECK(bottom.h == 6 * CONSOLE_ROW_FP + 2 * CONSOLE_PAD_Y_FP && bottom.y + bottom.h == PICTURE_HEIGHT_FP - MARGIN_FP);
+  CHECK(top.y == MARGIN_FP && top.x == bottom.x);
+  box_t left = sizes_console_box(CONSOLE_LEFT, 12, area_w, 0), right = sizes_console_box(CONSOLE_RIGHT, 12, area_w, 0);
+  CHECK(left.w == CONSOLE_TALL_W_FP && left.x == MARGIN_FP && right.x + right.w == area_w - MARGIN_FP);
+  CHECK(left.y + left.h / 2 == PICTURE_HEIGHT_FP / 2 && right.y == left.y);
+  box_t narrow = sizes_console_box(CONSOLE_BOTTOM, 4, 300, 0);
+  CHECK(narrow.w == 300 - 2 * MARGIN_FP);
+  return 0;
+}
+
+/* every position and number of lines, next to every postcard (corner, size, with and without keys), at 16:9 and
+ * 4:3: on the screen and clear of the card */
+static int test_the_console_keeps_clear_of_the_postcard(void)
+{
+  const float widths[] = { 640, 480 };
+  const uint32_t key_counts[] = { 0, 8 };
+  const int lines[] = { 4, 6, 8, 12 };
+  for (unsigned w = 0; w < sizeof(widths) / sizeof(*widths); w++)
+    for (int corner = 0; corner < POSTCARD_POSITION_COUNT; corner++)
+      for (int size = 0; size < POSTCARD_SIZE_COUNT; size++)
+        for (unsigned k = 0; k < sizeof(key_counts) / sizeof(*key_counts); k++) {
+          postcard_settings_t postcard = { true, (uint8_t)corner, (uint8_t)size, 3 };
+          box_t card = sizes_card_box(&postcard, key_counts[k], widths[w]);
+          CHECK(box_on_screen(card, widths[w]));
+          for (int position = 0; position < CONSOLE_POSITION_COUNT; position++)
+            for (unsigned l = 0; l < sizeof(lines) / sizeof(*lines); l++) {
+              box_t console = sizes_console_box((console_position_t)position, lines[l], widths[w], &card);
+              if (!boxes_apart(console, card) || !box_on_screen(console, widths[w])) {
+                snprintf(failure, sizeof(failure), "width %g, card %d/%d/%u, console %d with %d lines", widths[w],
+                         corner, size, key_counts[k], position, lines[l]);
+                return 1;
+              }
+            }
+        }
+  postcard_settings_t large = { true, POSTCARD_BOTTOM_RIGHT, POSTCARD_LARGE, 3 };
+  box_t card = sizes_card_box(&large, 8, 640);
+  box_t moved = sizes_console_box(CONSOLE_BOTTOM, 6, 640, &card);
+  CHECK(moved.w == CONSOLE_WIDE_W_FP && moved.y + moved.h == PICTURE_HEIGHT_FP - MARGIN_FP); /* moved sideways only */
+  card = sizes_card_box(&large, 8, 480);
+  moved = sizes_console_box(CONSOLE_BOTTOM, 6, 480, &card);
+  CHECK(moved.y + moved.h <= card.y); /* no room beside it at 4:3: above it */
+  postcard_settings_t small = { true, POSTCARD_BOTTOM_LEFT, POSTCARD_SMALL, 3 };
+  card = sizes_card_box(&small, 8, 640);
+  box_t untouched = sizes_console_box(CONSOLE_BOTTOM, 6, 640, &card), alone = sizes_console_box(CONSOLE_BOTTOM, 6, 640, 0);
+  CHECK(!memcmp(&untouched, &alone, sizeof(alone))); /* the small card leaves it where it is */
+  return 0;
+}
+
 /* --- grid and text ---------------------------------------------------------------------------- */
 
 static int test_grid_names_and_labels(void)
@@ -1076,7 +1571,8 @@ static int test_the_panel_fits_the_screen_with_the_songs(void)
   CHECK(sizes_panel_height(&(panel_shape_t){ 0 }) == 48); /* the title alone */
   panel_shape_t plain = regions_shape(0), warned = regions_shape(MAX_STATUS_LINES);
   CHECK(sizes_panel_height(&plain) == 326 && sizes_panel_height(&warned) == 350);
-  panel_shape_t list = { .tracking = true, .list = true }, settings = { .tracking = true, .postcard_page = true };
+  panel_shape_t list = { .tracking = true, .list = true };
+  panel_shape_t settings = { .tracking = true, .status_lines = MAX_STATUS_LINES, .settings_rows = CONSOLE_SETTING_COUNT };
   const panel_shape_t *shapes[] = { &plain, &warned, &list, &settings };
   for (unsigned s = 0; s < sizeof(screens) / sizeof(*screens); s++) {
     float fp = (float)screens[s].height / PICTURE_HEIGHT_FP;
@@ -1264,6 +1760,8 @@ static const test_t tests[] = {
   { "parse_refuses_a_row_leaving_its_table", test_parse_refuses_a_row_leaving_its_table, 0 },
   { "parse_refuses_truncation_and_an_unterminated_string", test_parse_refuses_truncation_and_an_unterminated_string, 0 },
   { "parse_reads_version_1_without_names", test_parse_reads_version_1_without_names, 0 },
+  { "parse_reads_the_archipelago_flag_and_older_versions_as_local",
+    test_parse_reads_the_archipelago_flag_and_older_versions_as_local, 0 },
   { "parse_refuses_a_name_outside_the_strings", test_parse_refuses_a_name_outside_the_strings, 0 },
   { "the_real_seed_file", 0, test_the_real_seed_file },
   { "state_of_a_save", test_state_of_a_save, 0 },
@@ -1287,13 +1785,30 @@ static const test_t tests[] = {
   { "buttons_held_at_closing_stay_hidden_until_let_go", test_buttons_held_at_closing_stay_hidden_until_let_go, 0 },
   { "the_highlight_moves_over_the_regions_columns", test_the_highlight_moves_over_the_regions_columns, 0 },
   { "a_list_opens_scrolls_and_goes_back", test_a_list_opens_scrolls_and_goes_back, 0 },
-  { "the_postcard_entry_opens_its_settings", test_the_postcard_entry_opens_its_settings, 0 },
+  { "the_settings_entry_opens_the_postcard_and_the_console", test_the_settings_entry_opens_the_postcard_and_the_console, 0 },
   { "postcard_defaults_and_values", test_postcard_defaults_and_values, 0 },
   { "postcard_settings_cycle_both_ways", test_postcard_settings_cycle_both_ways, 0 },
   { "the_postcard_sits_in_its_corner", test_the_postcard_sits_in_its_corner, 0 },
   { "postcard_file_text", test_postcard_file_text, 0 },
   { "postcard_file_tolerates_a_bad_file", test_postcard_file_tolerates_a_bad_file, 0 },
   { "the_icons_state_is_the_full_states_cells_and_keys", test_the_icons_state_is_the_full_states_cells_and_keys, 0 },
+  { "console_defaults_and_values", test_console_defaults_and_values, 0 },
+  { "console_settings_cycle_and_each_kind_of_seed_has_its_own_switch",
+    test_console_settings_cycle_and_each_kind_of_seed_has_its_own_switch, 0 },
+  { "console_file_text", test_console_file_text, 0 },
+  { "console_file_without_its_version_or_damaged_leaves_the_defaults",
+    test_console_file_without_its_version_or_damaged_leaves_the_defaults, 0 },
+  { "console_file_of_0_5_0_shows_other_players_items", test_console_file_of_0_5_0_shows_other_players_items, 0 },
+  { "console_text_is_what_the_font_draws", test_console_text_is_what_the_font_draws, 0 },
+  { "console_view_has_the_newest_lines_of_the_kinds_shown", test_console_view_has_the_newest_lines_of_the_kinds_shown, 0 },
+  { "console_lines_fade_after_their_time", test_console_lines_fade_after_their_time, 0 },
+  { "mailbox_header_is_the_documented_one", test_mailbox_header_is_the_documented_one, 0 },
+  { "mailbox_lines_are_taken_once_and_never_while_written", test_mailbox_lines_are_taken_once_and_never_while_written, 0 },
+  { "mailbox_keeps_up_with_a_full_ring_and_a_client_that_starts_again",
+    test_mailbox_keeps_up_with_a_full_ring_and_a_client_that_starts_again, 0 },
+  { "mailbox_status_line", test_mailbox_status_line, 0 },
+  { "the_console_sits_at_its_edge", test_the_console_sits_at_its_edge, 0 },
+  { "the_console_keeps_clear_of_the_postcard", test_the_console_keeps_clear_of_the_postcard, 0 },
   { "grid_names_and_labels", test_grid_names_and_labels, 0 },
   { "the_songs_follow_the_items_in_two_rows_of_six", test_the_songs_follow_the_items_in_two_rows_of_six, 0 },
   { "the_panel_fits_the_screen_with_the_songs", test_the_panel_fits_the_screen_with_the_songs, 0 },

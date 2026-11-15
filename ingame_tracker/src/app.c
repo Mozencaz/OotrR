@@ -2,9 +2,13 @@
 #include "app.h"
 
 #include "browse.h"
+#include "console.h"
+#include "consolefile.h"
+#include "consolelog.h"
 #include "controls.h"
 #include "gamedata.h"
 #include "gamefile.h"
+#include "mailbox.h"
 #include "overlay.h"
 #include "panel.h"
 #include "postcard.h"
@@ -34,12 +38,20 @@ static struct {
   postcard_settings_t postcard;
   bool postcard_changed; /* not yet written to the SD card */
   panel_t panel; /* the one shown: moving the highlight shows it again without working it all out anew */
+  bool archipelago;      /* the seed file says it is an Archipelago seed */
+  console_settings_t console;
+  bool console_changed;  /* not yet written to the SD card */
+  bool console_dirty;    /* not yet handed to the present thread */
+  mailbox_client_t client;
+  console_log_t console_log;
+  char console_status[CONSOLE_STATUS_ROOM]; /* the status line handed over last */
 } app;
 
 /* Runs inside rtld's DT_INIT: checked reads and unformatted logging only. */
 void app_init(uintptr_t nnmain_address)
 {
   app.postcard = postcard_defaults();
+  app.console = console_defaults();
   app.game = builds_detect(nnmain_address);
   if (!app.game.build) {
     log_raw("this game build is not known: the panel will say so");
@@ -66,8 +78,10 @@ static bool load_seed(void)
     free(bytes);
     return false;
   }
-  log_printf("seed %s: %u regions, %u checks, %u items", trk_string(&app.seed, app.seed.seed_id),
-             (unsigned)app.seed.region_count, (unsigned)app.seed.check_count, (unsigned)app.seed.item_count);
+  app.archipelago = app.seed.flags & TRK_FLAG_ARCHIPELAGO;
+  log_printf("seed %s: %u regions, %u checks, %u items%s", trk_string(&app.seed, app.seed.seed_id),
+             (unsigned)app.seed.region_count, (unsigned)app.seed.check_count, (unsigned)app.seed.item_count,
+             app.archipelago ? ", an Archipelago seed" : "");
   return true; /* the bytes stay: the panel's names point into them */
 }
 
@@ -80,8 +94,13 @@ static bool ensure_seed(uint64_t now)
     return false;
   app.next_seed_try_ms = now + RETRY_SEED_MS;
   app.seed_loaded = load_seed();
-  if (app.seed_loaded)
+  if (app.seed_loaded) {
     postcardfile_load(&app.postcard);
+    consolefile_load(&app.console);
+    mailbox_set_seed(mailbox_shared(), trk_string(&app.seed, app.seed.seed_id));
+    mailbox_start(&app.client, now);
+    app.console_dirty = true;
+  }
   return app.seed_loaded;
 }
 
@@ -106,6 +125,8 @@ static panel_mode_t work_out(panel_t *panel)
 static void fill_browse(panel_t *panel)
 {
   panel->postcard = app.postcard;
+  panel->console = app.console;
+  panel->archipelago = app.archipelago;
   panel->browse = app.browse;
   panel->row_count = 0;
   if (panel->mode == PANEL_TRACKING && app.browse.view == BROWSE_CHECKS)
@@ -183,13 +204,28 @@ static void change_postcard_setting(int direction)
   app.postcard_changed = true;
 }
 
-/* The settings are written when their page is left (or the panel closed), not at each change. */
-static void save_postcard_changes(void)
+static void change_console_setting(int direction)
 {
-  if (!app.postcard_changed || (app.open && app.browse.view == BROWSE_POSTCARD))
-    return;
-  app.postcard_changed = false;
-  postcardfile_save(&app.postcard);
+  console_step(&app.console, (console_setting_t)app.browse.setting, direction, app.archipelago);
+  app.console_changed = app.console_dirty = true;
+}
+
+static bool on_console_page(void)
+{
+  return app.open && app.browse.view == BROWSE_CONSOLE;
+}
+
+/* The settings are written when their page is left (or the panel closed), not at each change. */
+static void save_settings_changes(void)
+{
+  if (app.postcard_changed && !(app.open && app.browse.view == BROWSE_POSTCARD)) {
+    app.postcard_changed = false;
+    postcardfile_save(&app.postcard);
+  }
+  if (app.console_changed && !on_console_page()) {
+    app.console_changed = false;
+    consolefile_save(&app.console);
+  }
 }
 
 static uint32_t highlighted_region_checks(void)
@@ -204,10 +240,17 @@ static void navigate(control_t command)
   };
   if (app.panel.mode != PANEL_TRACKING) /* no regions shown */
     return;
-  if (command == CONTROL_SELECT)
+  bool sideways = command == CONTROL_LEFT || command == CONTROL_RIGHT;
+  int direction = command == CONTROL_RIGHT ? 1 : -1;
+  bool kind_row = app.browse.view == BROWSE_CONSOLE && console_setting_is_kind((console_setting_t)app.browse.setting);
+  if (kind_row && (command == CONTROL_SELECT || sideways))
+    change_console_setting(direction);
+  else if (command == CONTROL_SELECT)
     browse_open(&app.browse, app.seed.region_count);
-  else if (app.browse.view == BROWSE_POSTCARD && (command == CONTROL_LEFT || command == CONTROL_RIGHT))
-    change_postcard_setting(command == CONTROL_RIGHT ? 1 : -1);
+  else if (app.browse.view == BROWSE_POSTCARD && sideways)
+    change_postcard_setting(direction);
+  else if (app.browse.view == BROWSE_CONSOLE && sideways)
+    change_console_setting(direction);
   else
     browse_move(&app.browse, navs[command], app.seed.region_count, highlighted_region_checks());
   show_browse();
@@ -236,6 +279,37 @@ static void run(control_t command, uint64_t now)
   }
 }
 
+/* --- the console ------------------------------------------------------------------------------- */
+
+/* The client's new lines and its status, every frame (a few reads while nothing changes); the present thread gets
+ * the console again when they, its settings or the status line change. */
+static void update_console(uint64_t now)
+{
+  if (!app.seed_loaded)
+    return;
+  bool was_heard = app.client.heard;
+  uint32_t lines_before = app.console_log.count;
+  bool changed = mailbox_poll(mailbox_shared(), &app.client, &app.console_log, now) || app.console_dirty;
+  if (app.client.heard && !was_heard)
+    log_printf("console: the Archipelago client is writing to it");
+  if (app.console_log.count && !lines_before)
+    log_printf("console: its first line came");
+  char status[CONSOLE_STATUS_ROOM];
+  mailbox_status_line(&app.client, app.archipelago, now, status, sizeof(status));
+  if (!changed && text_equal(status, app.console_status))
+    return;
+  static console_view_t view; /* about 2 KiB: not on the game thread's stack */
+  view.settings = app.console;
+  view.shown = console_shown(&app.console, app.archipelago);
+  text_copy(view.status, sizeof(view.status), status);
+  text_copy(app.console_status, sizeof(app.console_status), status);
+  consolelog_view(&app.console_log, &app.console, &view);
+  if (view.shown && (view.count || view.status[0]))
+    trackerui_load(); /* the game's font and shader, once: a pause the first time */
+  overlay_publish_console(&view);
+  app.console_dirty = false;
+}
+
 void app_frame(uint32_t held)
 {
   uint64_t now = sys_ms();
@@ -246,7 +320,8 @@ void app_frame(uint32_t held)
     ensure_seed(now);
   }
   run(controls_frame(held, app.open, now), now);
-  save_postcard_changes();
+  save_settings_changes();
+  update_console(now);
   if (now < app.next_refresh_ms)
     return;
   if (app.open)

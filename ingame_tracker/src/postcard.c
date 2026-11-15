@@ -1,10 +1,10 @@
 #include "postcard.h"
 
+#include "cfgtext.h"
 #include "sys.h"
 
 #define PERCENT_FULL 100.0f
 #define DEFAULT_OPACITY_STEP 1 /* 50 % */
-#define MAX_NUMBER_DIGITS 9
 
 static const char *const setting_names[POSTCARD_SETTING_COUNT] = {
   [POSTCARD_SETTING_SHOWN] = "Postcard", [POSTCARD_SETTING_POSITION] = "Position", [POSTCARD_SETTING_SIZE] = "Size",
@@ -104,40 +104,21 @@ static unsigned file_value(const postcard_settings_t *settings, postcard_setting
   }
 }
 
-/* `name=value` and a newline at out + at, if they fit with the final NUL; the new length */
-static size_t append_line(char *out, size_t room, size_t at, const char *name, unsigned value)
-{
-  char digits[MAX_NUMBER_DIGITS + 1];
-  size_t digit_count = 0, name_length = strlen(name);
-  do {
-    digits[digit_count++] = (char)('0' + value % 10);
-    value /= 10;
-  } while (value);
-  if (at + name_length + 1 + digit_count + 1 >= room)
-    return at;
-  memcpy(out + at, name, name_length);
-  at += name_length;
-  out[at++] = '=';
-  while (digit_count)
-    out[at++] = digits[--digit_count];
-  out[at++] = '\n';
-  return at;
-}
-
 size_t postcard_format(const postcard_settings_t *settings, char *out, size_t room)
 {
   size_t length = 0;
   for (int i = 0; i < POSTCARD_SETTING_COUNT; i++)
-    length = append_line(out, room, length, file_names[i], file_value(settings, (postcard_setting_t)i));
+    length = cfgtext_line(out, room, length, file_names[i], file_value(settings, (postcard_setting_t)i));
   if (room)
     out[length] = 0;
   return length;
 }
 
 /* Sets the setting if `value` is one it can have. */
-static bool apply_value(postcard_settings_t *settings, postcard_setting_t setting, uint32_t value)
+static bool apply_value(void *to, int name, uint32_t value)
 {
-  switch (setting) {
+  postcard_settings_t *settings = to;
+  switch ((postcard_setting_t)name) {
     case POSTCARD_SETTING_SHOWN:
       if (value > 1)
         return false;
@@ -164,48 +145,7 @@ static bool apply_value(postcard_settings_t *settings, postcard_setting_t settin
   }
 }
 
-static bool name_is(const char *name, const char *text, size_t length)
-{
-  return strlen(name) == length && !memcmp(name, text, length);
-}
-
-/* One line, "name=digits": its setting and number; false if it is anything else. */
-static bool read_line(const char *line, const char *end, postcard_setting_t *setting, uint32_t *value)
-{
-  const char *equals = line;
-  while (equals < end && *equals != '=')
-    equals++;
-  if (equals == end)
-    return false;
-  int found = -1;
-  for (int i = 0; i < POSTCARD_SETTING_COUNT; i++)
-    if (name_is(file_names[i], line, (size_t)(equals - line)))
-      found = i;
-  const char *digit = equals + 1;
-  if (found < 0 || digit == end || end - digit > MAX_NUMBER_DIGITS)
-    return false;
-  *setting = (postcard_setting_t)found;
-  *value = 0;
-  for (; digit < end; digit++) {
-    if (*digit < '0' || *digit > '9')
-      return false;
-    *value = *value * 10 + (uint32_t)(*digit - '0');
-  }
-  return true;
-}
-
 void postcard_parse(postcard_settings_t *settings, const char *text, size_t size)
 {
-  const char *end = text + size;
-  while (text < end) {
-    const char *line_end = text;
-    while (line_end < end && *line_end != '\n')
-      line_end++;
-    const char *content_end = line_end > text && line_end[-1] == '\r' ? line_end - 1 : line_end;
-    postcard_setting_t setting;
-    uint32_t value;
-    if (read_line(text, content_end, &setting, &value))
-      apply_value(settings, setting, value);
-    text = line_end < end ? line_end + 1 : end;
-  }
+  cfgtext_parse(text, size, file_names, POSTCARD_SETTING_COUNT, apply_value, settings);
 }

@@ -10,13 +10,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define TRK_VERSION 2        /* 1: the same, but its checks have no names */
+#define TRK_VERSION 3        /* 2: the same without the header's flags; 1: nor the checks' names */
 #define TRK_OLDEST_VERSION 1
 #define TRK_MAX_REGIONS 64  /* the module keeps a fixed-size state per region */
 #define TRK_MAX_KEY_ROWS 16 /* ... and per dungeon with keys */
 
 enum { TRK_KIND_BOOL = 1, TRK_KIND_BOOL64 = 2 };
 enum { TRK_KEY_SMALL = 1, TRK_KEY_BOSS = 2, TRK_KEY_SMALL_ALL = 4, TRK_KEY_BOSS_ALL = 8 };
+enum { TRK_FLAG_ARCHIPELAGO = 1 }; /* the header's flags (version 3; 0 in older files: a local seed) */
 
 typedef struct { uint32_t name, first_check, check_count; } trk_region_t;
 typedef struct { uint64_t key; uint32_t kind, name; } trk_check_t; /* name: a string offset (0, "", in version 1) */
@@ -30,7 +31,8 @@ typedef struct {
 typedef struct {
   const uint8_t *data;
   size_t size;
-  uint32_t version;
+  uint32_t version, header_size;
+  uint32_t flags;
   uint32_t seed_marker, goal_marker; /* Bool hashes; goal_marker 0: the seed has none */
   uint32_t seed_id;                  /* string offset */
   uint32_t strings_at, strings_size;

@@ -43,6 +43,15 @@ def sample_file():
                        'found': 11, 'held': 12, 'ring': 13, 'boss': 14}])
 
 
+def older(data, version):
+    """``data`` (version 3) as a file of an older version: no flags word, every offset 4 bytes earlier."""
+    head = bytearray(data[:fmt.HEADER_V2.size])
+    struct.pack_into('<HH', head, 4, version, fmt.HEADER_V2.size)
+    for offset in (8, 24, 32, 40, 48, 56, 64):   # file size, strings, the tables
+        struct.pack_into('<I', head, offset, struct.unpack_from('<I', head, offset)[0] - 4)
+    return bytes(head) + data[fmt.HEADER.size:]
+
+
 class FormatTests(unittest.TestCase):
     def test_roundtrip(self):
         parsed = fmt.parse(sample_file())
@@ -64,11 +73,19 @@ class FormatTests(unittest.TestCase):
     def test_header_layout_is_the_documented_one(self):
         data = sample_file()
         self.assertEqual(data[:4], b'RTRK')
-        self.assertEqual(struct.unpack_from('<HHIII', data, 4), (2, 72, len(data), 1220450581, 3488204275))
+        self.assertEqual(struct.unpack_from('<HHIII', data, 4), (3, 76, len(data), 1220450581, 3488204275))
+        self.assertEqual(struct.unpack_from('<I', data, 72)[0], 0)   # the flags: a local seed
+        flagged = fmt.build('x', 0, 0, [], [], [], flags=fmt.FLAG_ARCHIPELAGO)
+        self.assertEqual(struct.unpack_from('<I', flagged, 72)[0], fmt.FLAG_ARCHIPELAGO)
+        self.assertEqual(fmt.parse(flagged)['flags'], fmt.FLAG_ARCHIPELAGO)
+
+    def test_version_2_files_still_read_as_local_seeds(self):
+        parsed = fmt.parse(older(sample_file(), 2))
+        self.assertEqual(parsed['flags'], 0)
+        self.assertEqual({**parsed, 'flags': 0}, fmt.parse(sample_file()))
 
     def test_version_1_files_still_read_with_unnamed_checks(self):
-        data = bytearray(sample_file())
-        struct.pack_into('<H', data, 4, 1)
+        data = bytearray(older(sample_file(), 1))
         checks_offset, check_count = struct.unpack_from('<II', data, 40)
         for index in range(check_count):
             struct.pack_into('<I', data, checks_offset + index * fmt.CHECK.size + 12, 0)   # reserved in version 1
@@ -91,8 +108,11 @@ class FormatTests(unittest.TestCase):
             return bytes(copy)
         broken = {
             'magic': b'XXXX' + bytes(data[4:]),
-            'version': changed(4, '<H', 3),
+            'version': changed(4, '<H', 4),
             'version 0': changed(4, '<H', 0),
+            'version 2 with the longer header': changed(4, '<H', 2),
+            'version 3 with the shorter header': bytes(bytearray(older(sample_file(), 2))[:4]) + struct.pack('<H', 3)
+                                                 + older(sample_file(), 2)[6:],
             'header size': changed(6, '<H', 64),
             'truncated': bytes(data[:-1]),
             'longer': bytes(data) + b'\0',
@@ -179,6 +199,15 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(exported, [labels[c['id']] for c in checks if tracking['checks'][c['id']]['collection']])
         self.assertEqual(labels['b'], 'Chest 1')   # a world chest: numbered in its region, as in the window
         self.assertEqual(labels['e'], 'Slingshot Chest')
+
+    def test_an_archipelago_seed_is_flagged(self):
+        manifest, checks, tracking = synthetic_seed()
+        self.assertEqual(fmt.parse(ingame_bundle.seed_file(manifest, checks, tracking))['flags'], 0)
+        manifest['archipelago'] = {'slot_name': 'Link', 'location_ids': {'A#1': 11}}
+        self.assertEqual(fmt.parse(ingame_bundle.seed_file(manifest, checks, tracking))['flags'],
+                         fmt.FLAG_ARCHIPELAGO)
+        manifest['archipelago'] = {'location_ids': {}}   # what archipelago_info refuses: not one
+        self.assertEqual(fmt.parse(ingame_bundle.seed_file(manifest, checks, tracking))['flags'], 0)
 
     def test_goal_marker_is_written_when_the_seed_has_one(self):
         manifest, checks, tracking = synthetic_seed()
