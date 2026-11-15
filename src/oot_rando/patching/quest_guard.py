@@ -109,25 +109,40 @@ def guard_regressions(raw, challenge, steps, floor, gamedata_raw=None):
     input is returned unchanged (empty ``guarded``) when the flow has no such request.
     """
     expression = floor_expression(steps, challenge, floor)
+    order = steps[challenge]
+    return guard_requests(raw, challenge, steps, order[:order.index(floor)], expression,
+                          skip_when=True, gamedata_raw=gamedata_raw)
+
+
+def guard_requests(raw, challenge, steps, wanted, expression, skip_when=True, gamedata_raw=None,
+                   prefix=PREFIX):
+    """Flow bytes where every request of a ``wanted`` step of ``challenge`` depends on ``expression``.
+
+    ``skip_when=True``: the request is skipped while the expression is true (a floor);
+    ``False``: it only runs while the expression is true. The progress banner right
+    after a skipped request is skipped with it. Returns (bytes, report) as
+    :func:`guard_regressions`.
+    """
     if gamedata_raw is not None:
         check_expressions(gamedata_raw, [expression])
-    order = steps[challenge]
-    before = set(order[:order.index(floor)])
+    order = steps.get(challenge)
+    if not order:
+        raise ValueError('Unknown challenge: ' + challenge)
+    wanted = set(wanted)
+    if wanted - set(order) - {'Complete'}:
+        raise ValueError(f'{challenge} has no step {sorted(wanted - set(order) - {"Complete"})}')
     flow = _Chart(raw)
-    if any(name.startswith(PREFIX) for name in flow.events):
-        raise ValueError('Quest floor guard already applied')
-    targets = [e for e in flow.chart.events
-               if getattr(e.data, 'actor_action', None) is not None
-               and e.data.actor_action.v.v == STEP_ACTION
-               and _params(e).get('ChallengeName') == challenge
-               and _params(e).get('StepName') in before]
-    unknown = [_params(e).get('StepName') for e in flow.chart.events
-               if getattr(e.data, 'actor_action', None) is not None
-               and e.data.actor_action.v.v == STEP_ACTION
-               and _params(e).get('ChallengeName') == challenge
-               and _params(e).get('StepName') not in order]
+    if any(name.startswith(prefix) for name in flow.events):
+        raise ValueError('Quest guard already applied: ' + prefix)
+    requests = [e for e in flow.chart.events
+                if getattr(e.data, 'actor_action', None) is not None
+                and e.data.actor_action.v.v == STEP_ACTION
+                and _params(e).get('ChallengeName') == challenge]
+    unknown = [_params(e).get('StepName') for e in requests
+               if _params(e).get('StepName') not in order and _params(e).get('StepName') != 'Complete']
     if unknown:
         raise ValueError(f'{challenge}: steps missing from the challenge table: {unknown}')
+    targets = [e for e in requests if _params(e).get('StepName') in wanted]
     if not targets:
         return raw, {'expression': expression, 'guarded': []}
     planned = []
@@ -139,25 +154,26 @@ def guard_regressions(raw, challenge, steps, floor, gamedata_raw=None):
             resume = resume.data.nxt.v
         planned.append((step, resume))
     for index, (step, resume) in enumerate(planned):
-        guard = flow.switch(f'{PREFIX}{index}', QUERY, {'GameDataName': expression}, resume, step)
+        true, false = (resume, step) if skip_when else (step, resume)
+        guard = flow.switch(f'{prefix}{index}', QUERY, {'GameDataName': expression}, true, false)
         if _relink(flow.chart, step, guard) == 0:
             # An unreachable request: drop the unused switch again.
             flow.chart.events.remove(guard)
             del flow.events[guard.name], flow.expected[guard.name]
-            continue
     result, events = flow.write()
     # A request resuming on another guarded request now resumes on its guard.
-    guard_of = {step.name: f'{PREFIX}{index}' for index, (step, _) in enumerate(planned)
-                if f'{PREFIX}{index}' in events}
+    guard_of = {step.name: f'{prefix}{index}' for index, (step, _) in enumerate(planned)
+                if f'{prefix}{index}' in events}
     guarded = []
     for index, (step, resume) in enumerate(planned):
-        guard = events.get(f'{PREFIX}{index}')
+        guard = events.get(f'{prefix}{index}')
         if guard is None:
             continue
         cases = guard.data.cases
         expected = None if resume is None else guard_of.get(resume.name, resume.name)
-        if (cases[1].v.name != step.name or (expected is None) != (0 not in cases)
-                or (expected is not None and cases[0].v.name != expected)):
-            raise ValueError('Quest floor guard wrongly chained: ' + step.name)
+        run_key, skip_key = (1, 0) if skip_when else (0, 1)
+        if (cases[run_key].v.name != step.name or (expected is None) != (skip_key not in cases)
+                or (expected is not None and cases[skip_key].v.name != expected)):
+            raise ValueError('Quest guard wrongly chained: ' + step.name)
         guarded.append((step.name, _params(step)['StepName'], resume.name if resume is not None else None))
     return result, {'expression': expression, 'guarded': guarded}

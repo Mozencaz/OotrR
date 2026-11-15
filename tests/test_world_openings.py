@@ -9,10 +9,25 @@ NUP = os.environ.get('OOT_NUP')
 
 
 class Option(unittest.TestCase):
-    def test_open_fountain_is_offered(self):
+    def test_openings_are_offered(self):
         from oot_rando.logic import rando_options
-        self.assertEqual(rando_options.validate({'zora_fountain': 'open'}, supported_only=True)['zora_fountain'],
-                         'open')
+        for option, value in (('zora_fountain', 'open'), ('open_kakariko', 'open'), ('open_door_of_time', True),
+                              ('gerudo_fortress', 'fast')):
+            with self.subTest(option=option):
+                self.assertEqual(rando_options.validate({option: value}, supported_only=True)[option], value)
+                self.assertIn(value, next(o for o in rando_options.OPTIONS if o.name == option).experimental)
+        with self.assertRaises(ValueError):    # the card check would be lost
+            rando_options.validate({'gerudo_fortress': 'open'}, supported_only=True)
+
+    def test_open_door_lets_the_sword_be_pulled_at_once(self):
+        from collections import Counter
+        from oot_rando.logic.rules import Logic
+        from oot_rando.logic.world import World
+        data = World()
+        for door, expected in ((False, False), (True, True)):
+            logic = Logic(data, {'open_forest': 'closed_deku', 'open_door_of_time': door})
+            _, collected, _ = logic.sweep({'Master Sword Pedestal': None}, logic.new_state(Counter()))
+            self.assertEqual('Master Sword Pedestal' in collected, expected)
 
     def test_open_fountain_logic(self):
         from collections import Counter
@@ -33,7 +48,7 @@ class ZoraFountain(unittest.TestCase):
     def setUpClass(cls):
         from oot_rando.formats.inspect_nup import Nup
         from oot_rando.formats.inspect_resources import decompress, dictionaries
-        nup = Nup(NUP)
+        nup = cls.nup = Nup(NUP)
         d = dictionaries(nup)
         cls.read = staticmethod(lambda path: decompress(nup.read(nup.latest('romfs/' + path)), d))
 
@@ -51,24 +66,65 @@ class ZoraFountain(unittest.TestCase):
         self.assertTrue({'Step05', 'Step06'} <= guarded)
         self.assertFalse(guarded & {'Step07', 'Step08', 'Step09', 'Step10', 'Step14'})
 
-    def test_no_other_flow_requests_the_quest(self):
-        # The two guarded flows are the only ones that move the Zora quest back.
+    def test_no_other_flow_requests_the_quests(self):
+        # The guarded flows are the only ones that move each opened quest back.
         from oot_rando.formats.inspect_nup import Nup
         nup = Nup(NUP)
         steps = quest_guard.challenge_steps(self.read(quest_guard.CHALLENGES))
-        order = steps[w.ZORA_QUEST]
-        early = set(order[:order.index(w.ZORA_FLOOR)])
         paths = sorted({p.split('/', 2)[2] for p in nup.entries
                         if '/romfs/Event/EventFlow/' in p and p.endswith('.bfevfl.zs')})
-        found = set()
+        charts = {}
         for path in paths:
             try:
-                requests = quest_guard.step_requests(self.read(path), w.ZORA_QUEST)
+                charts[path] = {q: quest_guard.step_requests(self.read(path), q)
+                                for q in (w.ZORA_QUEST, w.KAKARIKO_QUEST, w.DOOR_QUEST)}
             except (ValueError, AttributeError):
                 continue    # empty or unreadable flow charts
-            if any(step in early for _, step in requests):
-                found.add(path)
-        self.assertEqual(found, set(w.ZORA_FLOWS))
+        for quest, floor, flows in ((w.ZORA_QUEST, w.ZORA_FLOOR, w.ZORA_FLOWS),
+                                    (w.KAKARIKO_QUEST, w.KAKARIKO_FLOOR, w.KAKARIKO_FLOWS)):
+            order = steps[quest]
+            early = set(order[:order.index(floor)])
+            found = {p for p, requests in charts.items() if any(s in early for _, s in requests[quest])}
+            self.assertEqual(found, set(flows), quest)
+        done = {p for p, requests in charts.items() if any(s == 'Complete' for _, s in requests[w.DOOR_QUEST])}
+        self.assertEqual(done, {w.DOOR_FLOW})
+
+    def test_kakariko_gate_and_fire_quest(self):
+        gamedata, flows, report = w.kakariko_gate_open(self.read, self.read(game_defaults.GAMEDATA),
+                                                       self.read(quest_guard.CHALLENGES))
+        self.assertEqual(game_defaults.read_defaults(gamedata, [w.KAKARIKO_GATE, 'Step_Get_StoneOfFire']),
+                         {w.KAKARIKO_GATE: True, 'Step_Get_StoneOfFire': 'KakarikoVillageLetter'})
+        self.assertEqual([s for _, s, _ in report['guarded'][w.DOOR_FLOW]], ['KakarikoVillageNpc'])
+
+    def test_door_of_time_modules(self):
+        import ainb
+        raw = lambda path: self.nup.read(self.nup.latest('romfs/' + path))
+        gamedata, files, report = w.door_of_time_open(self.read, self.read(game_defaults.GAMEDATA),
+                                                      self.read(quest_guard.CHALLENGES), raw)
+        door = ainb.AINB.from_binary(files[w.DOOR_MODULE]).as_dict()['Nodes'][3]['Parameters']['Inputs']['Bool']
+        self.assertEqual({i['Name']: (i['Default Value'], i['Node Index']) for i in door
+                          if i['Name'] in ('isOpen', 'IsSkipAnim')}, {'isOpen': (True, -1), 'IsSkipAnim': (True, -1)})
+        gate = ainb.AINB.from_binary(files[w.PEDESTAL_MODULE]).as_dict()['Nodes'][1]['Parameters']['Inputs']['Bool']
+        self.assertEqual([(s['Node Index'], s['Output Index']) for s in gate[0]['Sources']], [(5, 1), (6, 2)])
+        self.assertEqual([s for _, s, _ in report['guarded'][w.DOOR_FLOW]], ['Complete'])
+        self.assertEqual(report['expression'], w.DOOR_COMPLETE_ONLY_AFTER)
+        with self.assertRaises(ValueError):    # never applied twice
+            w.pedestal_before_sages(files[w.PEDESTAL_MODULE])
+
+    def test_all_openings_together(self):
+        raw = lambda path: self.nup.read(self.nup.latest('romfs/' + path))
+        options = {'zora_fountain': 'open', 'open_kakariko': 'open', 'open_door_of_time': True,
+                   'gerudo_fortress': 'fast'}
+        gamedata, files, reports = w.apply_openings(options, self.read, self.read(game_defaults.GAMEDATA),
+                                                    self.read(quest_guard.CHALLENGES), raw)
+        self.assertEqual(set(reports), set(options))
+        self.assertEqual(game_defaults.read_defaults(gamedata, [w.CARPENTERS_HELPED, w.CARPENTERS_LEFT]),
+                         {w.CARPENTERS_HELPED: 3, w.CARPENTERS_LEFT: 1})
+        # Both guards of the Door of Time flow are kept.
+        from oot_rando.patching.story_fixes import _Chart
+        names = {e.name for e in _Chart(files[w.DOOR_FLOW]).chart.events}
+        self.assertTrue(any(n.startswith(quest_guard.PREFIX) for n in names))
+        self.assertTrue(any(n.startswith(w.DOOR_PREFIX) for n in names))
 
 
 if __name__ == '__main__':

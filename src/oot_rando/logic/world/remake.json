@@ -26,8 +26,8 @@
    "why": "Zelda's escape (Challenge DoorOfTime) needs Goto_HyruleCastle and Impa's send-off first. The game now starts it on the three stones held (patching/story_fixes.py), not only at the end of Dodongo's Cavern and Jabu-Jabu's Belly (15/11, Discord report)."
   },
   "Master Sword Pedestal": {
-   "rule": "has_all_stones and 'Met Zelda'",
-   "why": "The Door of Time opens in the same DoorOfTime challenge, after Zelda's escape: the Song of Time alone (songs shuffled) does not open it."
+   "rule": "open_door_of_time or (has_all_stones and 'Met Zelda')",
+   "why": "The Door of Time opens in the same DoorOfTime challenge, after Zelda's escape: the Song of Time alone (songs shuffled) does not open it. With the door open from the start (patching/world_openings.py) the first pull needs neither."
   }
  },
  "events": {

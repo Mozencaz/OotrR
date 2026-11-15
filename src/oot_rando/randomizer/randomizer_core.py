@@ -470,14 +470,16 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
                 extra_raw[ACTION_GUIDE_FLOW])
             # The clock runs before Zelda (Impa's send-off flag set at the start).
             story['clock'] = story_fixes.CLOCK_FLAG
-            if (full.get('options') or {}).get('zora_fountain') == 'open':
-                # King Zora moved from the start, kept there (patching/world_openings.py).
-                from oot_rando.patching.world_openings import zora_fountain_open
+            # Zones open from the start, kept open (patching/world_openings.py).
+            from oot_rando.patching.world_openings import OPENINGS, apply_openings
+            options = full.get('options') or {}
+            if any(options.get(option) == value for option, value, _ in OPENINGS):
                 from oot_rando.patching.quest_guard import CHALLENGES
-                extra_raw[GAMEDATA], opened_flows, story['zora_fountain'] = zora_fountain_open(
-                    lambda path: extra_raw.get(path) or decompress(read(path), d),
+                extra_raw[GAMEDATA], opened_flows, story['openings'] = apply_openings(
+                    options, lambda path: extra_raw.get(path) or decompress(read(path), d),
                     extra_raw.get(GAMEDATA) or decompress(read(GAMEDATA), d),
-                    decompress(read(CHALLENGES), d))
+                    decompress(read(CHALLENGES), d),
+                    lambda path: extra_raw.get(path) or read(path))
                 extra_raw.update(opened_flows)
         gamedata_source = extra_raw.get(GAMEDATA)
         if gamedata_source is None:
