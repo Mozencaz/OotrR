@@ -12,7 +12,7 @@ class Option(unittest.TestCase):
     def test_openings_are_offered(self):
         from oot_rando.logic import rando_options
         for option, value in (('zora_fountain', 'open'), ('open_kakariko', 'open'), ('open_door_of_time', True),
-                              ('gerudo_fortress', 'fast')):
+                              ('gerudo_fortress', 'fast'), ('open_gerudo_valley_bridge', True)):
             with self.subTest(option=option):
                 self.assertEqual(rando_options.validate({option: value}, supported_only=True)[option], value)
                 self.assertIn(value, next(o for o in rando_options.OPTIONS if o.name == option).experimental)
@@ -28,6 +28,21 @@ class Option(unittest.TestCase):
             logic = Logic(data, {'open_forest': 'closed_deku', 'open_door_of_time': door})
             _, collected, _ = logic.sweep({'Master Sword Pedestal': None}, logic.new_state(Counter()))
             self.assertEqual('Master Sword Pedestal' in collected, expected)
+
+    def test_repaired_bridge_logic(self):
+        from collections import Counter
+        from oot_rando.logic.rules import Logic
+        from oot_rando.logic.world import World
+        data = World()
+        for bridge, expected in ((False, False), (True, True)):
+            logic = Logic(data, {'open_forest': 'closed_deku', 'open_door_of_time': True,
+                                 'open_gerudo_valley_bridge': bridge})
+            _, collected, _ = logic.sweep({'Master Sword Pedestal': 'Time Travel', 'GV Chest': None,
+                                           'Hideout Gerudo Membership Card': None},
+                                          logic.new_state(Counter({'Progressive Hookshot': 1, 'Megaton Hammer': 1})))
+            with self.subTest(bridge=bridge):
+                self.assertEqual('GV Chest' in collected, expected)
+                self.assertNotIn('Hideout Gerudo Membership Card', collected)   # still the carpenters
 
     def test_open_fountain_logic(self):
         from collections import Counter
@@ -96,6 +111,17 @@ class ZoraFountain(unittest.TestCase):
                          {w.KAKARIKO_GATE: True, 'Step_Get_StoneOfFire': 'KakarikoVillageLetter'})
         self.assertEqual([s for _, s, _ in report['guarded'][w.DOOR_FLOW]], ['KakarikoVillageNpc'])
 
+    def test_gerudo_valley_bridge(self):
+        gamedata, flows, report = w.gerudo_valley_bridge(self.read, self.read(game_defaults.GAMEDATA),
+                                                         self.read(quest_guard.CHALLENGES))
+        self.assertEqual(game_defaults.read_defaults(gamedata, ['Step_SageOfSpirit']), {'Step_SageOfSpirit': 'Step01'})
+        self.assertEqual(flows, {})
+        # The bridge module shows the repaired bridge from Step01 on.
+        import ainb
+        nodes = ainb.AINB.from_binary(self.nup.read(self.nup.latest('romfs/' + w.BRIDGE_MODULE))).as_dict()['Nodes']
+        self.assertIn('SageOfSpirit_IsAfter_Step01_Exp',
+                      [s['Default Value'] for n in nodes for s in n.get('Parameters', {}).get('Inputs', {}).get('String', [])])
+
     def test_door_of_time_modules(self):
         import ainb
         raw = lambda path: self.nup.read(self.nup.latest('romfs/' + path))
@@ -114,7 +140,7 @@ class ZoraFountain(unittest.TestCase):
     def test_all_openings_together(self):
         raw = lambda path: self.nup.read(self.nup.latest('romfs/' + path))
         options = {'zora_fountain': 'open', 'open_kakariko': 'open', 'open_door_of_time': True,
-                   'gerudo_fortress': 'fast'}
+                   'gerudo_fortress': 'fast', 'open_gerudo_valley_bridge': True}
         gamedata, files, reports = w.apply_openings(options, self.read, self.read(game_defaults.GAMEDATA),
                                                     self.read(quest_guard.CHALLENGES), raw)
         self.assertEqual(set(reports), set(options))

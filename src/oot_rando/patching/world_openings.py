@@ -182,11 +182,28 @@ def gerudo_fortress_fast(read_flow, gamedata_raw, challenges_raw):
     return game_defaults.set_new_game_defaults(gamedata_raw, values), {}, {'defaults': values, 'guarded': {}}
 
 
+SPIRIT_QUEST = 'SageOfSpirit'
+BRIDGE_MODULE = 'Logic/GerudoValley_Adult_Prefab_9e43.logic.module.ainb'
+BRIDGE_FLOOR = 'Step01'
+
+
+def gerudo_valley_bridge(read_flow, gamedata_raw, challenges_raw):
+    """The Gerudo Valley bridge repaired from the start (``open_gerudo_valley_bridge``).
+
+    ``GerudoValley_Adult_Prefab_9e43`` shows the repaired bridge (and removes the two
+    horse jumps) once ``SageOfSpirit`` is past ``Ready``: the head carpenter moves it
+    to ``Step01`` when he stops the adult in front of the fortress, a talk with no
+    item. A new game starts there. The carpenters, their cells and the card are not
+    touched. No flow requests ``Ready``, so there is nothing to guard."""
+    return open_quest(read_flow, gamedata_raw, challenges_raw, SPIRIT_QUEST, BRIDGE_FLOOR, ())
+
+
 # option name, value -> opening (applied in this order by the seed build).
 OPENINGS = (('zora_fountain', 'open', zora_fountain_open),
             ('open_kakariko', 'open', kakariko_gate_open),
             ('open_door_of_time', True, door_of_time_open),
-            ('gerudo_fortress', 'fast', gerudo_fortress_fast))
+            ('gerudo_fortress', 'fast', gerudo_fortress_fast),
+            ('open_gerudo_valley_bridge', True, gerudo_valley_bridge))
 
 
 def apply_openings(options, read_flow, gamedata_raw, challenges_raw, read_module=None):

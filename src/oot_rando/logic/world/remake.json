@@ -18,8 +18,8 @@
    "why": "Richard only runs away once the Kakariko gate guard has read Zelda's Letter (Logic/Market_Child_Prefab_f3a2: RunningRichard needs Npc_Hylia_Soldier_003_GateOpen); before that he stays home with his owner (14/11, Discord report)."
   },
   "Song from Saria": {
-   "rule": "is_child and Zeldas_Letter and at('GC Darunias Chamber', is_child)",
-   "why": "Saria teaches her song during the Fire Stone quest (Challenge Get_StoneOfFire, step SariaMelodyGet), only after Darunia asked for music in his chamber (11/11: Kokiri Sword behind the Skull Kid)."
+   "rule": "is_child and 'Kakariko Village Gate Open' and at('GC Darunias Chamber', is_child)",
+   "why": "Saria teaches her song during the Fire Stone quest (Challenge Get_StoneOfFire, step SariaMelodyGet), only after Darunia asked for music in his chamber (11/11: Kokiri Sword behind the Skull Kid). The quest reaches Death Mountain when the Kakariko guard reads Zelda's Letter (or with the gate open from the start), not on the letter held."
   },
   "Song from Ocarina of Time": {
    "rule": "is_child and has_all_stones and 'Met Zelda'",
@@ -28,6 +28,14 @@
   "Master Sword Pedestal": {
    "rule": "open_door_of_time or (has_all_stones and 'Met Zelda')",
    "why": "The Door of Time opens in the same DoorOfTime challenge, after Zelda's escape: the Song of Time alone (songs shuffled) does not open it. With the door open from the start (patching/world_openings.py) the first pull needs neither."
+  },
+  "Song from Malon": {
+   "rule": "is_child and 'Met Zelda' and Ocarina and at_day",
+   "why": "The base rule uses Zelda's Letter as the sign that Zelda was met. The remake reads the castle quest, never the letter item (only the Kakariko guard does), so the letter can leave the pool with the gate open."
+  },
+  "LLR Talons Chickens": {
+   "rule": "is_child and at_day and 'Met Zelda'",
+   "why": "Talon's cucco game depends on the castle quest (Minigame_FindOutCucco: Goto_HyruleCastle past Step03_02), not on Zelda's Letter held."
   }
  },
  "events": {
@@ -35,6 +43,12 @@
    "Met Zelda": {
     "rule": "is_child",
     "why": "Zelda in the castle garden completes Goto_HyruleCastle, which starts DoorOfTime; Impa's send-off follows."
+   }
+  },
+  "Market Mask Shop": {
+   "Skull Mask": {
+    "rule": "'Kakariko Village Gate Open' and (complete_mask_quest or at('Kakariko Village', is_child))",
+    "why": "The mask shop opens on the Kakariko gate flag (Npc_Hylia_Soldier_003_GateOpen in Market_Child modules and DisplayShop), not on Zelda's Letter held."
    }
   }
  },

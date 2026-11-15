@@ -98,7 +98,8 @@ OPTIONS = [
             ('open', 'Open', OK)), 'closed',
            'Open: the gate and the Death Mountain part of the Fire Stone quest start as after the '
            'guard read Zelda\'s Letter. The castle visit and the Door of Time quest are unchanged. '
-           'To be confirmed in game.', experimental=('open',)),
+           'The letter has no use left: with the quest rewards shuffled it leaves the item pool and '
+           'Zelda gives a shuffled item instead. To be confirmed in game.', experimental=('open',)),
     Option('open_door_of_time', 'World', 'Door of Time open',
            ((False, OK), (True, OK)), False,
            'The Door of Time stands open and the sword can be pulled without the Spiritual Stones or '
@@ -117,6 +118,11 @@ OPTIONS = [
              'carpenter: with every carpenter free from the start its check would be lost.')), 'normal',
            'One carpenter: the first carpenter freed, in any cell, ends the fortress and brings the '
            'Gerudo Membership Card. To be confirmed in game.', experimental=('fast',)),
+    Option('open_gerudo_valley_bridge', 'World', 'Gerudo Valley bridge repaired',
+           ((False, OK), (True, OK)), False,
+           'The adult crosses the Gerudo Valley bridge on foot from the start, as after meeting the head '
+           'carpenter on the fortress side. The carpenters stay in their cells and the last rescue still '
+           'brings the Gerudo Membership Card. To be confirmed in game.', kind='bool', experimental=(True,)),
     Option('starting_age', 'World', 'Starting age',
            (('child', 'Child', OK), ('adult', 'Adult', NO_ADAPTER), ('random', 'Random', NO_ADAPTER)), 'child'),
     # ------------------------------------------------------------------- Goal

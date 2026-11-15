@@ -21,6 +21,7 @@ MEDALLIONS = ('Forest Medallion', 'Fire Medallion', 'Water Medallion', 'Shadow M
 AP_VANILLA_SETTINGS = {
     'logic_rules': 'glitchless', 'open_forest': 'closed', 'open_kakariko': 'closed',
     'open_door_of_time': False, 'zora_fountain': 'closed', 'gerudo_fortress': 'normal',
+    'open_gerudo_valley_bridge': False,
     'bridge': 'vanilla', 'bridge_stones': 3, 'bridge_medallions': 6, 'bridge_rewards': 9,
     'bridge_tokens': 100, 'bridge_hearts': 20, 'trials': 6,
     'lacs_condition': 'vanilla', 'lacs_stones': 3, 'lacs_medallions': 6, 'lacs_rewards': 9,

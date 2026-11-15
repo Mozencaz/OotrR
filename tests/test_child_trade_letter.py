@@ -58,5 +58,33 @@ class ChildTradeLetterTests(unittest.TestCase):
         self.assertFalse(kept_for_child_trade(quest_sources()[SARIA], rando_options.defaults()))
 
 
+
+class LetterRemovedTests(unittest.TestCase):
+    """Kakariko gate open: the letter has no use left and leaves the pool."""
+    @classmethod
+    def setUpClass(cls):
+        cls.data = World()
+        options = dict(rando_options.defaults(), shuffle_quest_rewards=True, open_kakariko='open')
+        cls.options = options
+        cls.c = prepare(cls.data, options, {}, [], 'letter-removed', True, extra=quest_sources())
+
+    def test_zelda_gift_is_shuffled_and_the_letter_gone(self):
+        self.assertFalse(kept_for_child_trade(quest_sources()[LETTER], self.options))
+        self.assertIn(LETTER, self.c.shuffled)
+        self.assertNotIn('Zeldas Letter', self.c.pool)
+
+    def test_nothing_needs_the_letter(self):
+        placements = dict(self.c.base)
+        for gid in self.c.logic_locations:
+            placements.setdefault(vname(gid), None)
+        everything = Counter({item: 9 for item in self.c.relevant if item != 'Zeldas Letter'})
+        state, found, _ = self.c.logic.sweep(placements, self.c.logic.new_state(everything))
+        for location in ('Song from Saria', 'Song from Malon', 'LLR Talons Chickens'):
+            with self.subTest(location=location):
+                self.assertIn(location, found)
+        self.assertTrue(state.has('Skull Mask'))
+        self.assertFalse(state.has('Zeldas Letter'))
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -482,7 +482,7 @@
    "GV Upper Stream": "True",
    "GV Crate Ledge": "is_child or Longshot",
    "GV Grotto Ledge": "True",
-   "GV Fortress Side": "is_adult and (can_ride_epona or Longshot or gerudo_fortress == 'open' or can_finish_GerudoFortress)"
+   "GV Fortress Side": "is_adult and (can_ride_epona or Longshot or gerudo_fortress == 'open' or open_gerudo_valley_bridge or can_finish_GerudoFortress)"
   }
  },
  {
@@ -553,7 +553,7 @@
    "Gerudo Fortress": "True",
    "GV Upper Stream": "True",
    "GV Crate Ledge": "logic_valley_crate_hovers and can_use(Hover_Boots) and (damage_multiplier != 'ohko' or can_use(Nayrus_Love) or (Fairy and (deadly_bonks != 'ohko' or can_blast_or_smash)))",
-   "Gerudo Valley": "is_child or can_ride_epona or Longshot or gerudo_fortress == 'open' or can_finish_GerudoFortress",
+   "Gerudo Valley": "is_child or can_ride_epona or Longshot or gerudo_fortress == 'open' or open_gerudo_valley_bridge or can_finish_GerudoFortress",
    "GV Carpenter Tent": "is_adult",
    "GV Storms Grotto": "is_adult and can_open_storm_grotto"
   }

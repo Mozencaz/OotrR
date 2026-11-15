@@ -99,9 +99,16 @@ def source_in_scope(entry, sources):
 CHILD_TRADE_LOCKED = ('HC Zeldas Letter',)
 
 
+def letter_removed(options):
+    """With the Kakariko gate open the letter has no use left (only the gate guard
+    reads it): it leaves the item pool and Zelda's gift is shuffled like the others."""
+    return options.get('open_kakariko') == 'open'
+
+
 def kept_for_child_trade(entry, options):
-    return (options.get('shuffle_child_trade', 'vanilla') == 'vanilla' and entry.get('source') == 'quest'
-            and entry.get('kind') == 'exact' and entry['ap'][0] in CHILD_TRADE_LOCKED)
+    return (options.get('shuffle_child_trade', 'vanilla') == 'vanilla' and not letter_removed(options)
+            and entry.get('source') == 'quest' and entry.get('kind') == 'exact'
+            and entry['ap'][0] in CHILD_TRADE_LOCKED)
 
 
 class DetRandom:
@@ -136,7 +143,8 @@ def vname(group_id):
 
 def ap_settings(options, open_forest):
     values = {name: options[name] for name in ('open_kakariko', 'open_door_of_time', 'zora_fountain',
-                                               'gerudo_fortress', 'starting_age', 'bridge', 'trials',
+                                               'gerudo_fortress', 'open_gerudo_valley_bridge', 'starting_age',
+                                               'bridge', 'trials',
                                                'shuffle_ganon_bosskey', 'big_poe_count', 'chicken_count',
                                                'free_scarecrow', 'shuffle_child_trade', 'logic_rules',
                                                'logic_no_night_tokens_without_suns_song')}
@@ -381,6 +389,8 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             item = SHOP_FILLER  # the displaced purchase stays sold in other slots
         if item in ring_keys:
             item = 'Rupees (5)'
+        if item == 'Zeldas Letter' and letter_removed(options):
+            item = POOL_FILLER
         pool.append(item)
     for ring in sorted(ring_keys.values()):
         fillers = [i for i in pool if i not in relevant and not is_mapcompass(i) and not is_key(i)]
