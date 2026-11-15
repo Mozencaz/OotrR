@@ -104,6 +104,38 @@ class ZoraFountain(unittest.TestCase):
         done = {p for p, requests in charts.items() if any(s == 'Complete' for _, s in requests[w.DOOR_QUEST])}
         self.assertEqual(done, {w.DOOR_FLOW})
 
+    def test_no_logic_module_or_forced_step_moves_them_back(self):
+        # Logic modules set steps too (TriggerChallengeSetStep…), and a step can be
+        # forced by a GameData value (ForceProgressGameData): none lands before a floor.
+        import ainb
+        from oot_rando.formats import byml_codec
+        steps = quest_guard.challenge_steps(self.read(quest_guard.CHALLENGES))
+        floors = {w.ZORA_QUEST: w.ZORA_FLOOR, w.KAKARIKO_QUEST: w.KAKARIKO_FLOOR,
+                  w.SPIRIT_QUEST: w.BRIDGE_FLOOR}
+        written = []
+        for path in sorted({p.split('/', 2)[2] for p in self.nup.entries
+                            if '/romfs/Logic/' in p and p.endswith('.ainb')}):
+            raw = self.nup.read(self.nup.latest('romfs/' + path))
+            if b'ChallengeSetStep' not in raw:
+                continue
+            for node in ainb.AINB.from_binary(raw).as_dict()['Nodes']:
+                if node['Name'].startswith('TriggerChallengeSetStep'):
+                    values = [i['Default Value'] for i in node['Parameters']['Inputs']['String']]
+                    written.append((values[0].split('/')[-1].split('.')[0], values[1]))
+        self.assertTrue(written)
+        for quest, floor in floors.items():
+            order = steps[quest]
+            early = [s for q, s in written if q == quest and order.index(s) < order.index(floor)]
+            self.assertEqual(early, [], quest)
+        self.assertFalse(any(q == w.DOOR_QUEST and s == 'Complete' for q, s in written))
+        rows = byml_codec.load(self.read(quest_guard.CHALLENGES))['root']
+        for row in rows:
+            quest = row['__RowId'].split('/')[-1].split('.')[0]
+            if quest in floors:
+                forced = [st['Name'] for st in row['Steps'] if st.get('ForceProgressGameData')]
+                order = steps[quest]
+                self.assertFalse([s for s in forced if order.index(s) < order.index(floors[quest])], quest)
+
     def test_kakariko_gate_and_fire_quest(self):
         gamedata, flows, report = w.kakariko_gate_open(self.read, self.read(game_defaults.GAMEDATA),
                                                        self.read(quest_guard.CHALLENGES))
