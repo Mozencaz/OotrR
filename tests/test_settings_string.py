@@ -34,6 +34,17 @@ class SeedStringTests(unittest.TestCase):
         spaced = text[:20] + '\n ' + text[20:] + '  '
         self.assertEqual(settings_string.decode(spaced)[0].to_dict(), full_settings().to_dict())
 
+    def test_previous_generator_string_keeps_its_version_for_the_import_warning(self):
+        settings = full_settings()
+        text = settings_string.encode(settings)
+        payload = json.loads(zlib.decompress(base64.urlsafe_b64decode(text[len(settings_string.PREFIX):] + '===')))
+        payload['v'] = '0.9.0'
+        historical = settings_string.PREFIX + base64.urlsafe_b64encode(zlib.compress(json.dumps(payload).encode())).decode()
+        decoded, version = settings_string.decode(historical)
+        self.assertEqual(decoded.to_dict(), settings.to_dict())
+        self.assertEqual(version, '0.9.0')
+        self.assertNotEqual(version, GENERATOR_VERSION)
+
     def test_rejects_garbage(self):
         good = settings_string.encode(Settings('abc'))
         for text in ('', 'hello', 'OOTR-', 'OOTR-!!!!', good[:-6],

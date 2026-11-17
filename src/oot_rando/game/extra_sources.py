@@ -58,6 +58,33 @@ SHOP_ITEMS = {
     'Shop_BombchuBundle_07': 'Buy Bombchu (20)', 'Shop_BombchuBundle_08': 'Buy Bombchu (20)',
 }
 SHOP_EXCLUDED_PREFIXES = ('Shop_Mask_', 'Shop_Board_', 'Shop_Item_Base', 'Shop_Sword_')
+# Shelves of one shop stand within a few metres (8 slots over ~4 m); two shops of
+# one map are tens of metres apart (Market: bazaar, potion shop, bombchu shop).
+SHOP_RADIUS = 6.0
+
+
+def shop_groups(entries):
+    """{gid: shop key} of shop entries, a key per shop (shelves clustered by position).
+
+    Shops used to be counted per map folder: with "4 items per shop" the Market's
+    three shops shared four slots (Discord 16/11: one in the bazaar, none in the
+    potion shop)."""
+    by_folder = defaultdict(list)
+    for gid, entry in sorted(entries.items()):
+        if entry['source'] == 'shop':
+            x, _, z = entry['variants'][0]['position']
+            by_folder[entry['folder']].append((gid, x, z))
+    groups = {}
+    for folder, shelves in sorted(by_folder.items()):
+        clusters = []
+        for gid, x, z in shelves:
+            near = [c for c in clusters if any((x - cx) ** 2 + (z - cz) ** 2 <= SHOP_RADIUS ** 2 for _, cx, cz in c)]
+            merged = [(gid, x, z)] + [shelf for c in near for shelf in c]
+            clusters = [c for c in clusters if not any(c is n for n in near)] + [merged]
+        for cluster in sorted(clusters, key=lambda c: min(g for g, _, _ in c)):
+            key = f'{folder}#{min(g for g, _, _ in cluster)}'
+            groups.update({gid: key for gid, _, _ in cluster})
+    return groups
 
 # NPC gifts: (AP locations, guard locations, event file stem, ((event, vanilla actor), …)).
 # All branches of one gift (e.g. medium/large bag) receive the same item. Guard

@@ -295,20 +295,31 @@ class RealPackNameTests(unittest.TestCase):
                 pouch = byml_codec.load(files[components['PouchContentRef'][1:]])['root']
                 self.assertEqual(pouch['PouchActor'], f'Work/Actor/{canonical}.engine__actor__ActorParam.gyml')
 
-    def test_derived_world_pickup_has_no_gold_token_aura(self):
-        # Item with its own effect user (Heart Piece) and item without (Hover Boots).
-        for canonical, expected in (('Obj_Heart_Piece', 'Obj_Heart_Piece'), ('Item_HoverBoot', None)):
+    def test_derived_world_pickup_glow(self):
+        # An item with its own pickup effect and sound (Heart Piece) keeps them; a key
+        # item without (Hover Boots) keeps the gold token's glow and hum (17/11: a
+        # progressive Slingshot under water could not be seen).
+        for canonical, expected in (('Obj_Heart_Piece', 'Obj_Heart_Piece'), ('Item_HoverBoot', WORLD_TEMPLATE)):
             with self.subTest(canonical=canonical):
                 derived = form_actor(canonical, 'world', skulltula_drop=True)
                 files = sarc(build_pack(derived, self.read_pack, byml_codec)[0])
                 components = resolve_components(files, derived, byml_codec)
                 for key in ('ELinkRef', 'SLinkRef'):
                     ref = components.get(key)
-                    self.assertNotIn('Token_Gold', ref or '')
-                    if expected is None:
-                        self.assertIsNone(ref)
-                    else:
-                        self.assertEqual(byml_codec.load(files[ref[1:]])['root']['UserName'], expected)
+                    self.assertIn(expected, ref)
+
+    def test_world_rows_keep_the_token_glow_for_key_items(self):
+        def row(name, **extra):
+            return dict({'__RowId': name}, **extra)
+        token = row(WORLD_TEMPLATE, ELinkUserName=WORLD_TEMPLATE, SLinkUserName=WORLD_TEMPLATE)
+        tables = {'ActorInfo': [token, row('Item_HoverBoot', FmdbName='Boots'),
+                                row('Obj_Heart_Piece', ELinkUserName='Obj_Heart_Piece', SLinkUserName='Obj_Heart_Piece')],
+                  'GameActorInfo': [row(WORLD_TEMPLATE)], 'PouchActorInfo': [row(WORLD_TEMPLATE)]}
+        boots, heart = form_actor('Item_HoverBoot', 'world', True), form_actor('Obj_Heart_Piece', 'world', True)
+        add_rsdb_rows(tables, [boots, heart])
+        rows = {r['__RowId']: r for r in tables['ActorInfo']}
+        self.assertEqual((rows[boots]['ELinkUserName'], rows[boots]['FmdbName']), (WORLD_TEMPLATE, 'Boots'))
+        self.assertEqual(rows[heart]['ELinkUserName'], 'Obj_Heart_Piece')
 
     def test_every_skulltula_drop_is_a_token_kit(self):
         """What REALAZK's kit check verifies (pickup_pack/kit.rs, MIT, ae9e4063): the

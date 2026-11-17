@@ -29,6 +29,43 @@ class LogicTests(unittest.TestCase):
         _, collected, _ = self.logic.sweep(placements, self.logic.new_state(Counter(counts)))
         return collected
 
+    def test_goron_city_chests_follow_their_own_gimmick(self):
+        # 16/11: GC_chest_6 (silver boulder) was in logic with bombs only.
+        from oot_rando.game.remake_world import CHEST_RULE_EVENTS, rule_members
+        self.assertEqual(sorted(set(CHEST_RULE_EVENTS.values())),
+                         ['GC Hammer Rock Chest', 'GC Lower Ledge Chests', 'GC Maze Rocks', 'GC Silver Rock Chest',
+                          'Kak Impas House Heart Piece', 'Kak Windmill Heart Piece'])
+        self.logic.virtual = {'chest_6': rule_members({'id': 'GoronCity#3870071239709713434',
+                                                       'ap': ['GC Maze Center Chest']}),
+                              'chest_4': rule_members({'id': 'GoronCity#14647422914070455120', 'ap': []})}
+        try:
+            # Necro's inventory: bombs and one strength upgrade, child and adult.
+            necro = {'Bomb Bag': 1, 'Progressive Strength Upgrade': 1, 'Ocarina': 1, 'Time Travel': 1}
+            got = self.reachable({'chest_6': None, 'chest_4': None}, necro)
+            self.assertIn('chest_4', got)
+            self.assertNotIn('chest_6', got)
+            silver = dict(necro, **{'Progressive Strength Upgrade': 2})
+            self.assertIn('chest_6', self.reachable({'chest_6': None}, silver))
+        finally:
+            self.logic.virtual = {}
+        self.assertEqual(rule_members({'id': 'Other#1', 'ap': ['KF Kokiri Sword Chest']}), ['KF Kokiri Sword Chest'])
+
+    def test_kakariko_windmill_heart_piece_needs_adult_hookshot(self):
+        # 17/11: Kak_heart_piece_2 (windmill) is reached as adult with the Hookshot.
+        from oot_rando.game.remake_world import rule_members
+        ap = ['Kak Impas House Freestanding PoH', 'Kak Windmill Freestanding PoH']
+        self.logic.virtual = {
+            'windmill': rule_members({'id': 'KakarikoVillage#free#13389209437182306002', 'ap': ap}),
+            'impa': rule_members({'id': 'KakarikoVillage#free#17926402522258180222', 'ap': ap})}
+        try:
+            boomerang = {'Boomerang': 1, 'Ocarina': 1, 'Time Travel': 1}
+            self.assertNotIn('windmill', self.reachable({'windmill': None}, boomerang))
+            hookshot = dict(boomerang, **{'Progressive Hookshot': 1})
+            self.assertIn('windmill', self.reachable({'windmill': None}, hookshot))
+            self.assertIn('impa', self.reachable({'impa': None}, hookshot))
+        finally:
+            self.logic.virtual = {}
+
     def test_links_pocket_needs_time_travel(self):
         # Rauru gives this reward after the first Master Sword pull: an ocarina
         # placed there must never be reachable at the start.
@@ -50,6 +87,28 @@ class LogicTests(unittest.TestCase):
         # Other night locations keep waiting for the night.
         self.assertIs(dict(strict.location_rules)['Kak Anju as Adult'][0][1](Night, {}, 'adult'),
                       dict(self.logic.location_rules)['Kak Anju as Adult'][0][1](Night, {}, 'adult'))
+
+    def test_fire_temple_locked_door_needs_the_ring_once_keys_are_shuffled(self):
+        # AP's "not keysanity" exception opens one Fire Temple door without its key
+        # (a vanilla key may sit behind it). A key ring there locks itself in
+        # (Discord 16/11: Fire Temple ring on Volvagia, boss key past that door).
+        from oot_rando.logic.rando_options import defaults
+        from oot_rando.randomizer.full_randomizer import ap_settings
+        inventory = Counter({'Time Travel': 1, 'Megaton Hammer': 1, 'Goron Tunic': 1, 'Hover Boots': 1,
+                             'Progressive Hookshot': 2, 'Bow': 1, 'Bomb Bag': 1,
+                             'Progressive Strength Upgrade': 3, 'Ocarina': 1, 'Song of Time': 1,
+                             'Bolero of Fire': 1, 'Kokiri Sword': 1, 'Hylian Shield': 1})
+        chest = {'Fire Temple Boss Key Chest': None}
+        for mode, locked in (('vanilla', False), ('dungeon', True)):
+            options = defaults()
+            options['shuffle_smallkeys'] = mode
+            settings = ap_settings(options, True)
+            self.assertIs(settings['keysanity'], locked)
+            logic = Logic(self.data, settings)
+            _, without, _ = logic.sweep(chest, logic.new_state(Counter(inventory)))
+            self.assertEqual('Fire Temple Boss Key Chest' not in without, locked, mode)
+            _, ring, _ = logic.sweep(chest, logic.new_state(inventory + Counter({'Small Key (Fire Temple)': 8})))
+            self.assertIn('Fire Temple Boss Key Chest', ring, mode)
 
     def test_song_of_time_and_door_wait_for_zelda_and_stones(self):
         # Zelda's escape and the Door of Time (DoorOfTime) follow Zelda and the

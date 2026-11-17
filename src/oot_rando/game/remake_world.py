@@ -190,7 +190,7 @@ def actor_item(actor, folder):
         family = token_family(actor)
         if family:
             return family
-    if actor.startswith(('Item_KeyRing_', 'Item_BossKey_')):
+    if actor.startswith(('Item_KeyRing_', 'Item_BossKey_', 'Item_Map_', 'Item_Compass_')):
         from oot_rando.patching.key_adapter import key_actor_item
         item = key_actor_item(actor)
         if item:
@@ -214,6 +214,12 @@ def item_actor(item, folder):
     if item.startswith('Small Key Ring ('):
         from oot_rando.patching.key_adapter import item_folder, ring_actor
         return ring_actor(item_folder(item))
+    if item.startswith(('Map (', 'Compass (')):
+        # Their own actor, credited wherever it is found (key_adapter).
+        from oot_rando.patching.key_adapter import dungeon_item_actor
+        actor = dungeon_item_actor(item)
+        if actor:
+            return actor
     if item.startswith('Remake: '):
         name = item[len('Remake: '):]
         return {'Magic Jar': 'Tbox_MagicJar_Large', 'Scrub Seed': 'Item_ScrubBusinessSeed'}.get(name, name)
@@ -383,6 +389,44 @@ _MIDO_CHESTS = ('KF Midos Bottom Left Chest', 'KF Midos Bottom Right Chest', 'KF
                 'KF Midos Top Right Chest')
 KNOWN_CHEST_GROUPS = {f'KokiriForest#{ident}': _MIDO_CHESTS for ident in
                       (10831981390482426294, 4555665598794293658, 9725242744547055868, 12786193094758345086)}
+# Small key chests reached before any locked door of their dungeon. Their eight-way
+# group gave them the rule of the deepest key chest, so with key rings in their
+# dungeon nothing of the Fire Temple was open without keys (16/11): the ring could
+# only go behind its own doors.
+# * Fire Temple: the entrance (y = 100) opens on the left (x = -6, no chain) into the
+#   boss door room (boss door chain at x = -39); its key chest FiT_room2_chest_1
+#   (-39, 105, 25) is the Near Boss Chest. The chained right door (x = +6) leads to
+#   the big lava room (FiT_room1/22).
+# * Forest Temple: FoT_room0_chest_1, the chest up the tree of the first room
+#   (vanilla first small key, checked in game 16/11).
+KNOWN_CHEST_GROUPS.update({
+    'FireTemple#5634724236470386190': ('Fire Temple Near Boss Chest',),
+    'ForestTemple#1171460703078800858': ('Forest Temple First Room Chest',),
+})
+
+
+# Chests whose rule is a remake event of their own (``remake.json`` events), not the
+# rules of the AP chests they share an item with. Goron City has six chests where AP
+# has three maze chests: matched by item, GC_chest_6 (behind the silver boulder) got
+# the bombs-only rule of the center and right chests and held the Kokiri Emerald in
+# logic (Discord 16/11). The matching (pool, tracker, names) is unchanged.
+CHEST_RULE_EVENTS = {
+    # Kakariko's two freestanding heart pieces, told apart by position (17/11).
+    'KakarikoVillage#free#13389209437182306002': 'Kak Windmill Heart Piece',     # Kak_heart_piece_2
+    'KakarikoVillage#free#17926402522258180222': 'Kak Impas House Heart Piece',  # Kak_heart_piece_1
+    'GoronCity#10944569637726152230': 'GC Lower Ledge Chests',   # GC_chest_1 (-52, 95, 26)
+    'GoronCity#9159710900681116662': 'GC Lower Ledge Chests',    # GC_chest_2 (-52, 95, 32)
+    'GoronCity#4402942101476009858': 'GC Hammer Rock Chest',     # GC_chest_3 (-48, 114, 2)
+    'GoronCity#14647422914070455120': 'GC Maze Rocks',           # GC_chest_4 (-47, 114, -5)
+    'GoronCity#1176975953041865014': 'GC Maze Rocks',            # GC_chest_5 (-47, 114, -2)
+    'GoronCity#3870071239709713434': 'GC Silver Rock Chest',     # GC_chest_6 (-43, 114, -8)
+}
+
+
+def rule_members(entry):
+    """Members of the logic rule of a matched chest: its own event, else its AP locations."""
+    event = CHEST_RULE_EVENTS.get(entry['id'])
+    return ['Souls|' + event] if event else list(entry['ap'])
 
 
 # Invisible chests (``Obj_TBox_GlassTruth*``) only show with the Lens of Truth.

@@ -131,8 +131,10 @@ OPTION_TIPS = {
                       'shuffled item. The scrub still announces its vanilla item; you get the placed one. '
                       'Low price: 10 rupees. Remake price: 40 and 100 rupees (100 needs the Adult\'s Wallet). '
                       'Refill scrubs and Dream World scrubs are not included. To be confirmed in game.',
-    'shopsanity': 'Some shop slots sell shuffled items for 10 rupees. One copy of every purchase required by '
-                  'the logic stays on sale; the mask shop is kept.',
+    'shopsanity': 'Up to 8 slots of each shop sell shuffled items for 10 rupees (the Market bazaar, potion '
+                  'shop and bombchu shop count as three shops). One copy of every purchase required by '
+                  'the logic stays on sale, except with "Whole shops": every slot is shuffled and refills '
+                  'come from the world. The mask shop is kept.',
     'shuffle_npc_gifts': 'Rewards given by characters and minigames (the supported ones) are shuffled.',
     'shuffle_quest_rewards': 'The big story rewards are shuffled: ocarinas, Zelda\'s Letter (the child trade '
                              'quest is shuffled with it), the Light Arrows, the Biggoron Sword and Ruto\'s Letter (the bottle in Lake Hylia).',
@@ -475,13 +477,13 @@ class Application:
         ttk.Checkbutton(box, text='Use experimental versions (pre-releases)', variable=self.experimental_updates,
                         command=self.experimental_toggled).pack(anchor='w')
         ttk.Label(box, text='Experimental versions get new features first, but may contain bugs or break a seed in progress. '
-                  'Untick to go back to stable versions: you move to the next stable release once it is out.',
+                  'Untick to go back to the latest stable version: it is offered for download, then the application restarts.',
                   style='Small.TLabel', wraplength=780).pack(anchor='w', pady=(4, 0))
 
     def experimental_toggled(self):
         enabled = self.experimental_updates.get()
         self.write_app_state(experimental_updates=enabled)
-        if enabled:
+        if enabled or updater.leaving_prereleases(enabled, APP_VERSION):
             self.check_for_updates(silent=False)
 
     def build_qol_card(self, parent):
@@ -2054,6 +2056,9 @@ class Application:
         notes = ('\n\n' + (notes[:600] + '…' if len(notes) > 600 else notes)) if notes else ''
         if updater.is_prerelease(release.version):
             notes = '\n\nExperimental version: it may contain bugs.' + notes
+        elif not updater.is_newer(release.version, APP_VERSION):
+            notes = ('\n\nThis is the latest stable version: it replaces the experimental version you have. '
+                     'A seed made with the experimental version may not work with it.') + notes
         if not updater.can_self_update():
             if messagebox.askyesno('Update available', f'Version {release.version} is available (you have '
                                    f'{APP_VERSION}).{notes}\n\nOpen the release page?'):

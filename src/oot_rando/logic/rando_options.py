@@ -143,9 +143,15 @@ OPTIONS = [
            (('song', 'Vanilla', OK), ('dungeon', 'Dungeon rewards', NO_EVENT), ('any', 'Anywhere', NO_EVENT)), 'song'),
     Option('shopsanity', 'Items', 'Shops (items shuffled per shop)',
            (('off', 'Vanilla', OK), ('1', '1 item per shop', OK), ('2', '2 items', OK),
-            ('3', '3 items', OK), ('4', '4 items', OK), ('random', '1 to 4 random items', OK)), 'off',
-           PILOT + ' Fixed price of 10 rupees; at least one copy of each purchase useful to the logic stays on sale. '
-           'Masks not included.', experimental=('1', '2', '3', '4', 'random')),
+            ('3', '3 items', OK), ('4', '4 items', OK), ('5', '5 items', OK), ('6', '6 items', OK),
+            ('7', '7 items', OK), ('8', '8 items', OK), ('all', 'Whole shops (refills too)', OK),
+            ('random', '1 to 4 random items', OK)), 'off',
+           PILOT + ' Counted per shop (the Market bazaar, potion shop and bombchu shop are three shops). '
+           'Fixed price of 10 rupees; a shuffled slot is sold once. From 1 to 8 items, one copy of each purchase '
+           'the logic uses (shields, tunics, bottle refills, bombchus, nuts, sticks) stays on sale, so a shop may '
+           'keep a few vanilla items. "Whole shops" shuffles every slot: the logic then counts on the world for '
+           'refills (Blue Fire, bugs, fish, fairies, Deku Baba drops). Masks not included.',
+           experimental=('1', '2', '3', '4', '5', '6', '7', '8', 'all', 'random')),
     Option('tokensanity', 'Items', 'Gold Skulltulas',
            (('off', 'Vanilla', OK), ('dungeons', 'Dungeons', OK), ('overworld', 'Overworld', OK),
             ('all', 'All', OK)), 'off',

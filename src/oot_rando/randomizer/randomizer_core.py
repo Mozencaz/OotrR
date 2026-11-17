@@ -31,10 +31,10 @@ from oot_rando.patching.qol_patches import (STATIC, STATIC_SOURCE_SHA256, DYNAMI
 from oot_rando.game.randomizer_categories import CATEGORIES
 from oot_rando.game.world_maps import SAFE_CATEGORIES, build_world, effective_members
 from oot_rando.game.resource_allocations import allocation, grow_resources, add_resources
-from oot_rando.formats.byml_writer import patch_strings
+from oot_rando.formats.byml_writer import lift_actors, patch_strings
 from oot_rando.logic import rando_options
 
-GENERATOR_VERSION = '0.9.0'
+GENERATOR_VERSION = '0.10.0'
 ADAPTER_VERSION = 'ap-glitchless-v5'   # v5: progressive tokens (every copy gives the next level)
 ADULT_MAP = MAP.replace('_Child_', '_Adult_')
 STARTING_ITEMS = ('Item_BulletBag_Small', 'Item_Quiver_Small')
@@ -398,6 +398,13 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
             # The map logic deletes them by day: that delete input becomes false.
             extra_raw[NIGHT_SKULLTULA_MODULE], _ = keep_night_skulltulas_by_day(
                 extra_raw.get(NIGHT_SKULLTULA_MODULE) or read(NIGHT_SKULLTULA_MODULE))
+        # Always on: a "Save Warp" button in the pause menu's System tab (patching/save_warp.py).
+        report('Save Warp button in the pause menu…')
+        from oot_rando.patching.save_warp import patch_save_warp
+        extra_raw.update(patch_save_warp(
+            lambda path: extra_raw.get(path) or read(path),
+            sorted(m for m in members if m.startswith('Mals/') and '.Product.110.' in m),
+            lambda path: extra_raw.get(path) or decompress(read(path), d)))
         from oot_rando.game.tracking_metadata import GAMEDATA, add_saved_flags, build_tracking, reward_label
         from oot_rando.patching.soul_adapter import murmur3
         marker_name = SEED_MARKER_PREFIX + (save_seed_id or settings_identity(settings))
@@ -470,17 +477,15 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
                 lambda path: extra_raw.get(path) or decompress(read(path), d),
                 decompress(read(CHALLENGE_TABLE), d))
             extra_raw.update(arrival_flows)
-            temple =raw_maps.get(story_fixes.TEMPLE_MAP) or decompress(read(story_fixes.TEMPLE_MAP), d)
-            sheik_edits = story_fixes.sheik_presence_edits(Byml(temple).root)
-            raw_maps[story_fixes.TEMPLE_MAP] = patch_strings(temple, sheik_edits)
-            story['sheik'] = {'map': story_fixes.TEMPLE_MAP, 'actor': sheik_edits[0]['path'][1],
-                              'presence': story_fixes.SHEIK_PRESENCE}
             # Adult Link is no longer stopped by an invisible wall at Zora's River mouth.
             river = raw_maps.get(story_fixes.ZORA_RIVER_MAP) or decompress(read(story_fixes.ZORA_RIVER_MAP), d)
             wall_edits, wall_actors = story_fixes.zora_river_wall_edits(Byml(river).root)
             raw_maps[story_fixes.ZORA_RIVER_MAP] = patch_strings(river, wall_edits)
             story['zora_river_wall'] = {'map': story_fixes.ZORA_RIVER_MAP, 'actors': wall_actors,
                                         'presence': story_fixes.ZORA_RIVER_WALL_PRESENCE}
+            # Adult Link can put the Master Sword back before the Forest Temple (raw file).
+            extra_raw[story_fixes.PEDESTAL_MODULE], story['pedestal'] = story_fixes.pedestal_after_first_adult_arrival(
+                extra_raw.get(story_fixes.PEDESTAL_MODULE) or read(story_fixes.PEDESTAL_MODULE))
             # Zelda's escape on the three stones, checked at every item get.
             extra_raw[ACTION_GUIDE_FLOW], story['zelda_escape_item_get'] = story_fixes.zelda_escape_on_item_get(
                 extra_raw[ACTION_GUIDE_FLOW])
@@ -491,9 +496,13 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
             gamedata_source = decompress(read(GAMEDATA), d)
         goal_name = GOAL_MARKER_PREFIX + settings_identity(settings) if settings.archipelago is not None else None
         # Great Fairies: one saved flag each, set by her reward (patching/story_fixes.py).
-        from oot_rando.patching.story_fixes import great_fairy_saved_flags
-        fairy_flags = great_fairy_saved_flags() if settings.full is not None else {}
-        extra_raw[GAMEDATA] = add_saved_flags(gamedata_source, {marker_name: False, **fairy_flags,
+        from oot_rando.patching.story_fixes import dampe_saved_flags, great_fairy_saved_flags
+        # Dampé's race: the first prize opened (patching/story_fixes.py).
+        fairy_flags = {**great_fairy_saved_flags(), **dampe_saved_flags()} if settings.full is not None else {}
+        # Save Warp request (patching/save_warp.py): never true in a save.
+        from oot_rando.patching.save_warp import SAVE_WARP_FLAG
+        extra_raw[GAMEDATA] = add_saved_flags(gamedata_source, {marker_name: False, SAVE_WARP_FLAG: False,
+                                                                **fairy_flags,
                                                                 **({goal_name: False} if goal_name else {})})
         # Bind a save only when the actual new-game opening completes. A True
         # default would incorrectly bind an old save when its missing flags initialize.
@@ -501,9 +510,12 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
         opening = 'Event/EventFlow/OpeningEvent.bfevfl.zs'
         extra_raw[opening], seed_markers = add_collection_markers(
             decompress(read(opening), d), {'Event3': marker_name})
-        # Every seed: "Randomizer" badge under the title screen logo.
-        from oot_rando.patching.title_badge import TITLE_BNTX, add_title_badge
-        extra_raw[TITLE_BNTX], title_badge = add_title_badge(decompress(read(TITLE_BNTX), d))
+        # Every seed: "Randomizer" badge under the logo of the main menu (common UI
+        # archive) and of the title screen.
+        from oot_rando.patching.title_badge import BADGE_FILES, add_title_badge
+        title_badge = {}
+        for badge_file in BADGE_FILES:
+            extra_raw[badge_file], title_badge[badge_file] = add_title_badge(decompress(read(badge_file), d))
         goal_markers = []
         if goal_name:
             # Archipelago goal: set once Ganon's defeat completes the native challenge,
@@ -764,7 +776,8 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
             if row['id'] == record['id']:
                 row['reward_actor'] = row['actor']
                 row['actor'] = record['actor']
-    changes, event_changes = defaultdict(list), defaultdict(list)
+    changes, event_changes, lifts = defaultdict(list), defaultdict(list), defaultdict(dict)
+    from oot_rando.game.item_forms import ground_lift, world_scale
     # Unshuffled sources of a fixed progressive level give a token too (full_randomizer.native_sources).
     natives = plan['progressive']['natives']
     for placement in plan['placements'] + natives:
@@ -781,6 +794,16 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
             else:
                 changes[patch['resource']].append({'path': tuple(patch['path']), 'before': patch['before'],
                                                    'after': placement['after']})
+                if patch['path'][-1] == 'Gyaml':
+                    height = ground_lift(patch['before'], placement['after'])
+                    if height:
+                        lifts[patch['resource']][patch['path'][1]] = height
+                    scale = world_scale(placement['after'])
+                    if scale != 1.0:
+                        if 'Scale' in maps[patch['resource']]['root']['Actors'][patch['path'][1]]:
+                            raise ValueError('Freestanding spot already scaled: ' + patch['resource'])
+                        changes[patch['resource']].append({'path': tuple(patch['path'][:-1]) + ('Scale',),
+                                                           'before': None, 'after': (scale,) * 3})
     for resource, edits in presence_changes(plan['souls']['edits'] + plan['souls'].get('door_edits', []),
                                             {path: maps[path]['root'] for path in maps}).items():
         changes[resource].extend(edits)
@@ -797,7 +820,8 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
         report('Composition : ' + resource.split('/')[-1])
         if resource not in raw_maps:
             sources[resource] = sha256(maps[resource]['compressed'])
-        raw_maps[resource] = patch_strings(raw_maps.get(resource, maps[resource]['raw']), edits)
+        raw_maps[resource] = lift_actors(patch_strings(raw_maps.get(resource, maps[resource]['raw']), edits),
+                                         lifts.get(resource, {}))
     patch_repeatable_sources(repeatables, maps, raw_maps)
     modified, new = {}, {}
     if plan['souls']['items']:
@@ -807,8 +831,13 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
             raise ValueError('Message archives not found: soul names cannot be shown.')
         modified, new = build_soul_files(lambda path: decompress(read(path), dictionaries_),
                                          plan['souls']['items'], messages)
+        # Enemies with their own Presence read "soul AND vanilla condition" BoolExps.
+        from oot_rando.patching.soul_adapter import GAMEDATA as _GAMEDATA, add_soul_expressions
+        modified[_GAMEDATA] = add_soul_expressions(
+            modified.get(_GAMEDATA) or decompress(read(_GAMEDATA), dictionaries_), plan['souls']['edits'])
     # Dungeon-specific keys (key rings, boss keys found outside their dungeon).
-    from oot_rando.patching.key_adapter import build_key_files, check_dungeon_data, is_key_actor, key_records
+    from oot_rando.patching.key_adapter import (build_key_files, check_dungeon_data, check_got_flags, is_key_actor,
+                                               key_records)
     from oot_rando.game.item_forms import canonical_of
     def _reward(placement):   # repeatable pickups keep their reward actor apart
         actor = placement.get('reward_actor', placement['after'])
@@ -820,7 +849,7 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
     key_items = sorted(key_items | set(_mailbox_key_items(ap_records(settings))))
     plan['key_items'] = key_records(key_items)
     if plan['key_items']:
-        report('Building dungeon-specific keys (key rings, boss keys)…')
+        report("Building dungeon-specific items (key rings, boss keys, maps, compasses)…")
         messages = sorted(m for m in members if m.startswith('Mals/') and '.Product.110.' in m)
 
         def key_read(path):
@@ -829,6 +858,7 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
         from oot_rando.patching.soul_adapter import GAMEDATA as _GAMEDATA
         check_dungeon_data(key_read(_GAMEDATA), plan['key_items'])
         key_modified, key_new = build_key_files(key_read, plan['key_items'], messages)
+        check_got_flags(key_modified[_GAMEDATA], plan['key_items'])
         modified.update(key_modified)
         new.update(key_new)
     if settings.archipelago is not None:

@@ -141,7 +141,12 @@ def ap_settings(options, open_forest):
                                                'free_scarecrow', 'shuffle_child_trade', 'logic_rules',
                                                'logic_no_night_tokens_without_suns_song')}
     values['open_forest'] = 'closed_deku' if open_forest else 'closed'
-    values['keysanity'] = False
+    # AP rules' ``keysanity``: false lets one Fire Temple door open without its key
+    # ("Fire Temple Lower Locked Door": (Small Key, 8) or not keysanity), OoTR's
+    # "a vanilla key may sit behind its own door". Shuffled small keys are key rings
+    # here (one item, every key at once): the ring itself could go behind that door
+    # (Discord 16/11: Fire Temple ring on Volvagia, boss key chest past the door).
+    values['keysanity'] = options.get('shuffle_smallkeys', 'vanilla') != 'vanilla'
     return values
 
 
@@ -258,27 +263,33 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
         return True
 
     shuffled = {gid: e for gid, e in matches.items() if in_scope(e)}
-    # Shopsanity: N slots per shop; every purchase the logic uses keeps one vanilla copy.
-    shop_rng = DetRandom(hashlib.sha256((seed_key + '\0shops-v1').encode()).digest())
+    # Shopsanity: N slots per shop; every purchase the logic uses keeps one vanilla copy
+    # (a shuffled slot is sold once: refills such as Blue Fire must stay buyable), except
+    # in the "all" mode, where the logic loses them and relies on their world sources.
+    shop_rng = DetRandom(hashlib.sha256((seed_key + '\0shops-v2').encode()).digest())
     shop_slots = sorted(g for g in shuffled if shuffled[g]['source'] == 'shop')
     selected_shops = set()
     if shop_slots and forced is not None:
         selected_shops = {g for g in shop_slots if g in forced}  # replay: the spoiler decides
     elif shop_slots:
-        referenced = set(probe.referenced)
-        copies = Counter(shuffled[g]['vanilla'] for g in shop_slots)
-        by_folder = defaultdict(list)
+        keep_purchases = options['shopsanity'] != 'all'
+        referenced = {shop_purchase(i) for i in probe.referenced}
+        copies = Counter(shop_purchase(shuffled[g]['vanilla']) for g in shop_slots)
+        # Counted per shop, not per map folder (the Market has three shops).
+        from oot_rando.game.extra_sources import shop_groups
+        shop_of = shop_groups({gid: shuffled[gid] for gid in shop_slots})
+        by_shop = defaultdict(list)
         for gid in shop_slots:
-            by_folder[shuffled[gid]['folder']].append(gid)
-        for folder, slots in sorted(by_folder.items()):
-            wanted = (shop_rng.below(4) + 1 if options['shopsanity'] == 'random' else int(options['shopsanity']))
+            by_shop[shop_of[gid]].append(gid)
+        for shop, slots in sorted(by_shop.items()):
+            wanted = shop_count(options['shopsanity'], shop_rng)
             for gid in shop_rng.shuffle(slots):
                 if wanted <= 0:
                     break
-                item = shuffled[gid]['vanilla']
-                if item in referenced and copies[item] <= 1:
+                purchase = shop_purchase(shuffled[gid]['vanilla'])
+                if keep_purchases and purchase in referenced and copies[purchase] <= 1:
                     continue
-                copies[item] -= 1
+                copies[purchase] -= 1
                 selected_shops.add(gid)
                 wanted -= 1
     for gid in shop_slots:
@@ -299,7 +310,8 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
         if entry['kind'] in ('exact', 'group'):
             for location in entry['ap']:
                 base[location] = None
-        logic.virtual[vname(entry['id'])] = list(entry['ap']) + list(entry.get('guards', []))
+        from oot_rando.game.remake_world import rule_members
+        logic.virtual[vname(entry['id'])] = rule_members(entry) + list(entry.get('guards', []))
         if entry['id'] not in shuffled:
             base[vname(entry['id'])] = entry['vanilla']
     for location in unmatched_ap:
@@ -646,6 +658,29 @@ def _sweep_with_requirements(logic, placements, state):
 # items (their actor), and the gifts of STATIC_TIER_SOURCES. The other native sources
 # of a family already give the level above the one Link holds.
 FIXED_LEVEL_SOURCES = ('chest', 'freestanding')
+
+
+# Purchases the logic accepts in any size (helpers.json: Nuts = Buy_Deku_Nut_5 or
+# Buy_Deku_Nut_10, has_bombchus = any Bombchu pack...): one kept copy of the group is enough.
+SHOP_EQUIVALENTS = (
+    ('Buy Deku Nut', ('Buy Deku Nut (5)', 'Buy Deku Nut (10)')),
+    ('Buy Bombchu', ('Buy Bombchu (5)', 'Buy Bombchu (10)', 'Buy Bombchu (20)')),
+    ('Buy Bombs', ('Buy Bombs (5)', 'Buy Bombs (10)', 'Buy Bombs (20)', 'Buy Bombs (30)')),
+    ('Buy Arrows', ('Buy Arrows (10)', 'Buy Arrows (30)', 'Buy Arrows (50)')),
+)
+SHOP_PURCHASE = {item: group for group, items in SHOP_EQUIVALENTS for item in items}
+
+
+def shop_purchase(item):
+    """What a shop slot's purchase counts as for the keep-one-copy rule."""
+    return SHOP_PURCHASE.get(item, item)
+
+
+def shop_count(value, rng):
+    """Slots to shuffle in one shop for the ``shopsanity`` value."""
+    if value == 'random':
+        return rng.below(4) + 1
+    return 8 if value == 'all' else int(value)
 
 
 def native_sources(matches, shuffled, extra=None):

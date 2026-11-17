@@ -46,8 +46,12 @@ the sources, it only points to the release page (use `git pull`).
 
 **Experimental versions:** tick *Use experimental versions (pre-releases)* in
 Setup to also be offered the GitHub pre-releases (`vX.Y.Z-beta.N`): new features
-first, possibly buggy. Untick it to go back: the next stable release replaces the
-experimental build.
+first, possibly buggy. Untick it to be offered the latest stable release, even when
+its version is lower than the experimental build.
+
+**Save Warp:** in the game's pause menu, open **System → Save Warp**, then save.
+Link returns to the dungeon entrance, to his house as a child outside dungeons,
+or to the Temple of Time as an adult. Cancel or B leaves the game where it was.
 
 The game file must hold the base game **and** update v131072 in one `.nup`; the
 order of the packages inside it does not matter.

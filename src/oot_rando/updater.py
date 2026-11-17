@@ -141,16 +141,19 @@ def _get(url, timeout, accept='application/octet-stream', limit=MAX_ARCHIVE):
     return data
 
 
-def release_from_json(value, current=__version__, platform=sys.platform, experimental=False):
+def release_from_json(value, current=__version__, platform=sys.platform, experimental=False, downgrade=False):
     """The release described by a GitHub API answer if it is newer and has this system's archive.
-    Pre-releases only count with ``experimental``."""
+    Pre-releases only count with ``experimental``. ``downgrade``: any other version counts,
+    older ones included (a player leaving the pre-releases goes back to the latest stable)."""
     if not isinstance(value, dict) or value.get('draft'):
         return None
     if (value.get('prerelease') or is_prerelease(str(value.get('tag_name') or ''))) and not experimental:
         return None
     version = str(value.get('tag_name') or '').lstrip('v')
     suffix = asset_suffix(platform)
-    if not suffix or not is_newer(version, current):
+    if not suffix or version_key(version) is None:
+        return None
+    if not (is_newer(version, current) or (downgrade and version_key(version) != version_key(current))):
         return None
     assets = {a.get('name'): a.get('browser_download_url') for a in value.get('assets') or [] if isinstance(a, dict)}
     archive = next((name for name in assets if name and name.endswith(suffix)), None)
@@ -172,17 +175,25 @@ def newest_release(values, current=__version__, platform=sys.platform, experimen
     return max(found, key=lambda r: version_key(r.version), default=None)
 
 
-def latest_release(timeout=8, experimental=False):
+def leaving_prereleases(experimental, current=__version__):
+    """Whether a pre-release build whose player unticked the pre-releases goes back to stable."""
+    return not experimental and is_prerelease(current)
+
+
+def latest_release(timeout=8, experimental=False, current=__version__):
     """The latest GitHub release when newer than this build, else None.
-    ``experimental``: pre-releases count too (the newest of the recent releases)."""
+    ``experimental``: pre-releases count too (the newest of the recent releases).
+    A pre-release build without ``experimental`` is offered the latest stable release
+    even when it is older (6.6.0-beta.1 → 6.5.0): leaving the pre-releases needs no
+    manual download."""
     try:
         value = json.loads(_get(RECENT if experimental else LATEST, timeout,
                                 'application/vnd.github+json', 4 << 20 if experimental else 1 << 20))
     except ValueError:
         raise UpdateError('Unexpected answer from GitHub.') from None
     if experimental:
-        return newest_release(value, experimental=True)
-    return release_from_json(value)
+        return newest_release(value, current=current, experimental=True)
+    return release_from_json(value, current, downgrade=leaving_prereleases(experimental, current))
 
 
 def expected_hash(sums, name):

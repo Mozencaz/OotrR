@@ -11,7 +11,7 @@ and logic are checked statically (`python -m oot_rando verify`); items marked
 |---|---|---|
 | **Chests** (`shuffle_chests`) | every chest, major items included | `Dynamic.Drop__DropActor` of the chest |
 | **Gold Skulltulas** (`tokensanity`: dungeons / overworld / all) | 100 skulltulas = the 100 AP locations | `Drop__DropActor` added to the enemy (native instance parameter); every item but the token is dropped by a pickup built on the token (see below) |
-| **Shops** (`shopsanity`: 1 to 4 items per shop, or random) | 64 stalls, masks excluded | stall `Gyaml`; fixed price of 10 rupees; bought once |
+| **Shops** (`shopsanity`: 1 to 8 items per shop, random 1–4, or Whole shops) | 64 stalls across 8 shops, masks excluded | stall `Gyaml`; fixed price of 10 rupees; bought once |
 | **Freestanding items** (`shuffle_freestanding_items`) | non-respawning heart pieces, rupees and hearts | item `Gyaml` |
 | **NPC gifts and minigames** (`shuffle_npc_gifts`) | 29 gifts (`extra_sources.NPC_GIFTS`) | item parameter of the event (`ActorName`, `ReveiveItem`…) via `evfl` |
 | **Bosses and dungeon rewards** (`shuffle_boss_rewards`) | 3 stones, 6 medallions (Rauru's included), 8 boss heart containers | hand-over event (`GetPouchContentByActorName`); placed heart container `Gyaml` |
@@ -61,7 +61,8 @@ The remake gives an item through three kinds of actors: `Item_*` (chest, event),
 a shop…), the generator builds `Obj_Rando_<item>` (behaviour of the gold token,
 model and content of the item) or `Shop_Rando_<item>` (behaviour of an arrow
 stall), with their RSDB rows and RESTBL entry. AP "Buy …" purchases never leave
-the shops and keep at least one copy on sale.
+the shops. Modes 1–8 and random keep at least one copy of each purchase used by the
+logic on sale; Whole shops shuffles all 64 slots and relies on world refills instead.
 
 Gold skulltula drops: the skulltula hands its saved `Bool64bitKey` row to its drop
 (blackboard `GoldTokenGmdHash`), and only the token's AI writes it, when the get

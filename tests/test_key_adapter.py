@@ -35,6 +35,25 @@ class Units(unittest.TestCase):
         for folder in RING_DUNGEONS:
             self.assertEqual(actor_item(ring_actor(folder), ''), f'Small Key Ring ({FOLDER_DUNGEON[folder]})')
 
+    def test_maps_and_compasses_have_their_own_actor(self):
+        # Discord 16/11 (0.6.5): only the big chest sequence credits the native map.
+        from oot_rando.game.remake_world import actor_item, item_actor
+        from oot_rando.patching.soul_adapter import MAX_ACTOR_NAME
+        self.assertEqual(item_actor('Map (Forest Temple)', 'ForestTemple'), 'Item_Map_ForestTemple')
+        self.assertEqual(item_actor('Compass (Deku Tree)', 'HyruleField'), 'Item_Compass_Deku')
+        names = [make(f) for f in k.MAP_DUNGEONS for make in (k.map_actor, k.compass_actor)]
+        self.assertEqual([n for n in names if len(n) > MAX_ACTOR_NAME], [])
+        self.assertEqual(len(set(names)), len(names))
+        for folder in k.MAP_DUNGEONS:
+            dungeon = k.FOLDER_DUNGEON[folder]
+            self.assertEqual(actor_item(k.map_actor(folder), ''), f'Map ({dungeon})')
+            self.assertEqual(actor_item(k.compass_actor(folder), ''), f'Compass ({dungeon})')
+            self.assertTrue(k.key_texts(k.compass_actor(folder), 'EUfr')['Name'])
+        record = k.key_records(['Map (Water Temple)'])[0]
+        self.assertEqual((record['kind'], record['actor'], record['gamedata']),
+                         ('map', 'Item_Map_WaterTemple', 'DungeonInfo.WaterTemple.IsGetMap'))
+        self.assertEqual(k.key_specs(['Item_Compass_Jabu'])[0]['model'], 'Item_Dungeon_Compass')
+
     def test_records_name_the_dungeon_struct(self):
         records = k.key_records(['Small Key Ring (Fire Temple)', 'Boss Key (Shadow Temple)'])
         ring = next(r for r in records if r['kind'] == 'ring')
@@ -97,7 +116,8 @@ class NupTests(unittest.TestCase):
     def test_dungeon_struct_exists_for_every_key_dungeon(self):
         from oot_rando.patching.soul_adapter import GAMEDATA
         items = ([k.ring_item(f) for f in k.RING_DUNGEONS]
-                 + [f'Boss Key ({k.FOLDER_DUNGEON[f]})' for f in k.BOSS_KEY_DUNGEONS])
+                 + [f'Boss Key ({k.FOLDER_DUNGEON[f]})' for f in k.BOSS_KEY_DUNGEONS]
+                 + [f'{kind} ({k.FOLDER_DUNGEON[f]})' for f in k.MAP_DUNGEONS for kind in ('Map', 'Compass')])
         k.check_dungeon_data(self.read(GAMEDATA), k.key_records(items))
         with self.assertRaises(ValueError):
             k.check_dungeon_data(self.read(GAMEDATA), [{'kind': 'ring', 'gamedata': 'DungeonInfo.Nowhere.SmallKeyNum'}])
@@ -106,7 +126,8 @@ class NupTests(unittest.TestCase):
         from oot_rando.patching.event_patch import _flow, _snapshot
         from oot_rando.patching.qol_patches import ocarina_guide_on_get
         source = ocarina_guide_on_get(self.read(k.ACTION_GUIDE_FLOW))[0]
-        records = k.key_records(['Small Key Ring (Water Temple)', 'Boss Key (Forest Temple)'])
+        records = k.key_records(['Small Key Ring (Water Temple)', 'Boss Key (Forest Temple)',
+                                 'Map (Forest Temple)'])
         raw, report = k.add_key_hook(source, records)
         chart = _flow(raw).flowchart
         events = {e.name: e for e in chart.events}
@@ -115,8 +136,16 @@ class NupTests(unittest.TestCase):
         boss = events['RandoKeyHeld_BossKey_ForestTemple'].data
         give = boss.cases[0].v
         self.assertEqual(give.data.params.data['GameDataName'], 'DungeonInfo.ForestTemple.IsGetBossKey')
-        ring = boss.cases[1].v.data                    # not held: next key check
-        self.assertEqual(ring.params.data['Actor'], 'Item_KeyRing_WaterTemple')
+        # Got = the saved IsGet.<actor> the pouch writes (the pouch query stayed false in game).
+        self.assertEqual(boss.actor_query.v.v, 'EventQueryIsGameDataBool')
+        self.assertEqual(boss.params.data, {'GameDataName': 'IsGet.Item_BossKey_ForestTemple', 'Index': -1})
+        found_map = boss.cases[1].v.data               # not held: next check, the map
+        self.assertEqual(found_map.params.data, {'GameDataName': 'IsGet.Item_Map_ForestTemple', 'Index': -1})
+        self.assertEqual(found_map.cases[0].v.data.params.data,
+                         {'GameDataName': 'DungeonInfo.ForestTemple.IsGetMap', 'Value': True, 'Index': -1})
+        ring = found_map.cases[1].v.data
+        self.assertEqual(ring.actor_query.v.v, 'EventQueryIsGameDataBool')
+        self.assertEqual(ring.params.data, {'GameDataName': 'IsGet.Item_KeyRing_WaterTemple', 'Index': -1})
         done = ring.cases[0].v.data
         add = done.cases[1].v.data                     # not yet applied: add the keys once
         self.assertEqual(add.params.data, {'GameDataName': 'DungeonInfo.WaterTemple.SmallKeyNum',

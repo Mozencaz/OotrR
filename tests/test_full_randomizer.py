@@ -98,6 +98,37 @@ class Units(unittest.TestCase):
         self.assertEqual({c['path'][-1]: c['after'] for c in changes},
                          {'FlagName': 'IsGet.Item_Soul_Barinade', 'IsNegation': False, 'IsCheckLazy': True})
 
+    def test_enemy_with_its_own_presence_reads_soul_and_condition(self):
+        # Discord 17/11: Death Mountain / Zora's River tektites appeared without their soul.
+        from oot_rando.patching.soul_adapter import (add_soul_expressions, expression_program, murmur3,
+                                                     presence_changes, soul_expression)
+        vanilla = {'FlagName': 'Get_StoneOfFire_TektiteDelete', 'IsCheckLazy': True, 'IsNegation': True}
+        flag = 'IsGet.Item_Soul_Tektite'
+        name = soul_expression(flag, vanilla)
+        self.assertEqual(name, 'RandoSoul.Item_Soul_Tektite.Get_StoneOfFire_TektiteDelete.Not')
+        # Postfix: soul, condition, NOT, AND.
+        self.assertEqual(expression_program(flag, vanilla, 'Bool'),
+                         [[0, murmur3(flag)], [0, murmur3(vanilla['FlagName'])], [5], [3]])
+        self.assertEqual(expression_program(flag, dict(vanilla, IsNegation=False), 'BoolExp')[1:],
+                         [[10, murmur3(vanilla['FlagName'])], [3]])
+        roots = {'map': {'Actors': [{'Gyaml': 'Enemy_Tektite_Red', 'Hash': 3, 'Presence': dict(vanilla)}]}}
+        edit = {'resource': 'map', 'index': 0, 'actor': 'Enemy_Tektite_Red', 'hash': '3', 'soul': 'Tektite',
+                'flag': flag, 'vanilla': dict(vanilla)}
+        changes = presence_changes([edit], roots)['map']
+        self.assertEqual({c['path'][-1]: (c['before'], c['after']) for c in changes},
+                         {'FlagName': (vanilla['FlagName'], name), 'IsNegation': (True, False)})
+        patched = Byml(patch_strings(byml_codec.dump({'endian': '<', 'version': 7, 'root': roots['map']}),
+                                     changes)).root['Actors'][0]['Presence']
+        self.assertEqual(patched, {'FlagName': name, 'IsNegation': False, 'IsCheckLazy': True})
+        gamedata = byml_codec.dump({'endian': '<', 'version': 7, 'root': {'Data': {
+            'Bool': [{'Hash': byml_codec.U32(murmur3(flag))}, {'Hash': byml_codec.U32(murmur3(vanilla['FlagName']))}],
+            'BoolExp': []}}})
+        added = byml_codec.load(add_soul_expressions(gamedata, [edit, dict(edit)]))['root']['Data']['BoolExp']
+        self.assertEqual([(int(e['Hash']), e['SaveFileIndex']) for e in added], [(murmur3(name), -1)])
+        self.assertEqual(added[0]['Values'], expression_program(flag, vanilla, 'Bool'))
+        with self.assertRaises(ValueError):       # an enemy whose map Presence changed meanwhile
+            presence_changes([dict(edit, vanilla=dict(vanilla, IsNegation=False))], roots)
+
     def test_restbl_add_entries(self):
         names = b'x' * 160 + struct.pack('<I', 5)
         entries = sorted([(10, 1), (zlib.crc32(b'Old/File'), 7)])

@@ -8,8 +8,11 @@ already supports conditional presence on map actors::
 and records ``IsGet.<actor>`` flags for obtained pouch actors (murmur3 hash of
 the name, verified on the local data). Each soul is therefore a new pouch actor
 ``Item_Soul_<Family>`` built from the Forest Medallion key-item template with the
-Poe soul model, plus a saved ``IsGet.Item_Soul_<Family>`` flag. Enemies that
-already carry a Presence condition keep it and stay soul-independent.
+Poe soul model, plus a saved ``IsGet.Item_Soul_<Family>`` flag. An enemy that
+already carries a Presence condition (Death Mountain and Zora's River tektites,
+Kokiri Forest Deku Babas...) reads a new GameData BoolExp instead: its soul AND its
+vanilla condition (:func:`soul_expression`). They used to stay soul-independent,
+so they appeared without their soul (Discord 17/11).
 
 Logic (conservative): entering a dungeon requires the souls of every family
 patched in that dungeon, entering a boss room requires the boss soul, chests
@@ -220,7 +223,7 @@ def plan_souls(mode, enemies, logic_regions):
     edits = []
     candidates = []
     for enemy in enemies:
-        if enemy['folder'] in EXCLUDED_FOLDERS or enemy['presence'] is not None:
+        if enemy['folder'] in EXCLUDED_FOLDERS:
             continue
         family = family_of(enemy['actor'])
         if family is None:
@@ -238,8 +241,11 @@ def plan_souls(mode, enemies, logic_regions):
         else:
             per_folder[enemy['folder']].add(key)
             per_map[enemy['resource']].add(key)
-        edits.append({'resource': enemy['resource'], 'index': enemy['index'], 'actor': enemy['actor'],
-                      'hash': enemy['hash'], 'soul': key, 'flag': FLAG_PREFIX + soul_actor(soul_item(key))})
+        edit = {'resource': enemy['resource'], 'index': enemy['index'], 'actor': enemy['actor'],
+                'hash': enemy['hash'], 'soul': key, 'flag': FLAG_PREFIX + soul_actor(soul_item(key))}
+        if enemy['presence'] is not None:
+            edit['vanilla'] = dict(enemy['presence'])
+        edits.append(edit)
     exit_requirements = {}
     for region in logic_regions:
         name, dungeon = region['region_name'], region.get('dungeon')
@@ -538,7 +544,7 @@ def is_boss_soul(key):
     return bool(BY_ID.get(key, (None, None, None))[2])
 
 
-def soul_presence(flag, key):
+def soul_presence(flag, key, vanilla=None):
     """``Presence`` of an enemy bound to soul ``key``.
 
     A boss soul can be picked up inside its own dungeon (the logic only asks for it at
@@ -547,19 +553,99 @@ def soul_presence(flag, key):
     again, so the boss scene had no boss (15/11 report, Barinade). The lazy check, as the
     vanilla maps use for actors that appear or leave on a flag set in the map (Death
     Mountain Tektites, Enemy Museum statues), follows the flag live. Other souls are
-    required to enter their dungeon, so they keep the immediate check."""
+    required to enter their dungeon, so they keep the immediate check.
+
+    ``vanilla``: the enemy's own Presence; the enemy then reads :func:`soul_expression`
+    (lazy when either check is)."""
+    if vanilla is not None:
+        return {'FlagName': soul_expression(flag, vanilla), 'IsNegation': False,
+                'IsCheckLazy': bool(vanilla.get('IsCheckLazy')) or is_boss_soul(key)}
     return {'FlagName': flag, 'IsNegation': False, 'IsCheckLazy': is_boss_soul(key)}
 
 
+# GameData BoolExp programs are postfix (decoded on the vanilla list: KokiriForest_
+# DeleteDekubaba = [10 Get_StoneOfForest_IsAfter_DefeatBoss_Exp] [0 <bool>] [5] [3],
+# DreamWorldPlate_* = [10 a] [10 b] [4]): push a Bool (0) or a BoolExp (10), NOT (5),
+# AND (3), OR (4). Values are U64; the entries are not saved (SaveFileIndex -1).
+EXPRESSION_PREFIX = 'RandoSoul.'
+PUSH = {'Bool': 0, 'BoolExp': 10}
+OP_NOT, OP_AND = 5, 3
+
+
+def soul_expression(flag, vanilla):
+    """Name of the BoolExp "soul ``flag`` AND the enemy's vanilla Presence"."""
+    negation = '.Not' if vanilla.get('IsNegation') else ''
+    return f"{EXPRESSION_PREFIX}{flag[len(FLAG_PREFIX):]}.{vanilla['FlagName']}{negation}"
+
+
+def expression_program(flag, vanilla, kind):
+    """BoolExp ``Values`` of :func:`soul_expression`; ``kind``: 'Bool' or 'BoolExp' of the vanilla flag."""
+    program = [[PUSH['Bool'], murmur3(flag)], [PUSH[kind], murmur3(vanilla['FlagName'])]]
+    if vanilla.get('IsNegation'):
+        program.append([OP_NOT])
+    return program + [[OP_AND]]
+
+
+def soul_expressions(gamedata_raw, edits):
+    """{name: program} of the soul enemies that keep a vanilla Presence."""
+    from oot_rando.formats import byml_codec
+    data = byml_codec.load(gamedata_raw)['root']['Data']
+    kinds = {int(e['Hash']): kind for kind in PUSH for e in data[kind]}
+    found = {}
+    for edit in edits:
+        vanilla = edit.get('vanilla')
+        if vanilla is None:
+            continue
+        name = soul_expression(edit['flag'], vanilla)
+        kind = kinds.get(murmur3(vanilla['FlagName']))
+        if kind is None:
+            raise ValueError('Soul enemy condition not in the game data: ' + name)
+        program = expression_program(edit['flag'], vanilla, kind)
+        if found.setdefault(name, program) != program:
+            raise ValueError('Two programs for one soul condition: ' + name)
+    return found
+
+
+def add_soul_expressions(gamedata_raw, edits):
+    """GameData with the BoolExps of the soul enemies that keep a vanilla Presence.
+
+    Run once the soul flags exist (their ``IsGet`` Bools are read by the programs)."""
+    from oot_rando.formats import byml_codec
+    programs = soul_expressions(gamedata_raw, edits)
+    if not programs:
+        return gamedata_raw
+    document = byml_codec.load(gamedata_raw)
+    data = document['root']['Data']
+    known = {int(e['Hash']) for entries in data.values() for e in entries if 'Hash' in e}
+    bools = {int(e['Hash']) for e in data['Bool']}
+    for name, program in sorted(programs.items()):
+        if murmur3(name) in known:
+            raise ValueError('Soul condition name collision: ' + name)
+        if program[0][1] not in bools:
+            raise ValueError('Soul flag missing for: ' + name)
+        data['BoolExp'].append({'Hash': byml_codec.U32(murmur3(name)), 'ResetTypeValue': 0, 'SaveFileIndex': -1,
+                                'Values': [[byml_codec.U64(v) for v in step] for step in program]})
+        known.add(murmur3(name))
+    return byml_codec.dump(document)
+
+
+
 def presence_changes(edits, roots):
-    """BYML edits adding ``Presence`` to every soul-bound enemy (absent before)."""
+    """BYML edits giving every soul-bound enemy its soul ``Presence``.
+
+    Added when absent; an enemy with its own Presence (``edit['vanilla']``) reads
+    the soul's BoolExp instead (:func:`add_soul_expressions`)."""
     changes = defaultdict(list)
     for edit in edits:
         actor = roots[edit['resource']]['Actors'][edit['index']]
-        if actor.get('Gyaml') != edit['actor'] or str(actor.get('Hash')) != edit['hash'] or 'Presence' in actor:
+        vanilla = edit.get('vanilla')
+        if (actor.get('Gyaml') != edit['actor'] or str(actor.get('Hash')) != edit['hash']
+                or actor.get('Presence') != vanilla):
             raise ValueError('Unexpected enemy for souls: ' + edit['hash'])
         base = ('Actors', edit['index'], 'Presence')
-        presence = soul_presence(edit['flag'], edit['soul'])
-        changes[edit['resource']] += [{'path': base + (name,), 'before': None, 'after': presence[name]}
-                                      for name in ('FlagName', 'IsNegation', 'IsCheckLazy')]
+        presence = soul_presence(edit['flag'], edit['soul'], vanilla)
+        changes[edit['resource']] += [{'path': base + (name,), 'before': (vanilla or {}).get(name),
+                                       'after': presence[name]}
+                                      for name in ('FlagName', 'IsNegation', 'IsCheckLazy')
+                                      if vanilla is None or vanilla.get(name) != presence[name]]
     return dict(changes)

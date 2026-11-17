@@ -11,6 +11,8 @@ PKG = SRC / 'oot_rando'
 
 datas = [
     (str(PKG / 'logic' / 'world'), 'oot_rando/logic/world'),
+    # Title screen badge image (patching/title_badge.py).
+    (str(PKG / 'patching' / 'title_badge.rgba.zlib'), 'oot_rando/patching'),
     # Run by the external Python of HookshotBuilder to extract icons (by path).
     (str(PKG / 'tracker' / 'icon_extract.py'), 'oot_rando/tracker'),
     (str(ROOT / 'README.md'), '.'),

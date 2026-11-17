@@ -32,9 +32,13 @@ DROP_AI_MEMBER = 'AI/DropItem.root.ainb'
 DROP_AI_INFO = '?AI/AIInfo/DropItem.engine__actor__AIInfo.bgyml'
 LARGE_GET_TYPE = 1746592023
 # Short get (the game's own for gold tokens, heart pieces and the gold rupee on the
-# ground): the get event still runs, so the check flag is written, without the
-# long held-up pose. Used for the minor rewards of repeatable sources.
+# ground): no long held-up pose, but Link still shows the item.
 MEDIUM_GET_TYPE = 1027255402
+# Minor rewards keep their native pickup (no GetType: rupees, arrows, seeds, nuts,
+# sticks, bombs, magic jars, hearts all have none), as on the ground. Forcing Medium
+# on them still played a pose (Discord 15/11, 0.6.1). Only the bombchu packs are
+# Large natively (key-item style): they take Medium.
+MINOR_LARGE_PREFIXES = ('Item_BombchuBundle_',)
 MINOR_PREFIXES = ('TBox_Rupee_', 'TBox_ArrowBundle_', 'TBox_DekuNutBundle', 'TBox_DekuSeedBundle',
                   'Item_BombBundle_', 'Item_DekuStickBundle_', 'Item_BombchuBundle_', 'Tbox_MagicJar_',
                   'Item_ScrubBusinessSeed')
@@ -49,7 +53,28 @@ def is_minor_reward(canonical):
 
 
 def get_type(canonical):
-    return MEDIUM_GET_TYPE if is_minor_reward(canonical) else LARGE_GET_TYPE
+    """GetType given to a first-collection pickup (None: the item's native one)."""
+    if is_minor_reward(canonical):
+        return MEDIUM_GET_TYPE if canonical.startswith(MINOR_LARGE_PREFIXES) else None
+    return LARGE_GET_TYPE
+
+
+def pickup_pouch_settings(canonical):
+    """PouchContentParam overrides of a first-collection pickup dropping ``canonical``.
+
+    A key reward plays its get event every time (the check's own message). A minor
+    one keeps the native pickup behaviour: the get window only the first time this
+    kind of item is ever got (a green rupee from every pot showed "You got a Green
+    Rupee!", Discord 17/11), the short pick-up display after. The derived drop
+    inherits PlayGetEventManyTimes from the world pickups (item_forms.WORLD_POUCH_FLAGS):
+    it is turned off explicitly. Whether the check flag is still written on the short
+    pick-up (its event AINB) is not validated in game: if not, the pot keeps dropping
+    that minor item.
+    """
+    settings = {'PlayGetEventManyTimes': not is_minor_reward(canonical), 'IsAutoSaveAfterPlayGet': True}
+    if get_type(canonical) is not None:
+        settings['GetType'] = byml_codec.U32(get_type(canonical))
+    return settings
 
 
 def _guid(text):
@@ -489,8 +514,7 @@ def build_repeatable_packs(records, read_pack, read_raw, tables):
         components = document['root']['Components']
         pouch_path = components['PouchContentRef'][1:]
         pouch = byml_codec.load(files[pouch_path])
-        pouch['root'].update({'PlayGetEventManyTimes': True, 'GetType': byml_codec.U32(get_type(record['canonical'])),
-                              'IsAutoSaveAfterPlayGet': True})
+        pouch['root'].update(pickup_pouch_settings(record['canonical']))
         # The PouchActor remains the canonical reward: no unique inventory item
         # or duplicate bundle is introduced just to track a check.
         files[pouch_path] = byml_codec.dump(pouch)

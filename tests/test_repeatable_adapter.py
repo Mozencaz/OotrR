@@ -57,12 +57,24 @@ class RepeatableSourceTests(unittest.TestCase):
         from oot_rando.patching.repeatable_adapter import LARGE_GET_TYPE, MEDIUM_GET_TYPE, get_type
         from oot_rando.patching.soul_adapter import murmur3
         self.assertEqual((LARGE_GET_TYPE, MEDIUM_GET_TYPE), (murmur3('Large'), murmur3('Medium')))
+        # Their native pickup (no GetType): Medium still posed (Discord 15/11, 0.6.1).
         for actor in ('TBox_Rupee_Green', 'TBox_Rupee_Gold', 'TBox_ArrowBundle_Large', 'TBox_DekuNutBundle',
-                      'Item_BombBundle_Small', 'Item_DekuStickBundle_Small', 'Item_BombchuBundle_Small', 'Obj_Heart'):
-            self.assertEqual(get_type(actor), MEDIUM_GET_TYPE, actor)
+                      'Item_BombBundle_Small', 'Item_DekuStickBundle_Small', 'Obj_Heart', 'Tbox_MagicJar_Large'):
+            self.assertIsNone(get_type(actor), actor)
+        self.assertEqual(get_type('Item_BombchuBundle_Small'), MEDIUM_GET_TYPE)   # Large natively
         for actor in ('Item_Hookshot', 'Obj_Heart_Piece', 'Obj_Heart_Container', 'Item_Token_Gold',
                       'Item_Soul_Keese', 'TBox_Shield_Deku'):
             self.assertEqual(get_type(actor), LARGE_GET_TYPE, actor)
+
+    def test_minor_rewards_keep_the_native_pickup_window(self):
+        # Discord 17/11: every pot rupee showed "You got a Green Rupee!".
+        from oot_rando.patching.repeatable_adapter import LARGE_GET_TYPE, MEDIUM_GET_TYPE, pickup_pouch_settings
+        for actor in ('TBox_Rupee_Green', 'Item_BombBundle_Small', 'Obj_Heart'):
+            self.assertEqual(pickup_pouch_settings(actor), {'PlayGetEventManyTimes': False,
+                                                            'IsAutoSaveAfterPlayGet': True}, actor)
+        self.assertEqual(pickup_pouch_settings('Item_BombchuBundle_Large')['GetType'], MEDIUM_GET_TYPE)
+        key = pickup_pouch_settings('Item_Hookshot')
+        self.assertEqual((key['PlayGetEventManyTimes'], key['GetType']), (True, LARGE_GET_TYPE))
 
     def test_native_once_pot_keeps_presence_without_a_second_source(self):
         presence = {'FlagName': 'IceCavern_Room07_RedRupeePot_IsCrushed', 'IsNegation': True, 'IsCheckLazy': True}
@@ -297,7 +309,9 @@ class LocalGraphTests(unittest.TestCase):
                 self.assertEqual(event['EventUniqueAin'], f'Work/AI/Root/Event/{record["event_filename"]}.ain')
                 self.assertIn(f'AI/{record["event_filename"]}.ainb', files)
                 pouch = byml_codec.load(files[components['PouchContentRef'][1:]])['root']
-                self.assertIs(pouch['PlayGetEventManyTimes'], True)
+                from oot_rando.patching.repeatable_adapter import is_minor_reward
+                # Minor rewards: the get window only for the first item of its kind ever got.
+                self.assertIs(pouch['PlayGetEventManyTimes'], not is_minor_reward(record['canonical']))
                 self.assertEqual(pouch['PouchActor'], f'Work/Actor/{record["canonical"]}.engine__actor__ActorParam.gyml')
                 for rows in tables.values():
                     self.assertEqual(sum(1 for row in rows if row['__RowId'] == actor), 1)

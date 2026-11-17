@@ -273,10 +273,35 @@ class Integration(unittest.TestCase):
             for p in adult:
                 self.assertGreaterEqual(p['sphere'], adult_from, (seed, p['id'], p['item']))
 
+    def test_shops_counted_one_by_one(self):
+        # Discord 16/11: the Market's three shops shared the count of one shop.
+        from oot_rando.game.extra_sources import shop_groups
+        shops = shop_groups({g: e for g, e in self.extra.items() if e['source'] == 'shop' and not e['reason']})
+        per_folder = Counter(key.split('#', 1)[0] for key in set(shops.values()))
+        self.assertEqual(per_folder['Market'], 3)              # bazaar, potion shop, bombchu shop
+        self.assertEqual(per_folder['KakarikoVillage'], 2)     # bazaar, potion shop
+        for folder in ('KokiriForest', 'GoronCity', 'ZoraDomain'):
+            self.assertEqual(per_folder[folder], 1, folder)
+        self.assertTrue(all(n == 8 for n in Counter(shops.values()).values()), Counter(shops.values()))
+        options, result = self.plan({'shopsanity': '8'}, 'shops8')
+        placed = Counter(shops[p['id']] for p in result['placements'] if p['source'] == 'shop')
+        self.assertEqual(set(placed), set(shops.values()))      # every shop, the potion shops too
+        # One copy of each purchase the logic uses stays on sale (11 on 17/11: shields, tunics,
+        # bottle contents, one bombchu pack, nuts, sticks); every other slot is shuffled.
+        kept = sorted(self.extra[g]['vanilla'] for g in shops if g not in {p['id'] for p in result['placements']})
+        self.assertEqual(sum('Bombchu' in k for k in kept), 1, kept)      # any pack does (has_bombchus)
+        self.assertEqual(sum('Deku Nut' in k for k in kept), 1, kept)
+        self.assertLessEqual(len(kept), 11, kept)
+        options, result = self.plan({'shopsanity': 'all'}, 'shops8')
+        self.assertEqual(sum(p['source'] == 'shop' for p in result['placements']), len(shops))
+
     def test_shopsanity_keeps_logic_purchases(self):
         options, result = self.plan({'shopsanity': '4'}, 'shops')
-        per_shop = Counter(p['folder'] for p in result['placements'] if p['source'] == 'shop')
-        self.assertTrue(per_shop and all(count <= 4 for count in per_shop.values()), per_shop)
+        from oot_rando.game.extra_sources import shop_groups
+        shops = shop_groups({g: e for g, e in self.extra.items() if e['source'] == 'shop'})
+        per_shop = Counter(shops[p['id']] for p in result['placements'] if p['source'] == 'shop')
+        self.assertEqual(set(per_shop), set(shops.values()))
+        self.assertTrue(all(count <= 4 for count in per_shop.values()), per_shop)
         shuffled = {p['id'] for p in result['placements']}
         referenced_kept = Counter(e['vanilla'] for gid, e in self.extra.items()
                                   if e['source'] == 'shop' and gid not in shuffled and not e['reason'])

@@ -11,11 +11,83 @@ import struct
 from oot_rando.formats.inspect_resources import Byml
 
 
+def _f32(value):
+    """``value`` rounded as a 32-bit float."""
+    return struct.unpack('<f', struct.pack('<f', value))[0]
+
+
+def _dict_entry(byml, offset, key):
+    """(type, value slot offset) of ``key`` in the dictionary node at ``offset``, else None."""
+    if byml.data[offset] != 0xc1:
+        raise ValueError('Expected a BYML dictionary.')
+    for index in range(byml.u24(offset + 1)):
+        entry = offset + 4 + index * 8
+        if byml.keys[byml.u24(entry)] == key:
+            return byml.data[entry + 3], entry + 4
+    return None
+
+
+def _array_slots(byml, offset):
+    """[(type, value slot offset)] of the array node at ``offset``."""
+    if byml.data[offset] != 0xc0:
+        raise ValueError('Expected a BYML array.')
+    count = byml.u24(offset + 1)
+    values = (offset + 4 + count + 3) & ~3
+    return [(byml.data[offset + 4 + i], values + i * 4) for i in range(count)]
+
+
+def lift_actors(raw, heights):
+    """Raise ``Actors[i].Translate`` (Y) by ``heights[i]``.
+
+    Maps share identical Translate arrays between actors, so each lifted actor
+    gets its own copy, appended; only its dictionary's Translate slot is
+    repointed. That dictionary must be its own (a fresh one written by
+    :func:`patch_strings` for the same actor). Original bytes remain a prefix.
+    """
+    heights = {index: height for index, height in heights.items() if height}
+    if not heights:
+        return raw
+    byml = Byml(raw)
+    actors = _dict_entry(byml, byml.u32(12), 'Actors')
+    if actors is None or actors[0] != 0xc0:
+        raise ValueError('Map without an Actors array.')
+    slots = _array_slots(byml, byml.u32(actors[1]))
+    dicts = [byml.u32(slot) if typ == 0xc1 else None for typ, slot in slots]
+    expected = copy.deepcopy(byml.root)
+    data = bytearray(raw)
+    for index, height in sorted(heights.items()):
+        actor = dicts[index]
+        if actor is None or dicts.count(actor) != 1:
+            raise ValueError(f'Actor {index} is not a dictionary of its own.')
+        found = _dict_entry(byml, actor, 'Translate')
+        if found is None or found[0] != 0xc0:
+            raise ValueError(f'Actor {index} has no Translate array.')
+        array = byml.u32(found[1])
+        coords = _array_slots(byml, array)
+        if len(coords) != 3 or any(typ != 0xd2 for typ, _ in coords):
+            raise ValueError(f'Unexpected Translate of actor {index}.')
+        data.extend(bytes(-len(data) % 4))
+        copy_at = len(data)
+        data.extend(raw[array:coords[-1][1] + 4])
+        y_at = copy_at + coords[1][1] - array
+        y = struct.unpack_from(byml.endian + 'f', data, y_at)[0]
+        struct.pack_into(byml.endian + 'f', data, y_at, y + height)
+        struct.pack_into(byml.endian + 'I', data, found[1], copy_at)
+        translate = expected['Actors'][index]['Translate']
+        translate[1] = struct.unpack(byml.endian + 'f', struct.pack(byml.endian + 'f', y + height))[0]
+    result = bytes(data)
+    if Byml(result).root != expected:
+        raise ValueError('BYML lift changed unexpected semantic content.')
+    return result
+
+
 def patch_strings(raw, changes):
     """Apply ``{path: tuple, before: str|None, after: str|bool}`` records.
 
     A boolean ``after`` is allowed for a new leaf (``before=None``) or to replace
     an existing boolean leaf of a dictionary (``before`` is that boolean).
+    A tuple of floats ``after`` adds a new array of 32-bit floats (``before=None``
+    only), such as an actor ``Scale``.
 
     ``before=None`` means the leaf must be absent, not a BYML null. Missing
     dictionary ancestors may then be created. Array sizes never change.
@@ -29,8 +101,13 @@ def patch_strings(raw, changes):
         if not isinstance(change, dict) or set(change) != {'path', 'before', 'after'}:
             raise ValueError('A string edit requires path, before and after.')
         path, before, after = tuple(change['path']), change['before'], change['after']
+        if isinstance(after, (tuple, list)):
+            if (before is not None or not after
+                    or any(type(v) not in (int, float) for v in after)):
+                raise ValueError('Invalid float array edit.')
+            after = tuple(_f32(v) for v in after)
         if (not path or any(type(key) not in (str, int) for key in path)
-                or not isinstance(after, (str, bool)) or (isinstance(after, str) and '\0' in after)
+                or not isinstance(after, (str, bool, tuple)) or (isinstance(after, str) and '\0' in after)
                 or (isinstance(after, bool) and before is not None and not isinstance(before, bool))
                 or (isinstance(before, bool) and not isinstance(after, bool))
                 or (before is not None and not isinstance(before, (str, bool)))):
@@ -49,7 +126,7 @@ def patch_strings(raw, changes):
                         raise ValueError('String edit precondition failed.')
                     if before is not None and type(cursor[key]) is not type(before):
                         raise ValueError('Existing value is not of the expected type.')
-                    cursor[key] = after
+                    cursor[key] = list(after) if isinstance(after, tuple) else after
                 else:
                     if key not in cursor:
                         if before is not None:
@@ -109,6 +186,15 @@ def patch_strings(raw, changes):
         if None in edits:
             if isinstance(edits[None], bool):
                 return 0xd0, struct.pack(endian + 'I', int(edits[None]))
+            if isinstance(edits[None], tuple):
+                floats = edits[None]
+                align()
+                start = len(data)
+                data.extend(b'\xc0' + len(floats).to_bytes(3, order) + b'\xd2' * len(floats))
+                align()
+                for number in floats:
+                    data.extend(struct.pack(endian + 'f', number))
+                return 0xc0, struct.pack(endian + 'I', start)
             return 0xa0, struct.pack(endian + 'I', string_ids[edits[None]])
         if typ in (0xc0, 0xc1):
             if not edits and not new_keys:

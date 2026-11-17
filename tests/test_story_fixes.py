@@ -12,21 +12,6 @@ from oot_rando.patching import story_fixes as s
 NUP = os.environ.get('OOT_NUP')
 
 
-class SheikUnits(unittest.TestCase):
-    def test_presence_added_to_the_only_sheik(self):
-        raw = byml_codec.dump({'endian': '<', 'version': 7, 'root': {'Actors': [
-            {'Gyaml': 'Obj_TimeTemple_MasterSword_A_01', 'Hash': 1},
-            {'Gyaml': s.SHEIK, 'Hash': 2}]}})
-        edits = s.sheik_presence_edits(Byml(raw).root)
-        root = Byml(patch_strings(raw, edits)).root
-        self.assertEqual(root['Actors'][1]['Presence'], s.SHEIK_PRESENCE_ENTRY)
-        self.assertNotIn('Presence', root['Actors'][0])
-        with self.assertRaises(ValueError):    # never applied twice
-            s.sheik_presence_edits(root)
-        with self.assertRaises(ValueError):    # no Sheik
-            s.sheik_presence_edits({'Actors': [{'Gyaml': 'Npc_X'}]})
-
-
 class ZoraRiverWallUnits(unittest.TestCase):
     @mock.patch.object(s, 'ZORA_RIVER_WALLS', tuple(range(10, 17)))   # 32-bit hashes in the fixture
     def test_river_mouth_walls_become_child_only(self):
@@ -154,13 +139,6 @@ class GameFlows(unittest.TestCase):
     def test_great_fairy_flags_unique(self):
         self.assertEqual(len(s.great_fairy_saved_flags()), 6)
 
-    def test_temple_sheik(self):
-        raw = self.read(s.TEMPLE_MAP)
-        root = Byml(patch_strings(raw, s.sheik_presence_edits(Byml(raw).root))).root
-        sheik = [a for a in root['Actors'] if a.get('Gyaml') == s.SHEIK]
-        self.assertEqual(len(sheik), 1)
-        self.assertEqual(sheik[0]['Presence'], s.SHEIK_PRESENCE_ENTRY)
-
     def test_zora_river_walls(self):
         raw = self.read(s.ZORA_RIVER_MAP)
         before = Byml(raw).root
@@ -175,6 +153,20 @@ class GameFlows(unittest.TestCase):
         for index, (a, b) in enumerate(zip(before['Actors'], root['Actors'])):
             if index not in indices:
                 self.assertEqual(a, b)
+
+    def test_pedestal_open_from_first_adult_arrival(self):
+        # 15-16/11: adult Link could not go back to child before the Forest Temple.
+        import ainb
+        raw = self.nup.read(self.nup.latest('romfs/' + s.PEDESTAL_MODULE))
+        patched, report = s.pedestal_after_first_adult_arrival(raw)
+        before, after = (ainb.AINB.from_binary(x).as_dict() for x in (raw, patched))
+        gate = after['Nodes'][0]['Parameters']['Inputs']['String'][0]
+        self.assertEqual((gate['Name'], gate['Default Value']), ('GameDataNameBoolExp', s.PEDESTAL_GATE))
+        before['Nodes'][0]['Parameters']['Inputs']['String'][0]['Default Value'] = s.PEDESTAL_GATE
+        self.assertEqual(before, after)
+        self.assertEqual(report['before'], s.PEDESTAL_BEFORE)
+        with self.assertRaises(ValueError):    # never applied twice
+            s.pedestal_after_first_adult_arrival(patched)
 
     def test_zelda_escape_on_stones_at_item_get(self):
         from oot_rando.patching.qol_patches import ocarina_guide_on_get
@@ -215,12 +207,124 @@ class GameFlows(unittest.TestCase):
             check = check.data.cases[0].v
         self.assertEqual(check.data.params.data, events['Event37'].data.params.data)
         self.assertIsNone(events['RandoDungeonEndStonesCount'].data.nxt.v)  # Step03: native skipped
+        # 17/11: both dungeon quests done no longer give Step03 without the stones.
+        both = events['Event39'].data
+        self.assertEqual(both.params.data, {'GameDataName': 'Get_StoneOfWater_IsCompleted_Exp'})
+        self.assertEqual({k: v.v.name for k, v in both.cases.items()}, {1: 'Event147'})
         started = events['Event7'].data.nxt.v.data             # after Step02 of the send-off
         self.assertEqual(started.params.data, {'GameDataName': s.FIRE_QUEST_STARTED})
         self.assertEqual(started.cases[1].v.name, 'Event62')   # fire quest moved only if not started
         self.assertEqual(started.cases[0].v.name, 'RandoSendOffStonesStarted')
         self.assertEqual(events['Event62'].data.nxt.v.name, 'RandoSendOffStonesStarted')
         self.check_kept(source, raw)
+
+    def test_zelda_escape_on_stones_at_zelda_talk(self):
+        # 17/11: the last stone got after the send-off; talking to Zelda checks them again.
+        source, _ = s.door_of_time_forward(self.read(s.ZELDA_FLOW))
+        raw, report = s.zelda_escape_on_talk(source)
+        self.assertEqual(report['start'], 'RandoTalkStonesStarted')
+        events = self.chart(raw)
+        started = events['RandoTalkStonesStarted'].data
+        self.assertEqual(started.params.data, {'GameDataName': s.DOOR_STARTED})
+        self.assertEqual(started.cases[1].v.name, 'Event99')                  # before the send-off: vanilla talk
+        before = started.cases[0].v.data
+        self.assertEqual(before.params.data, {'GameDataName': s.DOOR_BEFORE_ESCAPE})
+        self.assertEqual(before.cases[0].v.name, 'Event99')                   # Step03 reached: vanilla talk
+        check, held = before.cases[1].v, []
+        while check.name.startswith('RandoTalkStonesStone'):
+            self.assertEqual(check.data.cases[1].v.name, 'Event99')           # one missing: vanilla talk
+            held.append(check.data.params.data['GameDataName'].removeprefix(s.STONE_FLAG_PREFIX))
+            check = check.data.cases[0].v
+        self.assertEqual(held, list(s.STONES))
+        self.assertEqual(check.data.params.data, self.chart(self.read(s.DOOR_FLOW))['Event37'].data.params.data)
+        self.assertEqual(events['RandoTalkStonesCount'].data.nxt.v.name, 'Event99')   # then the talk
+        self.check_kept(source, raw)
+        with self.assertRaises(ValueError):
+            s.zelda_escape_on_talk(raw)
+
+    def test_gohma_scene_skips_stone_menu_presentation(self):
+        # 15/11: the first-stone menu presentation showed the stones, then none.
+        source = self.read(s.GOHMA_STONE_FLOW)
+        self.assertEqual(self.chart(source)['Event56'].data.nxt.v.name, 'Event52')
+        raw, report = s.skip_stone_menu_presentation(source)
+        self.assertEqual(report['skipped'], 'Event52')
+        self.assertIsNone(self.chart(raw)['Event56'].data.nxt.v)
+        self.check_kept(source, raw)
+        with self.assertRaises(ValueError):
+            s.skip_stone_menu_presentation(raw)
+
+    def test_dampe_first_race_until_its_prize_is_opened(self):
+        # 17/11: with the Hookshot found elsewhere, the first race (and its chest) was skipped.
+        source = self.read(s.DAMPE_FLOW)
+        raw, report = s.dampe_first_race_until_prize(source)
+        events = self.chart(raw)
+        self.assertEqual(report['checks'], sorted(s.DAMPE_HOOKSHOT_CHECKS))
+        start = events['RandoDampeEvent129']
+        self.assertEqual(dict(start.data.params.data), {'GameDataName': s.DAMPE_FIRST_PRIZE, 'Index': -1})
+        self.assertEqual({k: v.v.name for k, v in start.data.cases.items()}, {0: 'Event131', 1: 'Event287'})
+        self.assertIs(events['Event462'].data.nxt.v, start)
+        self.assertEqual(events['RandoDampeEvent18'].data.cases[1].v.name, 'RandoDampeEvent0')
+        self.assertEqual(events['RandoDampeEvent262'].data.cases[1].v.name, 'RandoDampeEvent260')
+        # Until the first prize is opened, the result shows the Hookshot chest whatever
+        # ClearCount holds (saves where the first race already counted as cleared).
+        gate = events['RandoDampeResult']
+        self.assertEqual({k: v.v.name for k, v in gate.data.cases.items()}, {0: 'Event275', 1: 'Event277'})
+        from oot_rando.patching.event_patch import _flow as flow_of
+        result = next(e for e in flow_of(raw).flowchart.entry_points if e.name == 'Result')
+        self.assertEqual(result.main_event.v.name, 'RandoDampeResult')
+        # The race finish counts a clear only once the first prize is opened.
+        finish = events['Event31'].data.nxt.v
+        self.assertEqual(finish.name, 'RandoDampeEvent442')
+        self.assertEqual({k: v.v.name for k, v in finish.data.cases.items()}, {0: 'Event379', 1: 'Event33'})
+        mark = events['Event201'].data.nxt.v
+        self.assertEqual((mark.name, dict(mark.data.params.data)['GameDataName']),
+                         ('RandoDampeFirstPrizeOpened', s.DAMPE_FIRST_PRIZE))
+        self.assertEqual(mark.data.nxt.v.name, 'Event95')
+        # No live link reaches a Hookshot/Longshot check any more.
+        from oot_rando.patching.qol_patches import _predecessors
+        from oot_rando.patching.event_patch import _flow
+        chart = _flow(raw).flowchart
+        live = {e.name for e in chart.events if e.name not in s.DAMPE_HOOKSHOT_CHECKS}
+        for name in s.DAMPE_HOOKSHOT_CHECKS:
+            old = next(e for e in chart.events if e.name == name)
+            self.assertFalse([l for l in _predecessors(chart, old) if getattr(l[0], 'name', None) in live], name)
+        # No reachable event of the race reads the Hookshot or Longshot any more.
+        reachable, todo = set(), [p.main_event.v for p in chart.entry_points if p.main_event.v]
+        while todo:
+            e = todo.pop()
+            if e.name in reachable:
+                continue
+            reachable.add(e.name)
+            data = e.data
+            for link in [getattr(data, 'nxt', None)] + list((getattr(data, 'cases', None) or {}).values())                     + list(getattr(data, 'forks', None) or []) + [getattr(data, 'join', None)]:
+                if link is not None and getattr(link, 'v', None) is not None:
+                    todo.append(link.v)
+        readers = [e.name for e in chart.events if e.name in reachable and getattr(e.data, 'params', None) is not None
+                   and {v for v in dict(e.data.params.data).values() if isinstance(v, str)} & {'Item_Hookshot', 'Item_Longshot'}]
+        self.assertEqual(readers, [])
+        self.check_kept(source, raw)
+        with self.assertRaises(ValueError):
+            s.dampe_first_race_until_prize(raw)
+        self.assertEqual(s.dampe_saved_flags(), {s.DAMPE_FIRST_PRIZE: False})
+
+    def test_kokiri_exit_guard_lowers_wall_after_deku_tree(self):
+        # 16/11: Zelda met before the Deku Tree, the guard's last schedule state hid the
+        # only talk that lowers the bridge wall.
+        from oot_rando.patching.event_patch import _flow
+        source = self.read(s.KOKIRI_EXIT_FLOW)
+        raw, report = s.kokiri_exit_guard_steps_aside(source)
+        entries = {e.name: e for e in _flow(raw).flowchart.entry_points}
+        first = entries['KokiriForest_Npc_Kokiri_007_Child_BlockEnd_Talk'].main_event.v
+        self.assertEqual((first.name, report['flag']), ('RandoExitWallUp', s.KOKIRI_EXIT_WALL))
+        self.assertEqual(dict(first.data.params.data), {'GameDataName': s.KOKIRI_EXIT_WALL, 'Index': -1})
+        done = first.data.cases[0].v
+        self.assertEqual(dict(done.data.params.data), {'GameDataName': s.DEKU_TREE_DONE})
+        self.assertEqual({k: v.v.name for k, v in done.data.cases.items()}, {0: 'Event10', 1: 'Event60'})
+        self.assertEqual(first.data.cases[1].v.name, 'Event60')
+        self.assertEqual(entries['Get_StoneOfForest_IsCompleted_Exp_Talk'].main_event.v.name, 'Event10')
+        self.check_kept(source, raw)
+        with self.assertRaises(ValueError):
+            s.kokiri_exit_guard_steps_aside(raw)
 
     def steps(self):
         from oot_rando.patching.quest_guard import CHALLENGES, challenge_steps

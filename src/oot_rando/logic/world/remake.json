@@ -130,6 +130,36 @@
     "rule": "can_use(Mirror_Shield)",
     "why": "Twinrova beaten: the Spirit Sage awakens."
    }
+  },
+  "Kak Windmill": {
+   "Kak Windmill Heart Piece": {
+    "rule": "is_adult and can_use(Hookshot)",
+    "why": "Kak_heart_piece_2, the windmill heart piece (1.5, 108.9, 37.5): reached as adult with the Hookshot (Discord report, 17/11). Matched by item with the Impa's house one, it had the conjunction of both AP rules."
+   }
+  },
+  "Kak Impas House Back": {
+   "Kak Impas House Heart Piece": {
+    "rule": "True",
+    "why": "Kak_heart_piece_1, the heart piece in the cow cage behind Impa's house (-44, 108, 112): the AP Impa's house freestanding heart piece, no longer tied to the windmill one."
+   }
+  },
+  "Goron City": {
+   "GC Lower Ledge Chests": {
+    "rule": "can_use(Hookshot)",
+    "why": "Goron City chests of the remake (6 where AP has 3), checked in game by Robophill (Discord 16/11): GC_chest_1 and 2, past the sign-cutting puzzle, are only reached with the Hookshot."
+   },
+   "GC Hammer Rock Chest": {
+    "rule": "can_use(Megaton_Hammer)",
+    "why": "Goron City chests of the remake (6 where AP has 3), checked in game by Robophill (Discord 16/11): GC_chest_3 sits behind a rock only the Megaton Hammer breaks."
+   },
+   "GC Maze Rocks": {
+    "rule": "can_blast_or_smash",
+    "why": "Goron City chests of the remake (6 where AP has 3), checked in game by Robophill (Discord 16/11): GC_chest_4 and 5, behind the maze rocks, are the only chests a child reaches (AP maze center rule)."
+   },
+   "GC Silver Rock Chest": {
+    "rule": "can_use(Silver_Gauntlets)",
+    "why": "Goron City chests of the remake (6 where AP has 3), checked in game by Robophill (Discord 16/11): GC_chest_6 sits behind the silver boulder (Necro 16/11: the Kokiri Emerald there was given with bombs only)."
+   }
   }
  },
  "location_vanilla": {

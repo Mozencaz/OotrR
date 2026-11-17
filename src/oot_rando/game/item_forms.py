@@ -62,6 +62,121 @@ WORLD_CANONICAL = {world: canonical for canonical, world in NATIVE_WORLD.items()
 WORLD_POUCH_FLAGS = {'PlayGetEventManyTimes': True, 'IsPlayGetEventPouchMax': True}
 
 
+# Height (metres) added to a ground spot whose new pickup has its origin at its
+# centre: the gold token stands where it spawns (ExecuteKeepStandingPosture) and its
+# model reaches 0.14 below its origin (ActorInfo ModelAabbMin.Y), where the ground
+# pickups start at 0, so on the spot of a heart piece or rupee it was half sunk.
+GROUND_LIFT = {WORLD_TEMPLATE: 0.25}
+# Pickups built on the token (Obj_Rando_*) stand the same way with the item's model:
+# the Hookshot reaches 0.15 below its origin, the Light Arrow 0.38: sunk into the
+# ground, some could not be picked up (Discord #issues, 17/11). Their spot is raised by how far the model hangs below its origin,
+# plus LIFT_MARGIN. Lowest point (ActorInfo ModelAabbMin.Y) of the item models
+# reaching more than 0.02 below their origin; any other starts at the ground.
+LIFT_MARGIN = 0.05
+MODEL_BOTTOM = {
+    'Item_AgonyStone': -0.046, 'Item_Arrow_Fire': -0.235, 'Item_Arrow_Ice': -0.228, 'Item_Arrow_Light': -0.377,
+    'Item_Arrow_Normal': -0.043, 'Item_Bomb': -0.120, 'Item_Boomerang': -0.031, 'Item_Bottle': -0.088,
+    'Item_Bottle_BigPoe': -0.088, 'Item_Bottle_BlueFire': -0.088, 'Item_Bottle_BluePotion': -0.088,
+    'Item_Bottle_Bug': -0.088, 'Item_Bottle_Fairy': -0.088, 'Item_Bottle_Fish': -0.088,
+    'Item_Bottle_GreenPotion': -0.088, 'Item_Bottle_HalfMilk': -0.088, 'Item_Bottle_Letter': -0.088,
+    'Item_Bottle_Milk': -0.088, 'Item_Bottle_Poe': -0.088, 'Item_Bottle_RedPotion': -0.088,
+    'Item_BrokenSword': -0.067, 'Item_BulletBag_Large': -0.099, 'Item_BulletBag_Medium': -0.042,
+    'Item_BulletBag_Small': -0.022, 'Item_ClaimCheck': -0.225, 'Item_DekuSeed': -0.130, 'Item_DekuStick': -0.382,
+    'Item_DekuStickBundle_Small': -0.382, 'Item_DinFire': -0.333, 'Item_Dungeon_Compass': -0.033,
+    'Item_Dungeon_Map': -0.213, 'Item_EyeDrop': -0.109, 'Item_EyeballFrog': -0.112,
+    'Item_FairyBless_DefenseDouble': -0.285, 'Item_FairyBless_MP': -0.285, 'Item_FairyBless_MPDouble': -0.285,
+    'Item_FaroreWind': -0.333, 'Item_FishingRod': -0.187, 'Item_Gauntlet_Goron': -0.034, 'Item_Hammer': -0.276,
+    'Item_Hookshot': -0.152, 'Item_Longshot': -0.152, 'Item_MagicBean': -0.108, 'Item_Mask_Bunny': -0.056,
+    'Item_Mask_Gerudo': -0.091, 'Item_Mask_Goron': -0.084, 'Item_Mask_Keaton': -0.087, 'Item_Mask_Skull': -0.074,
+    'Item_Mask_Spooky': -0.099, 'Item_Mask_Truth': -0.080, 'Item_Mask_Zora': -0.113, 'Item_Medal_Fire': -0.183,
+    'Item_Medal_Forest': -0.183, 'Item_Medal_Light': -0.183, 'Item_Medal_Shadow': -0.183,
+    'Item_Medal_Spirit': -0.183, 'Item_Medal_Water': -0.181, 'Item_NayruLove': -0.333,
+    'Item_Ocarina_Fairy': -0.046, 'Item_Ocarina_Time': -0.048, 'Item_OddMushroom': -0.129,
+    'Item_PoacherSaw': -0.031, 'Item_Prescription': -0.210, 'Item_Quiver_Large': -0.064, 'Item_Range_Bow': -0.056,
+    'Item_Range_SlingShot': -0.090, 'Item_Shield_Mirror': -0.057, 'Item_StickBag_Large': -0.037,
+    'Item_Sword_Biggoron': -0.067, 'Item_Sword_BrokenGiant': -0.067, 'Item_Sword_Giant': -0.262,
+    'Item_Sword_Kokiri': -0.040, 'Item_Token_Gerudo': -0.268, 'Item_Wallet_Medium': -0.037,
+    'TBox_ArrowBundle_Large': -0.164, 'TBox_ArrowBundle_Medium': -0.093, 'TBox_ArrowBundle_Small': -0.102,
+    'TBox_DekuSeedBundle': -0.130, 'TBox_Shield_Deku': -0.036, 'TBox_Shield_Hylian': -0.078,
+}
+# Rando items drawn with a game model (their ActorInfo row copies its model box):
+# progressive tokens with their family's first level (progressive.FAMILIES), souls
+# with the Poe spirit, Archipelago items with a Fire Medallion copy, key rings,
+# boss keys, maps and compasses with the native dungeon items.
+MODEL_PREFIXES = (('Item_Soul_', 'Obj_Spirit_Poe'), ('Item_AP_', 'Item_Medal_Fire'),
+                  ('Item_KeyRing_', 'Item_Dungeon_SmallKey'), ('Item_BossKey_', 'Item_Dungeon_BossKey'),
+                  ('Item_Map_', 'Item_Dungeon_Map'), ('Item_Compass_', 'Item_Dungeon_Compass'))
+# Pouch-named models of the same mesh as the item's.
+SAME_MODEL = {'Weapon_Range_SlingShot': 'Item_Range_SlingShot', 'Weapon_Range_Bow': 'Item_Range_Bow'}
+
+
+def model_of(canonical):
+    """Game item whose model (and model box) ``canonical`` is drawn with."""
+    from oot_rando.patching.progressive import FAMILIES, token_family
+    family = token_family(canonical)
+    if family is not None:
+        model = FAMILIES[family][3]
+        return SAME_MODEL.get(model, model)
+    for prefix, model in MODEL_PREFIXES:
+        if canonical.startswith(prefix):
+            return model
+    return canonical
+
+
+def ground_lift(before, after):
+    """Height to add to a freestanding spot whose ``before`` pickup becomes ``after``."""
+    if before == after:
+        return 0.0
+    if after in GROUND_LIFT:
+        return GROUND_LIFT[after]
+    if not after.startswith(WORLD_PREFIX):
+        return 0.0
+    bottom = MODEL_BOTTOM.get(model_of(canonical_of(after)))
+    # Scaled about its origin (world_scale), the model reaches lower still.
+    return 0.0 if bottom is None else round(-bottom * world_scale(after) + LIFT_MARGIN, 3)
+
+
+# Some key items placed in the world on the gold token are much smaller than it
+# (0.39 m): the Goron Bracelet (also the Strength token's model) is 0.11 m, the Stone of Agony 0.08 m, hard to see
+# (Discord 17/11). Their spot gets a map ``Scale`` (a runtime actor field: scaled
+# flags, the market drawbridge...) bringing them up to WORLD_SIZE, at most
+# MAX_WORLD_SCALE times. Largest extent (metres, ActorInfo ModelAabbMax - Min) of
+# the item models below that size whose box holds their origin.
+WORLD_SIZE = 0.35
+MAX_WORLD_SCALE = 3.0
+SMALL_MODELS = {
+    'Item_AgonyStone': 0.078, 'Item_Gauntlet_Goron': 0.108, 'Item_Dungeon_Compass': 0.170,
+    'Item_Ocarina_Fairy': 0.235, 'Item_Ocarina_Time': 0.245, 'Item_Stone_Water': 0.246, 'Item_Bottle': 0.259,
+    'Item_Bottle_Letter': 0.259, 'Item_Bottle_Milk': 0.260, 'Item_Stone_Fire': 0.259, 'Item_Stone_Forest': 0.261,
+    'Item_BombBag_Small': 0.261, 'Item_ZeldaLetter': 0.267, 'Item_Range_SlingShot': 0.302,
+}
+
+
+def world_scale(actor):
+    """Uniform map scale of a spot holding ``actor`` (1.0: none)."""
+    if not actor.startswith(WORLD_PREFIX):
+        return 1.0
+    extent = SMALL_MODELS.get(model_of(canonical_of(actor)))
+    return 1.0 if extent is None else round(min(MAX_WORLD_SCALE, WORLD_SIZE / extent), 2)
+
+
+def lifted(y, height):
+    """``y + height`` rounded as the map's 32-bit float stores it."""
+    import struct
+    return struct.unpack('<f', struct.pack('<f', y + height))[0]
+
+
+# A key item (``Item_*``: Hookshot, boots, progressive tokens...) has no pickup sound
+# or effect of its own (no SLink user; the Forest Medallion template of the tokens only
+# has an effect bound to its own model). Placed in the world on the gold token, it
+# shone with nothing and made no sound: a progressive Slingshot under Zora's River
+# water was only found with debug flight (Discord 17/11). Such a pickup now keeps the
+# token's golden aura and hum; an item with its own pickup sound keeps its own links.
+def keeps_token_links(template, source_has_sound):
+    """A derived world pickup keeps the gold token's ELink/SLink (glow and hum)."""
+    return template == WORLD_TEMPLATE and not source_has_sound
+
+
 def _kit_native(actor):
     """Native world pickup of a ``<native>_GS`` skulltula drop, else None."""
     native = actor.removesuffix(KIT_SUFFIX)
@@ -265,7 +380,7 @@ def build_pack(derived, read_pack, codec):
         if key in source_components:
             components[key] = source_components[key]
             _copy_ref(source, source_components[key], files, codec)
-    if kind == 'world':
+    if kind == 'world' and not keeps_token_links(template_name, 'SLinkRef' in source_components):
         # Effects and sounds: the gold token's ELink user draws its golden
         # token-shaped aura (and SLink its hum) around any model. Use the item's
         # own ones, or none (Obj_Item_Base defines neither).
@@ -350,7 +465,10 @@ def add_rsdb_rows(tables, derived_list):
                 if source is None:
                     raise ValueError('Ligne ActorInfo absente : ' + canonical)
                 row['ActorName'] = source.get('ActorName', canonical)
+                keep_links = world and keeps_token_links(template, 'SLinkUserName' in source)
                 for key in MODEL_KEYS:
+                    if keep_links and key == 'ELinkUserName' and key in base:
+                        continue      # the token's glow (keeps_token_links)
                     if key in source:
                         row[key] = copy.deepcopy(source[key])
                     else:
