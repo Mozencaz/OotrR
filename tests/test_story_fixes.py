@@ -397,7 +397,7 @@ class GameFlows(unittest.TestCase):
         bools = {e['Hash'] for e in data['Bool']}
         exps = {e['Hash'] for e in data['BoolExp']}
         stone_flags = tuple(s.STONE_FLAG_PREFIX + stone for stone in s.STONES)
-        for name in (s.DARUNIA_GIFT_PLAYED, s.TALON_AWAKE, s.SECOND_MALON, s.BRIDGE_CLOSED, s.CLOCK_FLAG) + stone_flags:
+        for name in (s.DARUNIA_GIFT_PLAYED, s.TALON_AWAKE, s.SECOND_MALON, s.BRIDGE_CLOSED) + s.CLOCK_FLAGS + stone_flags:
             self.assertIn(murmur3(name), bools, name)
         for name in (s.AFTER_SARIA_PLAY, s.SHEIK_PRESENCE, s.DOOR_STARTED, s.DOOR_BEFORE_ESCAPE,
                      s.FIRE_QUEST_STARTED, s.DOOR_PAST_SREP):

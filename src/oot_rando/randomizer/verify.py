@@ -346,9 +346,10 @@ def verify(nup_path, seed_dir):
                 from oot_rando.patching.event_patch import start_value_events
                 from oot_rando.patching.key_adapter import start_dungeon_values
                 values = start_dungeon_values((manifest.get('settings') or {}).get('full') or {})
-                if 'clock' in (manifest.get('skips', {}).get('story_fixes') or {}):
-                    from oot_rando.patching.story_fixes import story_start_values
-                    values = dict(values, **story_start_values())
+                clock = (manifest.get('skips', {}).get('story_fixes') or {}).get('clock')
+                if clock:
+                    # A name before issue #57's fix, the list of flags since.
+                    values = dict(values, **{name: True for name in ([clock] if isinstance(clock, str) else clock)})
                 for (key, value), name in zip(sorted(values.items()), start_value_events(values)):
                     before[name] = {'GameDataName': key, 'Value': value, 'Index': -1}
                     report['start_values'] = report.get('start_values', 0) + 1

@@ -831,19 +831,28 @@ def door_of_time_forward(raw):
 
 
 # --- The clock before Zelda ------------------------------------------------------
-# Until Impa's send-off (``HavePlayedEvent.Dm_HrlField_0020``) the remake holds the
-# Hyrule Field clock at 15:00 (issue #40; native code, not in the game data): no night,
-# so no night-only skulltulas, Dampé... before Zelda. The flag is now set at the end of
-# the new-game opening: the clock runs from the start. The send-off itself still plays
-# (Impa's talk starts it with a map change, not on this flag); the flag is otherwise
-# read only by two child NPCs' lines (Npc_Hylia_043_Child, Npc_Hylia_Soldier_008_Child)
-# and by the Zora River owl (Dm_ZoraRiver_0005, which also needs Saria's Song).
+# Two native conditions (not in the game data) hold the world clock:
+# * until Impa's send-off (``HavePlayedEvent.Dm_HrlField_0020``) the remake holds the
+#   Hyrule Field clock at 15:00 (issue #40): no night, so no night-only skulltulas,
+#   Dampé... before Zelda. The send-off itself still plays (Impa's talk starts it with a
+#   map change, not on this flag); the flag is otherwise read only by two child NPCs'
+#   lines (Npc_Hylia_043_Child, Npc_Hylia_Soldier_008_Child) and by the Zora River owl
+#   (Dm_ZoraRiver_0005, which also needs Saria's Song).
+# * until Kaepora's first Hyrule Field arrival (``HyruleField_ArriveEntrance``, set
+#   only by Goto_HyruleCastle Event153) the clock is stopped at 06:00 and the Sun's Song
+#   does nothing (issue #57; main 0x345c020, unless Meet_DekuTree is still Ready). The
+#   arrival's trigger area is deleted once Goto_HyruleCastle is past Step01, so a seed
+#   that moves the castle quest on first froze the clock for good. The trigger does not
+#   read this flag, so the arrival still plays.
+# Both flags are set at the end of the new-game opening: the clock runs from the start.
 CLOCK_FLAG = 'HavePlayedEvent.Dm_HrlField_0020'
+ARRIVE_FLAG = 'HyruleField_ArriveEntrance'
+CLOCK_FLAGS = (CLOCK_FLAG, ARRIVE_FLAG)
 
 
 def story_start_values():
     """GameData values written at the end of the new-game opening (full mode)."""
-    return {CLOCK_FLAG: True}
+    return {name: True for name in CLOCK_FLAGS}
 
 
 # --- First arrivals never move a quest back --------------------------------------

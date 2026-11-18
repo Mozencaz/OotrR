@@ -489,8 +489,8 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None):
             # Zelda's escape on the three stones, checked at every item get.
             extra_raw[ACTION_GUIDE_FLOW], story['zelda_escape_item_get'] = story_fixes.zelda_escape_on_item_get(
                 extra_raw[ACTION_GUIDE_FLOW])
-            # The clock runs before Zelda (Impa's send-off flag set at the start).
-            story['clock'] = story_fixes.CLOCK_FLAG
+            # The clock runs from the start (Impa's send-off and Kaepora's arrival flags set).
+            story['clock'] = list(story_fixes.CLOCK_FLAGS)
         gamedata_source = extra_raw.get(GAMEDATA)
         if gamedata_source is None:
             gamedata_source = decompress(read(GAMEDATA), d)
