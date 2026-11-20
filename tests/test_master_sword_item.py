@@ -76,7 +76,7 @@ class NativeMasterSword(unittest.TestCase):
 
     def test_new_references_resolve_and_all_three_rows_preserve_native_data(self):
         modified, new = master.build_files(self.read)
-        self.assertEqual(set(modified), set(master.RSDB_FILES.values()))
+        self.assertEqual(set(modified), set(master.RSDB_FILES.values()) | {master.PEDESTAL_PACK})
         self.assertEqual(set(new), {master.PACK})
         raw, template = new[master.PACK]
         self.assertEqual(template, master.TEMPLATE_PACK)
@@ -106,6 +106,24 @@ class NativeMasterSword(unittest.TestCase):
                 self.assertNotIn('ChildEquipment', row)
                 self.assertIn(master.WEAPON, row['AdultEquipment'])
                 self.assertEqual(row['PouchGetType'], 'Large')
+
+    def test_adult_put_in_prompt_uses_the_swordless_pull_verb(self):
+        # 20/11: no put-in prompt without the Master Sword owned.
+        before = sarc(self.read(master.PEDESTAL_PACK))
+        after = sarc(master.pedestal_put_in_without_sword(self.read(master.PEDESTAL_PACK)))
+        self.assertEqual(set(after), set(before))
+        for path in before:
+            if path != master.PUT_IN_CLIENT:
+                self.assertEqual(after[path], before[path], path)
+        old, new = (codec.load(files[master.PUT_IN_CLIENT])['root'] for files in (before, after))
+        self.assertEqual(new['ActionType'], master.PULL_OUT)
+        new['ActionType'] = master.PUT_IN
+        self.assertEqual(new, old)
+        pull = codec.load(before['Attention/ClientParam/TimeTemple_MasterSwordAttention_PullOut'
+                                 '.game__attention__ClientParam.bgyml'])['root']
+        self.assertEqual(pull['ActionType'], master.PULL_OUT)
+        with self.assertRaises(ValueError):
+            master.pedestal_put_in_without_sword(codec.build_sarc(after))
 
 
 if __name__ == '__main__':

@@ -63,6 +63,54 @@ def apply_item_pool(pool, value, relevant, never_extra=()):
         keep_at_most(EMPTY_BOTTLES, 1)
         keep_at_most(MINIMAL_REMOVED, 0)
     return pool
+
+
+GREEN_RUPEE = 'Rupee (1)'
+
+
+def balance_pool(pool, slots, removable, keep=None):
+    """Make the pool exactly ``slots`` items long (one per shuffled check).
+
+    Too many items: green rupees leave the pool first, then the other filler
+    (``removable(item)``), lowest value first (FILLER_PRIORITY). Too few: green
+    rupees fill the free checks. ``keep``: item → copies that must stay (the
+    green rupees reserved for the skipped castle checks).
+    """
+    pool = list(pool)
+    keep = Counter(keep or {})
+    excess = len(pool) - slots
+    if excess > 0:
+        held = Counter(pool)
+
+        def rank(item):
+            if item == GREEN_RUPEE:
+                return -1
+            return FILLER_PRIORITY.index(item) if item in FILLER_PRIORITY else len(FILLER_PRIORITY)
+
+        candidates = sorted({i for i in pool if removable(i)}, key=rank)
+        drop = Counter()
+        for item in candidates:
+            take = min(excess, held[item] - keep[item])
+            if take > 0:
+                drop[item] = take
+                excess -= take
+            if not excess:
+                break
+        if excess:
+            raise FillError(f'{len(pool)} items for {slots} checks and only {len(pool) - slots - excess} '
+                            'filler items to remove: enable more checks or reduce the options.')
+        kept = []
+        for item in reversed(pool):   # the last copies go: the pool order stays stable
+            if drop[item]:
+                drop[item] -= 1
+            else:
+                kept.append(item)
+        pool = kept[::-1]
+    elif excess < 0:
+        pool.extend([GREEN_RUPEE] * -excess)
+    return pool
+
+
 # Junk reasons that still allow a source to receive filler.
 SAFE_JUNK = ('no_reliable_ap_match', 'remake_only_area')
 
@@ -108,6 +156,13 @@ def letter_removed(options):
     """With the Kakariko gate open the letter has no use left (only the gate guard
     reads it): it leaves the item pool and Zelda's gift is shuffled like the others."""
     return options.get('open_kakariko') == 'open'
+
+
+def ruto_letter_removed(options):
+    """With Zora's Fountain open King Zora already moved: Ruto's Letter can never be
+    delivered and is never a bottle (patching/world_openings.py). It leaves the pool
+    for an empty bottle, as OoTR/AP do (no Ruto bottle with the fountain open)."""
+    return options.get('zora_fountain') == 'open'
 
 
 # Child Hyrule Castle skipped (``skip_child_zelda``, patching/child_castle_skip.py):
@@ -429,20 +484,18 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             item = 'Rupees (5)'
         if item == 'Zeldas Letter' and letter_removed(options):
             item = POOL_FILLER
+        if item == 'Rutos Letter' and ruto_letter_removed(options):
+            item = 'Bottle'
         pool.append(item)
-    for ring in sorted(ring_keys.values()):
-        fillers = [i for i in pool if i not in relevant and not is_mapcompass(i) and not is_key(i)]
-        if not fillers:
-            raise FillError('Not enough filler locations for the key rings.')
-        pool.remove(min(fillers, key=lambda i: FILLER_PRIORITY.index(i) if i in FILLER_PRIORITY else 99))
-        pool.append(ring)
-    for soul in souls['items']:
-        fillers = [i for i in pool if i not in relevant and not is_mapcompass(i) and not is_key(i)]
-        if not fillers:
-            raise FillError('Not enough filler chests for every soul.')
-        victim = min(fillers, key=lambda i: FILLER_PRIORITY.index(i) if i in FILLER_PRIORITY else 99)
-        pool.remove(victim)
-        pool.append(soul)
+
+    def removable(item):
+        return item not in relevant and not is_mapcompass(item) and not is_key(item)
+
+    # Key rings and souls are added on top; balance_pool (below) takes green rupees
+    # (then other filler) out so that the pool matches the shuffled checks.
+    pool.extend(sorted(ring_keys.values()))
+    pool.extend(souls['items'])
+    pool = balance_pool(pool, len(shuffled), removable)
     pool = apply_item_pool(pool, options['item_pool_value'], relevant,
                            never_extra=set(ring_keys.values()) | set(souls['items']))
     # Starting inventory: each copy found in the pool is taken out of it (OoTR /
@@ -460,15 +513,6 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
         # The castle's gifts never play (patching/child_castle_skip.py): Zelda's Letter
         # and Lullaby leave their vanilla locations and are shuffled elsewhere.
         from oot_rando.patching.child_castle_skip import MOVED_ITEMS
-        reserved = Counter()
-
-        def take_filler(item, what):
-            fillers = [i for i in pool if i not in relevant and not is_mapcompass(i) and not is_key(i)
-                       and not (i == CASTLE_JUNK and reserved[i] >= pool.count(CASTLE_JUNK))]
-            if not fillers:
-                raise FillError(f'Not enough filler for {what}.')
-            victim = min(fillers, key=lambda i: FILLER_PRIORITY.index(i) if i in FILLER_PRIORITY else 99)
-            pool[pool.index(victim)] = item
 
         for location in CASTLE_GIFTS:
             base[location] = None
@@ -478,13 +522,15 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
                 # child-trade protection keeps their source out of the shuffle.
                 base[vname(gid)] = None
         for item in MOVED_ITEMS:
+            if item == 'Zeldas Letter' and letter_removed(options):
+                continue  # gate open: the letter left the pool, the skip must not add it back
             if item not in pool and item not in start_items:
-                take_filler(item, item + ' (skipped castle)')
+                pool.append(item)
         # Every shuffled castle check holds a green rupee, reserved in the pool.
         castle_junk = sorted(g for g in shuffled if skipped_castle_check(shuffled[g]))
-        for _ in castle_junk:
-            take_filler(CASTLE_JUNK, 'the skipped castle checks')
-            reserved[CASTLE_JUNK] += 1
+        pool.extend([CASTLE_JUNK] * len(castle_junk))
+    # Whatever was added or replaced above: exactly one item per shuffled check.
+    pool = balance_pool(pool, len(shuffled), removable, keep={CASTLE_JUNK: len(castle_junk)})
     logic_locations =sorted(g for g in shuffled if vname(g) in logic.virtual)
     restricted_dungeon = {}   # item -> (zone rule, dungeon)
     for item in set(pool):

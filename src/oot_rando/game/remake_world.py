@@ -397,6 +397,7 @@ def scan_maps(nup, dictionaries, members, progress=None):
                                 'hash': str(actor['Hash']), 'presence': actor.get('Presence'),
                                 'locks': room_locks.get(actor['Hash'], []),
                                 'mechanics': mechanics.get(actor['Hash'], [])})
+    merge_same_chests(groups)
     for variants in groups.values():
         for variant in variants:
             variant['behind_wall'] = _behind_wall(variant, walls[variant['folder']])
@@ -513,7 +514,25 @@ CHEST_RULE_EVENTS = {
     'GoronCity#14647422914070455120': 'GC Maze Rocks',           # GC_chest_4 (-47, 114, -5)
     'GoronCity#1176975953041865014': 'GC Maze Rocks',            # GC_chest_5 (-47, 114, -2)
     'GoronCity#3870071239709713434': 'GC Silver Rock Chest',     # GC_chest_6 (-43, 114, -8)
+    'HyruleField#17445672702269453589': 'LLR Ruins Hookshot Chest',  # LLR_chest_1 (-152, 162, 265)
 }
+
+# One chest placed in two maps. The Kokiri Forest map holds a copy of the Lost Woods
+# ledge around the bridge, chest included: KokiriForest#4349272251343787229 at
+# (-132.2, 123.9, -16.0) is LostWood#17479747339356189279 at (-49.4, 104.5, 71.9),
+# moved by the offset between the two maps (every prop around them matches). Shuffled
+# apart, the one chest in game had two items (KF_chest_1 and LW_chest_1, 20/11), one of
+# them under the rule of the storms grotto chest. The copy joins the group of the
+# chest it copies: one item, one opening flag, the Lost Woods rule (adult bean ledge).
+SAME_CHESTS = {'KokiriForest#4349272251343787229': 'LostWood#17479747339356189279'}
+
+
+def merge_same_chests(groups):
+    """Move the variants of each map copy (:data:`SAME_CHESTS`) into its original group."""
+    for copy_id, original_id in SAME_CHESTS.items():
+        if copy_id in groups and original_id in groups:
+            groups[original_id].extend(groups.pop(copy_id))
+    return groups
 
 
 def rule_members(entry):

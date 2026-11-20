@@ -157,6 +157,44 @@ KOKIRI_SCHEDULE_PREFIX = 'Component/AIScheduleParam/Npc_Kokiri_'
 KOKIRI_FLOW_PREFIX = 'Event/EventFlow/Npc_Kokiri_'
 
 
+# Saria herself is not only scheduled: the map module of the village Saria
+# (``KokiriForest_Child_Level_Npc_Kokiri_Saria_Child_a766``) deletes her (node 11,
+# ``Logic_Delete`` = node 14, an OR) once ``Goto_HyruleCastle_IsCompleted_Exp`` (node
+# 15) holds, as she then waits in the Sacred Forest Meadow. With the castle complete
+# from the start she was gone from the village at once, and only the meadow Saria
+# was left (20/11). Node 15 now reads the Deku Tree's end too. The other inputs of the
+# OR are kept: after the Deku Tree she stands on the bridge (node 13) until her
+# farewell. The bridge scene itself (``KokiriForest_ArriveLostWood``, module ``_ddcd``)
+# reads no castle state. Not validated in game.
+SARIA_MODULE = 'Logic/KokiriForest_Child_Level_Npc_Kokiri_Saria_Child_a766.logic.module.ainb'
+
+
+def saria_waits_for_deku_tree(raw):
+    """``_a766`` bytes: the village Saria leaves on the Deku Tree's end, not on Zelda's.
+
+    Returns (bytes, report)."""
+    import ainb
+    from oot_rando.patching.ap_mailbox import ainb_to_binary
+    document = ainb.AINB.from_binary(raw).as_dict()
+    nodes = {node['Node Index']: node for node in document['Nodes']}
+    gate, either, saria = nodes.get(15), nodes.get(14), nodes.get(11)
+    if not gate or not either or not saria or (gate['Name'], either['Name'], saria['Name']) != (
+            'HoldGameDataGetBoolExpSimple', 'OperateOR', 'ActorLogicNpc'):
+        raise ValueError('Unexpected Saria logic module.')
+    name = gate['Parameters']['Inputs']['String'][0]
+    delete = next(p for p in saria['Parameters']['Inputs']['Bool'] if p['Name'] == 'Logic_Delete')
+    sources = [(s['Node Index'], s['Output Index']) for s in either['Parameters']['Inputs']['Bool'][0]['Sources']]
+    if ((name['Name'], name['Default Value']) != ('GameDataNameBoolExp', CASTLE_DONE_STATE)
+            or (delete['Node Index'], delete['Output Index']) != (14, 1) or (15, 0) not in sources):
+        raise ValueError('Unexpected Saria castle state (already patched?).')
+    name['Default Value'] = DEKU_TREE_DONE_STATE
+    result = ainb_to_binary(document)
+    check = {n['Node Index']: n for n in ainb.AINB.from_binary(result).as_dict()['Nodes']}
+    if check[15]['Parameters']['Inputs']['String'][0]['Default Value'] != DEKU_TREE_DONE_STATE:
+        raise ValueError('Saria castle state wrongly rewritten.')
+    return result, {'module': SARIA_MODULE, 'before': CASTLE_DONE_STATE, 'after': DEKU_TREE_DONE_STATE}
+
+
 def kokiri_paths(members):
     """(schedules, flows) of the child Kokiri, Mido and Saria included."""
     schedules = sorted(p for p in members if p.startswith(KOKIRI_SCHEDULE_PREFIX) and '_Child' in p

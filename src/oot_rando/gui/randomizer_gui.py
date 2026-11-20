@@ -1528,7 +1528,7 @@ class Application:
             if not messagebox.askyesno(
                     'Regenerate the seed',
                     f'Seed "{settings.seed}" was made by an older version of the randomizer. Generate it '
-                    f'again with version {GENERATOR_VERSION}, with the same name and settings?\n\n'
+                    f'again with version {APP_VERSION}, with the same name and settings?\n\n'
                     'The current copy is moved to the archive (never deleted). The new version may '
                     'place items differently: a new game may be needed.'):
                 return
@@ -1580,10 +1580,11 @@ class Application:
                 'holds are changed.'):
             return
         markers = save_patch.migration_markers(manifest, previous)
+        values = save_patch.migration_values(manifest, previous)
         done, failed = [], []
         for path, _ in candidates:
             try:
-                done.append(save_patch.patch_save(path, manifest.get('start_values') or {}, markers))
+                done.append(save_patch.patch_save(path, values, markers))
             except save_patch.GameRunning as error:
                 failed.append(str(error))
                 break

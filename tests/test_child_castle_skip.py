@@ -101,6 +101,14 @@ class CastleLogic(unittest.TestCase):
         self.assertTrue(c.allowed('Zeldas Lullaby', SARIA))
         self.assertTrue(c.allowed('Zeldas Letter', SARIA))
 
+    def test_open_gate_keeps_the_removed_letter_out(self):
+        options = dict(rando_options.defaults(), skip_child_zelda=True, tokensanity='all',
+                       shuffle_quest_rewards=True, open_kakariko='open')
+        c = prepare(self.data, options, {}, [], 'castle-skip', True, extra=sources())
+        self.assertNotIn('Zeldas Letter', c.pool)
+        self.assertEqual(c.pool.count('Zeldas Lullaby'), 1)
+        self.assertEqual(len(c.pool), len(c.shuffled))
+
     def test_nothing_changes_without_the_option(self):
         options = dict(rando_options.defaults(), tokensanity='all', shuffle_quest_rewards=True)
         c = prepare(self.data, options, {}, [], 'castle-skip', True, extra=sources())
@@ -183,6 +191,24 @@ class CastleFlows(unittest.TestCase):
                      if getattr(e.data, 'params', None) is not None]
             self.assertNotIn(cs.CASTLE_DONE_STATE, names, path)
         self.assertGreater(talks, 5)
+
+    def test_village_saria_waits_for_the_deku_tree(self):
+        # 20/11: with Zelda met from the start the village Saria was deleted at once.
+        import ainb
+        raw = self.nup.read(self.nup.latest('romfs/' + cs.SARIA_MODULE))    # stored uncompressed
+        new, report = cs.saria_waits_for_deku_tree(raw)
+        before = ainb.AINB.from_binary(raw).as_dict()
+        after = ainb.AINB.from_binary(new).as_dict()
+        strings = lambda doc: [s['Default Value'] for n in doc['Nodes']
+                               for s in n.get('Parameters', {}).get('Inputs', {}).get('String', [])]
+        self.assertNotIn(cs.CASTLE_DONE_STATE, strings(after))
+        self.assertEqual(after['Nodes'][15]['Parameters']['Inputs']['String'][0]['Default Value'],
+                         cs.DEKU_TREE_DONE_STATE)
+        after['Nodes'][15]['Parameters']['Inputs']['String'][0]['Default Value'] = cs.CASTLE_DONE_STATE
+        self.assertEqual(after, before)    # nothing else changed
+        self.assertEqual(report['after'], cs.DEKU_TREE_DONE_STATE)
+        with self.assertRaises(ValueError):
+            cs.saria_waits_for_deku_tree(new)    # never twice
 
     def test_start_requests_copy_the_native_ones(self):
         steps = cs.start_step_params(self.read)

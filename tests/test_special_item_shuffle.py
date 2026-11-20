@@ -118,6 +118,39 @@ class NativeFlows(unittest.TestCase):
                                       _predecessors(chart, events[owned])], [(guard.name, 'case', 0)])
                     self.assertIsNotNone(guard.data.actor.v.params)
 
+    def test_era_change_drops_a_stored_unowned_master_sword(self):
+        _, _, chart, events, report = self.patched(2)
+        entry = chart.entry_points[0]
+        stored = events['RandoMasterSwordStored_EraStored']
+        owned = events['RandoMasterSwordOwned_EraStored']
+        clear = events['RandoMasterSwordClear_EraStored']
+        self.assertIs(entry.main_event.v, stored)
+        self.assertEqual(stored.data.actor_query.v.v, 'EventQueryIsGameDataString64')
+        self.assertEqual(stored.data.params.data, {
+            'GameDataName': 'PlayerStatus.AnotherEraEquipWeapon', 'Value': s.SWORD, 'Index': -1})
+        self.assertEqual((stored.data.cases[0].v.name, stored.data.cases[1].v.name),
+                         (owned.name, 'Event4'))
+        self.assertEqual(owned.data.params.data, {'Actor': s.SWORD, 'Num': 1})
+        self.assertEqual((owned.data.cases[0].v.name, owned.data.cases[1].v.name),
+                         ('Event4', clear.name))
+        self.assertEqual(clear.data.actor_action.v.v, 'EventTriggerSetGameDataString64')
+        self.assertEqual(clear.data.params.data, {
+            'GameDataName': 'PlayerStatus.AnotherEraEquipWeapon', 'Value': '', 'Index': -1})
+        self.assertEqual(clear.data.nxt.v.name, 'Event4')
+        self.assertIn(owned.name, report['guards'])
+
+    def test_later_arrival_creates_the_hand_sword_only_when_owned(self):
+        _, _, chart, events, report = self.patched(6)
+        guard = events['RandoMasterSwordOwned_LaterArrival']
+        self.assertEqual(guard.data.params.data, {'Actor': s.SWORD, 'Num': 1})
+        self.assertEqual(guard.data.cases[0].v.name, 'Event9')
+        self.assertNotIn(1, guard.data.cases)
+        self.assertEqual([(e.name, kind, key) for e, kind, key in _predecessors(chart, events['Event9'])],
+                         [(guard.name, 'case', 0)])
+        self.assertEqual([(e.name, kind, key) for e, kind, key in _predecessors(chart, guard)],
+                         [('Event37', 'case', 1)])
+        self.assertIn(guard.name, report['guards'])
+
     def test_unexpected_native_parameters_fail_closed(self):
         path = s.FLOWS[4]
         source = patch_event_params(self.read(path),

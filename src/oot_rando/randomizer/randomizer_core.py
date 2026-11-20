@@ -35,7 +35,7 @@ from oot_rando.formats.byml_writer import lift_actors, patch_strings
 from oot_rando.logic import rando_options
 from oot_rando.tracker import ingame_bundle, ingame_icons
 
-GENERATOR_VERSION = '0.12.0'
+GENERATOR_VERSION = '0.12.1'
 ADAPTER_VERSION = 'ap-glitchless-v5'   # v5: progressive tokens (every copy gives the next level)
 ADULT_MAP = MAP.replace('_Child_', '_Adult_')
 # The amiibo menu: given by Kaepora's first field arrival, now never played
@@ -334,11 +334,13 @@ def json_document(value):
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
-def generate(nup_path, output, settings, progress=None, save_seed_id=None, ingame_tracker=True):
+def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves_from=None, ingame_tracker=True):
     """Publish a complete new mod directory, never install or modify a game/save.
 
     ``save_seed_id``: an earlier seed of the same Archipelago slot whose saves this one
     continues (its save marker is kept); by default the seed binds its own saves.
+    ``saves_from``: oldest application version these saves may come from, when the seed
+    replaces an older one (tracker/save_patch.py, ``saves_from``).
     ``ingame_tracker``: ship the in-game tracker module and its data file with the seed."""
     settings.validate_supported()
     output = Path(output)
@@ -516,6 +518,10 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, ingam
                         story['child_castle_kokiri'][path] = changed
                 if not story['child_castle_kokiri']:
                     raise ValueError('No Kokiri state waiting for Zelda found.')
+                # The village Saria is not deleted at once by her map module.
+                saria = child_castle_skip.SARIA_MODULE
+                extra_raw[saria], story['child_castle_saria'] = child_castle_skip.saria_waits_for_deku_tree(
+                    extra_raw.get(saria) or read(saria))
             # First arrivals (area presentations) never move a quest back.
             arrival_flows, story['first_arrivals'] = story_fixes.keep_first_arrivals_forward(
                 lambda path: extra_raw.get(path) or decompress(read(path), d),
@@ -551,6 +557,15 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, ingam
             # Sheik in Kakariko: the burning scene on the three medallions, not the three sages.
             extra_raw[GAMEDATA], story['kakariko_burning_medallions'] = story_fixes.kakariko_burning_on_medallions(
                 extra_raw.get(GAMEDATA) or decompress(read(GAMEDATA), d))
+            # The temple Sheik no longer stands in front of the pedestal between his scenes.
+            extra_raw[GAMEDATA], story['sheik_temple'] = story_fixes.sheik_temple_expression(extra_raw[GAMEDATA])
+            extra_raw[story_fixes.SHEIK_TEMPLE_MODULE], _ = story_fixes.sheik_leaves_the_pedestal(
+                extra_raw.get(story_fixes.SHEIK_TEMPLE_MODULE) or read(story_fixes.SHEIK_TEMPLE_MODULE))
+            # Scenes no longer required: the Water Temple gate (Serenade), the Door of Time
+            # (Zelda's escape) and the rainbow bridge (Zelda's revelation).
+            extra_raw[GAMEDATA], story['scene_conditions'] = story_fixes.scene_expressions(extra_raw[GAMEDATA])
+            for path, key, fix in story_fixes.scene_module_fixes():
+                extra_raw[path], story[key] = fix(extra_raw.get(path) or read(path))
             # Zelda's escape on the three stones, checked at every item get.
             extra_raw[ACTION_GUIDE_FLOW], story['zelda_escape_item_get'] = story_fixes.zelda_escape_on_item_get(
                 extra_raw[ACTION_GUIDE_FLOW])
@@ -756,8 +771,9 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, ingam
             cutscenes, skips['cutscenes'] = cutscene_files(read)
             files.update(cutscenes)
 
+        from oot_rando import __version__ as app_version
         manifest = {'schema_version': 1, 'generator_version': GENERATOR_VERSION,
-                    'adapter_version': ADAPTER_VERSION, 'seed_id': settings_identity(settings),
+                    'adapter_version': ADAPTER_VERSION, 'app_version': app_version, 'seed_id': settings_identity(settings),
                     'title_id': TITLE, 'build_id': BUILD, 'settings': settings.to_dict(),
                     'scope': 'Four Kokiri chests, ordinary chests, explicit drops of the selected pots, bushes and rocks, and QoL. Progression and ambiguous sources kept.',
                     'files': {p: {'size': len(v), 'sha256': sha256(v)} for p, v in sorted(files.items())},
@@ -767,6 +783,8 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, ingam
                     'validation': 'Static checks done; this composed seed is still to be tested in game.'}
         if save_seed_id:
             manifest['save_seed_id'] = save_seed_id
+        if saves_from:
+            manifest['saves_from'] = str(saves_from)
         if start_values:
             # Values a game started before a fix never received (tracker/save_patch.py).
             manifest['start_values'] = dict(sorted(start_values.items()))

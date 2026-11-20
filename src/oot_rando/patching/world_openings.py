@@ -131,7 +131,13 @@ def pedestal_before_sages(raw):
     The child pulls the sword (event request, node 0) when he acts on the pedestal
     and ``DoorOfTime`` is at ``Step06``; once ``AllSage`` has started a second request
     (node 3) takes over. The first one now runs while ``AllSage`` is before ``Ready``
-    instead, so it works at any Door of Time step and both never run together."""
+    instead, so it works at any Door of Time step and both never run together.
+
+    A node only computes the outputs flagged ``Is Output`` (every link of the vanilla
+    modules reads one): node 5 flagged ``IsAfter`` alone, so ``IsBefore`` stayed false
+    and the sword could still not be pulled before the stones (20/11). It is flagged
+    too (several flagged outputs on one node are common in vanilla), and the gate's
+    ``Queries`` and plug follow its new source. Not validated in game."""
     def edit(nodes):
         gate = _node(nodes, 1, 'OperateAND')
         _node(nodes, 2, 'HoldChallengeCurrentStepCheckOrder')
@@ -141,29 +147,35 @@ def pedestal_before_sages(raw):
         sources = _bool_input(gate, 'BoolMulti')['Sources']
         if [(s['Node Index'], s['Output Index']) for s in sources] != [(2, 2), (6, 2)]:
             raise ValueError('Unexpected pedestal module wiring')
+        outputs = sages['Parameters']['Outputs']['Bool']
+        if [o['Name'] for o in outputs] != ['IsAfter', 'IsBefore', 'IsEqual']:
+            raise ValueError('Unexpected pedestal module: AllSage outputs')
+        plugs = gate.get('Plugs', {}).get('Generic', [])
+        if [(p['Node Index'], p['Name']) for p in plugs] != [(2, 'BoolMulti')] or gate.get('Queries') != [2, 6]:
+            raise ValueError('Unexpected pedestal module: gate plugs')
         sources[0].update({'Node Index': 5, 'Output Index': 1})    # AllSage IsBefore Ready
+        outputs[1]['Is Output'] = True
+        # The node's query list and plug name the nodes it reads: node 5, no longer 2.
+        plugs[0]['Node Index'] = 5
+        gate['Queries'] = [5, 6]
     return _ainb_edit(raw, edit)
 
 
 def door_of_time_open(read_flow, gamedata_raw, challenges_raw, read_module):
     """The Door of Time open from the start.
 
-    The door and the first sword pull are freed in their logic modules. Pulling the
-    sword before the quest reached the door (Rauru's scenes, ``DoorOfTime`` Event93)
-    would complete ``DoorOfTime`` and drop Zelda's escape (the Ocarina of Time and the
-    Song of Time): that request now only runs once the quest is past ``Step05``. The
-    quest itself is not moved. Returns (gamedata bytes, {path: bytes}, report)."""
-    steps = quest_guard.challenge_steps(challenges_raw)
-    flow, report = quest_guard.guard_requests(read_flow(DOOR_FLOW), DOOR_QUEST, steps, ['Complete'],
-                                              DOOR_COMPLETE_ONLY_AFTER, skip_when=False,
-                                              gamedata_raw=gamedata_raw, prefix=DOOR_PREFIX)
-    if len(report['guarded']) != 1:
-        raise ValueError('Door of Time: expected one completion request')
-    files = {DOOR_FLOW: flow,
-             DOOR_MODULE: door_always_open(read_module(DOOR_MODULE)),
-             PEDESTAL_MODULE: pedestal_before_sages(read_module(PEDESTAL_MODULE))}
-    return gamedata_raw, files, {'modules': [DOOR_MODULE, PEDESTAL_MODULE], 'expression': report['expression'],
-                                 'guarded': {DOOR_FLOW: report['guarded']}}
+    Every seed already lets the Song of Time open the door before Zelda's escape, frees
+    the first sword pull and keeps ``DoorOfTime`` from completing before ``Step05``
+    (:func:`oot_rando.patching.story_fixes.door_song_before_escape`, applied before the
+    openings). Here the door module is freed too and a new game starts with the door
+    saved as opened (``Market_Child_TimeTempleDoor_Opened``): the song scene is not
+    asked for, and ``Step06`` follows the escape at once. Returns (gamedata bytes,
+    {path: bytes}, report)."""
+    from oot_rando.patching.story_fixes import DOOR_OPENED
+    values = {DOOR_OPENED: True}
+    gamedata = game_defaults.set_new_game_defaults(gamedata_raw, values)
+    files = {DOOR_MODULE: door_always_open(read_module(DOOR_MODULE))}
+    return gamedata, files, {'modules': [DOOR_MODULE], 'defaults': values, 'guarded': {}}
 
 
 CARPENTERS_HELPED = 'GerudoFortress_Meet_FourCarpenter_NumOfCarpenterHelped'

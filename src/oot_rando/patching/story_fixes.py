@@ -672,6 +672,92 @@ PEDESTAL_MODULE = 'Logic/Market_Adult_Prefab_89da.logic.module.ainb'
 PEDESTAL_BEFORE = 'SageOfForest_IsCompleted_Exp'
 PEDESTAL_GATE = 'AllSage_IsAfter_Ready_Exp'
 
+# The adult Sheik of the Temple of Time (``Market_Adult_Prefab_7f43``, ``ActorLogicNpc``)
+# stands 1.4 m from the sword (Market_Adult_Static, (139.0, 106.4, -34.0) for the sword's
+# (137.6, 106.6, -34.0)) until he teaches the Prelude of Light (``Logic_Delete`` = Bool
+# ``Market_Adult_GetLightPrelude``). In vanilla the put-in prompt only came after the
+# Forest Temple, and he never stood beside it; with the prompt from the first adult
+# arrival, he took its place and no prompt showed (20/11). He now stays only for his
+# two scenes: the first adult arrival (AllSage before ``Ready``) and the Prelude (Forest
+# Medallion held, Prelude not taught). Node 2, an unused BoolExp reader of the module,
+# reads that condition and deletes him; node 1 is left unread. Not validated in game.
+SHEIK_TEMPLE_MODULE = 'Logic/Market_Adult_Prefab_7f43.logic.module.ainb'
+SHEIK_TEMPLE_PRELUDE = 'Market_Adult_GetLightPrelude'
+SHEIK_TEMPLE_GONE = 'RandoSheikTemple_Gone'
+
+
+def _sheik_temple_program():
+    """Postfix BoolExp: Prelude taught OR (AllSage after Ready AND NOT Forest Medallion)."""
+    from oot_rando.patching.soul_adapter import murmur3
+    return [[0, murmur3(SHEIK_TEMPLE_PRELUDE)], [10, murmur3(PEDESTAL_GATE)],
+            [0, murmur3(PRELUDE_MEDAL)], [5], [3], [4]]
+
+
+def sheik_temple_expression(gamedata_raw):
+    """GameData with the BoolExp :data:`SHEIK_TEMPLE_GONE`. Returns (bytes, report)."""
+    from oot_rando.formats import byml_codec
+    from oot_rando.patching.soul_adapter import murmur3
+    document = byml_codec.load(gamedata_raw)
+    data = document['root']['Data']
+    known = {int(e['Hash']) for entries in data.values() for e in entries if 'Hash' in e}
+    if murmur3(SHEIK_TEMPLE_GONE) in known:
+        raise ValueError('Temple Sheik condition already present.')
+    bools = {int(e['Hash']) for e in data['Bool']}
+    expressions = {int(e['Hash']) for e in data['BoolExp']}
+    if (murmur3(SHEIK_TEMPLE_PRELUDE) not in bools or murmur3(PRELUDE_MEDAL) not in bools
+            or murmur3(PEDESTAL_GATE) not in expressions):
+        raise ValueError('Temple Sheik condition: flag missing from the game data.')
+    data['BoolExp'].append({'Hash': byml_codec.U32(murmur3(SHEIK_TEMPLE_GONE)), 'ResetTypeValue': 0,
+                            'SaveFileIndex': -1,
+                            'Values': [[byml_codec.U64(v) for v in step] for step in _sheik_temple_program()]})
+    return byml_codec.dump(document), {'expression': SHEIK_TEMPLE_GONE, 'prelude': SHEIK_TEMPLE_PRELUDE,
+                                       'gate': PEDESTAL_GATE, 'medallion': PRELUDE_MEDAL}
+
+
+def sheik_temple_applied(gamedata_raw):
+    from oot_rando.formats import byml_codec
+    from oot_rando.patching.soul_adapter import murmur3
+    entries = {int(e['Hash']): e for e in byml_codec.load(gamedata_raw)['root']['Data']['BoolExp']}
+    entry = entries.get(murmur3(SHEIK_TEMPLE_GONE))
+    return entry is not None and [[int(v) for v in s] for s in entry['Values']] == _sheik_temple_program()
+
+
+def sheik_leaves_the_pedestal(raw):
+    """``Market_Adult_Prefab_7f43``: the temple Sheik deleted on :data:`SHEIK_TEMPLE_GONE`.
+
+    Returns (bytes, report)."""
+    import copy
+    import ainb
+    from oot_rando.patching.ap_mailbox import ainb_to_binary
+    document = ainb.AINB.from_binary(raw).as_dict()
+    nodes = document['Nodes']
+    if ([n['Name'] for n in nodes] != ['ActorLogicNpc', 'HoldGameDataGetBoolSimple', 'HoldGameDataGetBoolExpSimple']
+            or ainb_to_binary(copy.deepcopy(document)) != raw):
+        raise ValueError('Unexpected temple Sheik logic module.')
+    npc, prelude, reader = nodes
+    delete = [p for p in npc['Parameters']['Inputs']['Bool'] if p['Name'] == 'Logic_Delete']
+    name = reader['Parameters']['Inputs']['String'][0]
+    if (len(delete) != 1 or (delete[0]['Node Index'], delete[0]['Output Index']) != (1, 0)
+            or prelude['Parameters']['Inputs']['String'][0]['Default Value'] != SHEIK_TEMPLE_PRELUDE
+            or (name['Name'], name['Default Value']) != ('GameDataNameBoolExp', PEDESTAL_GATE)
+            or reader['Parameters']['Outputs']['Bool'] != [{'Name': 'Bool', 'Is Output': False}]
+            or npc.get('Queries') != [1] or npc.get('Plugs') != {'Generic': [{'Node Index': 1, 'Name': 'Logic_Delete'}]}):
+        raise ValueError('Unexpected temple Sheik wiring (already patched?).')
+    expected = copy.deepcopy(document)
+    npc, prelude, reader = expected['Nodes']
+    next(p for p in npc['Parameters']['Inputs']['Bool'] if p['Name'] == 'Logic_Delete')['Node Index'] = 2
+    npc['Queries'] = [2]
+    npc['Plugs'] = {'Generic': [{'Node Index': 2, 'Name': 'Logic_Delete'}]}
+    # A node only computes its flagged outputs: the reader is now read, node 1 no longer.
+    reader['Parameters']['Inputs']['String'][0]['Default Value'] = SHEIK_TEMPLE_GONE
+    reader['Parameters']['Outputs']['Bool'][0]['Is Output'] = True
+    prelude['Parameters']['Outputs']['Bool'][0]['Is Output'] = False
+    result = ainb_to_binary(copy.deepcopy(expected))
+    if ainb.AINB.from_binary(result).as_dict() != expected:
+        raise ValueError('Temple Sheik module wrongly rewritten.')
+    return result, {'module': SHEIK_TEMPLE_MODULE, 'delete': SHEIK_TEMPLE_GONE}
+
+
 # Zelda's revelation: inventory, independent of which bosses granted the rewards.
 LIGHT_ARROWS_MODULE = 'Logic/Market_Adult_Prefab_c668.logic.module.ainb'
 LIGHT_ARROWS_MEDALS = ('IsGet.Item_Medal_Shadow', 'IsGet.Item_Medal_Spirit')
@@ -1223,6 +1309,259 @@ def link_goron_gives_tunic(raw):
     return result, {'flow': LINK_GORON_FLOW, 'entry': LINK_GORON_TALK, 'gift': GORON_TUNIC_GIFT}
 
 
+
+# --- Three scenes no longer required (21/11) ---------------------------------------
+# Each lock below waited for a cutscene the seed may leave for later; the scene itself
+# still plays when its own trigger is met, and never moves its quest back.
+#
+# * **Water Temple gate.** The lake gate (``HyruleField_LakeHylia_Common_Prefab_6a9d``,
+#   ``Obj_LakeHrl_SwitchShutter_A_01``) opened only once ``SageOfWater`` was past
+#   ``Step05`` (Sheik's Serenade in the Ice Cavern, then the temple arrival) or after its
+#   Iron Boots switch scene (``Dm_WaterTemple_0000``). Node 3 now reads
+#   :data:`WATER_GATE_OPEN` (that step OR adult Link): the gate opens for adult Link and
+#   stays open (node 16 saves the scene as played). The Serenade is still given by the
+#   Iron Boots chest (``GetEventName`` ``SageOfWater_MelodyGet_Water``); its Step04 /
+#   Step05 requests are skipped once the quest is past Step05 (the temple entered).
+# * **Door of Time.** The Song of Time at the door (``DoorOfTime_OpenDoor``) only opened
+#   it once ``DoorOfTime`` was past ``Step04`` (Zelda's escape and the Ocarina of Time
+#   seen, Event60). The song now opens it at any step (scene ``Dm_TimeTemple_0010``,
+#   ``Market_Child_TimeTempleDoor_Opened``); ``Step06`` is still only requested past
+#   ``Step04``, so the escape plays later, and once its ``Step05`` comes with the door
+#   already open ``Step06`` follows at once. The door module (``Market_Common_f252``)
+#   also reads the saved flag, the first sword pull no longer waits for ``Step06``
+#   (:func:`oot_rando.patching.world_openings.pedestal_before_sages`) and the quest only
+#   completes past ``Step05`` (the escape is not dropped).
+# * **Rainbow bridge.** The bridge scene area (``GanonCastle_Level_Field_00_Prefab_14ba``)
+#   existed only while ``Defeat_Ganon`` stood at ``Step01``, set by Zelda's revelation
+#   (``AllSage`` Event11, Light Arrows). Node 4 now reads :data:`BRIDGE_READY` (vanilla
+#   OR the Shadow and Spirit Medallions with the bridge never shown); Zelda's revelation
+#   seen afterwards no longer moves the quest back to ``Step01``.
+#
+# Not validated in game.
+WATER_GATE_MODULE = 'Logic/HyruleField_LakeHylia_Common_Prefab_6a9d.logic.module.ainb'
+WATER_GATE_OPEN = 'RandoWaterTempleGate_Open'
+WATER_GATE_STEP = 'SageOfWater_IsAfter_Step05_Exp'
+CHILDHOOD = 'Sequence_IsChildhood'
+SAGE_OF_WATER_FLOW = 'Event/EventFlow/SageOfWater.bfevfl.zs'
+SAGE_OF_WATER_STEPS = ('Ready', 'Step00', 'Step01', 'Step03', 'Step04', 'Step05', 'Step06', 'Step07',
+                       'Step07_00', 'Step07_1', 'Step07_1_Safety', 'Step07_2', 'Step08')
+SERENADE_STEPS = ('Step04', 'Step05')
+DOOR_MODULE = 'Logic/Market_Common_f252.logic.module.ainb'
+DOOR_OPENED = 'Market_Child_TimeTempleDoor_Opened'
+DOOR_SONG_STEP = 'DoorOfTime_IsAfter_Step04_Exp'
+DOOR_SONG_PREFIX = 'RandoDoorSongStep06_'
+DOOR_COMPLETE_ONLY_AFTER = 'DoorOfTime_IsAfter_Step05_Exp'
+DOOR_COMPLETE_PREFIX = 'RandoDoorComplete_'
+BRIDGE_MODULE = 'Logic/GanonCastle_Level_Field_00_Prefab_14ba.logic.module.ainb'
+BRIDGE_READY = 'RandoGanonBridge_Ready'
+BRIDGE_VANILLA = 'Defeat_Ganon_IsAfter_Ready_Exp'
+BRIDGE_PLAYED = 'HavePlayedEvent.GanonCastle_Adult_Field_Rainbow'
+BRIDGE_MEDALS = ('IsGet.Item_Medal_Shadow', 'IsGet.Item_Medal_Spirit')
+ALL_SAGE_FLOW = 'Event/EventFlow/AllSage.bfevfl.zs'
+DEFEAT_GANON_STEPS = ('Ready', 'Step01', 'Step02', 'Step03', 'Step04', 'Step05', 'Step06', 'Step07',
+                      'Step08', 'Step09')
+GANON_PAST_REVELATION = 'Defeat_Ganon_IsAfter_Step01_Exp'
+
+
+def _scene_programs():
+    """{BoolExp name: postfix program}; push Bool 0 / BoolExp 10, AND 3, OR 4, NOT 5."""
+    from oot_rando.patching.soul_adapter import murmur3
+    medals = [[0, murmur3(name)] for name in BRIDGE_MEDALS] + [[3]]
+    return {
+        WATER_GATE_OPEN: [[10, murmur3(WATER_GATE_STEP)], [0, murmur3(CHILDHOOD)], [5], [4]],
+        BRIDGE_READY: [[10, murmur3(BRIDGE_VANILLA)], *medals, [0, murmur3(BRIDGE_PLAYED)], [5], [3], [4]],
+    }
+
+
+def scene_expressions(gamedata_raw):
+    """GameData with :data:`WATER_GATE_OPEN` and :data:`BRIDGE_READY`. Returns (bytes, report)."""
+    from oot_rando.formats import byml_codec
+    from oot_rando.patching.soul_adapter import murmur3
+    document = byml_codec.load(gamedata_raw)
+    data = document['root']['Data']
+    known = {int(e['Hash']) for entries in data.values() for e in entries if 'Hash' in e}
+    bools = {int(e['Hash']) for e in data['Bool']}
+    expressions = {int(e['Hash']) for e in data['BoolExp']}
+    if any(murmur3(name) in known for name in _scene_programs()):
+        raise ValueError('Scene conditions already present.')
+    if (any(murmur3(name) not in bools for name in (CHILDHOOD, BRIDGE_PLAYED, *BRIDGE_MEDALS))
+            or any(murmur3(name) not in expressions for name in (WATER_GATE_STEP, BRIDGE_VANILLA))):
+        raise ValueError('Scene conditions: flag missing from the game data.')
+    for name, program in _scene_programs().items():
+        data['BoolExp'].append({'Hash': byml_codec.U32(murmur3(name)), 'ResetTypeValue': 0, 'SaveFileIndex': -1,
+                                'Values': [[byml_codec.U64(v) for v in step] for step in program]})
+    return byml_codec.dump(document), {'expressions': list(_scene_programs())}
+
+
+def scene_expressions_applied(gamedata_raw):
+    from oot_rando.formats import byml_codec
+    from oot_rando.patching.soul_adapter import murmur3
+    entries = {int(e['Hash']): e for e in byml_codec.load(gamedata_raw)['root']['Data']['BoolExp']}
+    return all(murmur3(name) in entries and [[int(v) for v in s] for s in entries[murmur3(name)]['Values']] == program
+               for name, program in _scene_programs().items())
+
+
+def _module_edit(raw, check, edit):
+    """AINB ``raw`` rewritten by ``edit(nodes)`` once ``check(nodes)`` passed; re-read exactly."""
+    import copy
+    import ainb
+    from oot_rando.patching.ap_mailbox import ainb_to_binary
+    document = ainb.AINB.from_binary(raw).as_dict()
+    check(document['Nodes'])
+    expected = copy.deepcopy(document)
+    edit(expected['Nodes'])
+    result = ainb_to_binary(copy.deepcopy(expected))
+    if ainb.AINB.from_binary(result).as_dict() != expected:
+        raise ValueError('Logic module wrongly rewritten.')
+    return result
+
+
+def _links_to(nodes, index):
+    """[(node, input name, output index)] of every input reading node ``index``."""
+    found = []
+    for node in nodes:
+        for inputs in node.get('Parameters', {}).get('Inputs', {}).values():
+            for entry in inputs:
+                for source in entry.get('Sources') or [entry]:
+                    if source.get('Node Index') == index:
+                        found.append((node['Node Index'], entry['Name'], source.get('Output Index')))
+    return found
+
+
+def water_gate_for_adult(raw):
+    """``HyruleField_LakeHylia_Common_Prefab_6a9d``: node 3 reads :data:`WATER_GATE_OPEN`.
+
+    Returns (bytes, report)."""
+    def check(nodes):
+        step = nodes[3] if len(nodes) > 7 else {}
+        strings = {p['Name']: p['Default Value']
+                   for p in step.get('Parameters', {}).get('Inputs', {}).get('String', [])}
+        if (step.get('Name') != 'HoldChallengeCurrentStepCheckOrder'
+                or strings != {'ChallengeName': 'Work/Challenge/SageOfWater.game__challenge__Challenge.gyml',
+                               'ChallengeStepName': 'Step05'}
+                or nodes[7].get('Name') != 'ActorLogicGateDoor'):
+            raise ValueError('Unexpected Water Temple gate module (already patched?).')
+        if sorted(_links_to(nodes, 3)) != [(2, 'BoolMulti', 0), (16, 'IsDrive', 0)]:
+            raise ValueError('Unexpected Water Temple gate wiring.')
+
+    def edit(nodes):
+        nodes[3]['Name'] = 'HoldGameDataGetBoolExpSimple'
+        nodes[3]['Parameters'] = {
+            'Inputs': {'String': [{'Name': 'GameDataNameBoolExp', 'Default Value': WATER_GATE_OPEN,
+                                   'Node Index': -1, 'Output Index': 0, 'Flags': ['Uses Default']}]},
+            'Outputs': {'Bool': [{'Name': 'Bool', 'Is Output': True}]}}
+    return _module_edit(raw, check, edit), {'module': WATER_GATE_MODULE, 'gate': WATER_GATE_OPEN}
+
+
+def serenade_keeps_water_temple(raw):
+    """``SageOfWater``: the Serenade's Step04 / Step05 skipped once past Step05. Returns (bytes, report)."""
+    from oot_rando.patching import quest_guard
+    result, report = quest_guard.guard_requests(raw, 'SageOfWater', {'SageOfWater': list(SAGE_OF_WATER_STEPS)},
+                                                SERENADE_STEPS, WATER_GATE_STEP, prefix='RandoWaterForward_')
+    if len(report['guarded']) < 2:
+        raise ValueError('Serenade requests not found.')
+    return result, report
+
+
+def door_opens_on_saved_flag(raw):
+    """``Market_Common_f252``: the door's OR also reads :data:`DOOR_OPENED`. Returns (bytes, report)."""
+    def check(nodes):
+        if len(nodes) < 9:
+            raise ValueError('Unexpected Door of Time module.')
+        gate, flag = nodes[5], nodes[6]
+        sources = [(s['Node Index'], s['Output Index']) for s in gate['Parameters']['Inputs']['Bool'][0]['Sources']]
+        if (gate.get('Name') != 'OperateORFixInputTrue' or sources != [(4, 1), (8, 0), (8, 2)]
+                or gate.get('Queries') != [4, 8, 8]
+                or flag['Parameters']['Inputs']['String'][0]['Default Value'] != DOOR_OPENED
+                or flag['Parameters']['Outputs']['Bool'] != [{'Name': 'Bool', 'Is Output': False}]):
+            raise ValueError('Unexpected Door of Time module (already patched?).')
+
+    def edit(nodes):
+        gate, flag = nodes[5], nodes[6]
+        gate['Parameters']['Inputs']['Bool'][0]['Sources'].append({'Node Index': 6, 'Output Index': 0, 'Flags': []})
+        gate['Queries'] = [4, 8, 8, 6]
+        # A node only computes its flagged outputs.
+        flag['Parameters']['Outputs']['Bool'][0]['Is Output'] = True
+    return _module_edit(raw, check, edit), {'module': DOOR_MODULE, 'flag': DOOR_OPENED}
+
+
+def door_song_before_escape(raw):
+    """``DoorOfTime``: the Song of Time opens the door before the escape (see above).
+
+    Returns (bytes, report)."""
+    from evfl.util import make_index
+    from oot_rando.patching import quest_guard
+    flow = _Chart(raw)
+    entries = {e.name: e for e in flow.chart.entry_points}
+    gate, opened = flow.event('Event60', 'SwitchEvent'), flow.event('Event69', 'SwitchEvent')
+    step06, step05 = flow.event('Event57', 'ActionEvent'), flow.event('Event14', 'ActionEvent')
+    if (getattr(entries.get('DoorOfTime_OpenDoor'), 'main_event', None) is None
+            or _params(gate) != {'GameDataName': DOOR_SONG_STEP} or _case(gate, 0) is not opened
+            or _case(gate, 1) is not None or _params(opened).get('GameDataName') != DOOR_OPENED
+            or _params(step06).get('StepName') != 'Step06' or _params(step05).get('StepName') != 'Step05'
+            or getattr(step05.data.nxt, 'v', None) is None):
+        raise ValueError('Unexpected Door of Time song flow (already patched?).')
+    gate.data.cases[1] = make_index(opened)
+    after = step05.data.nxt.v
+    follow = flow.action('RandoDoorOpenedStep06', 'ChallengeSystemActor', 'EventExecuteProgressChallengeStep',
+                         _params(step06), after)
+    check = flow.switch('RandoDoorOpenedBefore', 'EventQueryIsGameDataBool',
+                        {'GameDataName': DOOR_OPENED, 'Index': -1}, follow, after)
+    step05.data.nxt = make_index(check)
+    result, events = flow.write()
+    if (sorted(events['Event60'].data.cases) != [0, 1] or events['Event14'].data.nxt.v.name != 'RandoDoorOpenedBefore'
+            or events['RandoDoorOpenedStep06'].data.nxt.v.name != after.name):
+        raise ValueError('Door of Time song wrongly chained.')
+    steps = {'DoorOfTime': list(DOOR_STEPS)}
+    result, song = quest_guard.guard_requests(result, 'DoorOfTime', steps, ['Step06'], DOOR_SONG_STEP,
+                                              skip_when=False, prefix=DOOR_SONG_PREFIX)
+    result, complete = quest_guard.guard_requests(result, 'DoorOfTime', steps, ['Complete'],
+                                                  DOOR_COMPLETE_ONLY_AFTER, skip_when=False,
+                                                  prefix=DOOR_COMPLETE_PREFIX)
+    if len(song['guarded']) != 2 or len(complete['guarded']) != 1:
+        raise ValueError('Door of Time song: unexpected step requests.')
+    return result, {'flow': DOOR_FLOW, 'flag': DOOR_OPENED, 'step06_after': DOOR_SONG_STEP,
+                    'complete_after': DOOR_COMPLETE_ONLY_AFTER}
+
+
+def bridge_on_medallions(raw):
+    """``GanonCastle_Level_Field_00_Prefab_14ba``: node 4 reads :data:`BRIDGE_READY`. Returns (bytes, report)."""
+    def check(nodes):
+        reader = nodes[4] if len(nodes) > 5 else {}
+        name = (reader.get('Parameters', {}).get('Inputs', {}).get('String') or [{}])[0]
+        gate = nodes[5]['Parameters']['Inputs']['Bool'][0].get('Sources', []) if len(nodes) > 5 else []
+        if (reader.get('Name') != 'HoldGameDataGetBoolExpSimple'
+                or (name.get('Name'), name.get('Default Value')) != ('GameDataNameBoolExp', BRIDGE_VANILLA)
+                or [(s['Node Index'], s['Output Index']) for s in gate] != [(4, 0), (6, 0)]):
+            raise ValueError('Unexpected rainbow bridge module (already patched?).')
+
+    def edit(nodes):
+        nodes[4]['Parameters']['Inputs']['String'][0]['Default Value'] = BRIDGE_READY
+    return _module_edit(raw, check, edit), {'module': BRIDGE_MODULE, 'ready': BRIDGE_READY}
+
+
+def revelation_keeps_ganon_quest(raw):
+    """``AllSage``: Zelda's revelation sets ``Defeat_Ganon`` Step01 only while not past it.
+
+    Returns (bytes, report)."""
+    from oot_rando.patching import quest_guard
+    result, report = quest_guard.guard_requests(raw, 'Defeat_Ganon', {'Defeat_Ganon': list(DEFEAT_GANON_STEPS)},
+                                                ('Step01',), GANON_PAST_REVELATION, prefix='RandoGanonForward_')
+    if len(report['guarded']) != 1:
+        raise ValueError('Zelda revelation: expected one Defeat_Ganon request.')
+    return result, report
+
+
+def scene_module_fixes():
+    """((logic module path, report key, fix(raw) -> (bytes, report)), ...) of these fixes."""
+    from oot_rando.patching.world_openings import PEDESTAL_MODULE as CHILD_PEDESTAL, pedestal_before_sages
+    return ((WATER_GATE_MODULE, 'water_gate', water_gate_for_adult),
+            (DOOR_MODULE, 'door_saved_flag', door_opens_on_saved_flag),
+            (CHILD_PEDESTAL, 'first_pull_any_door_step',
+             lambda raw: (pedestal_before_sages(raw), {'module': CHILD_PEDESTAL})),
+            (BRIDGE_MODULE, 'bridge_medallions', bridge_on_medallions))
+
+
 FLOW_FIXES = (
     *OWL_FLOW_FIXES,
     ('Event/EventFlow/AllSage.bfevfl.zs', 'prelude_quest_forward', prelude_keeps_later_sage_progress),
@@ -1241,4 +1580,7 @@ FLOW_FIXES = (
     (DAMPE_FLOW, 'dampe_first_race', dampe_first_race_until_prize),
     (SARIA_SONG_FLOW, 'saria_song_forward', door_of_time_forward),
     (LINK_GORON_FLOW, 'link_goron_tunic', link_goron_gives_tunic),
+    (SAGE_OF_WATER_FLOW, 'serenade_forward', serenade_keeps_water_temple),
+    (DOOR_FLOW, 'door_song_before_escape', door_song_before_escape),
+    (ALL_SAGE_FLOW, 'revelation_forward', revelation_keeps_ganon_quest),
 )

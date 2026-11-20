@@ -193,28 +193,94 @@ def pending_changes(path, start_values, markers):
     return [name for name, _, _ in changes]
 
 
+# Save fixes that are not start values, oldest first: (application version, fix), where
+# ``fix(manifest)`` returns {name: bool}. A save is given every fix of a version newer than
+# the oldest application its game may come from (:func:`saves_from`), in order, a later one
+# winning: a player who skipped several versions, or regenerated without updating the saves,
+# still gets them all. Start values need no entry: the opening of the new seed writes all of
+# them (every earlier fix included), so they are always applied.
+SAVE_FIXES = ()
+
+# ``saves_from`` of a seed replacing one made before 0.7.3 (no version recorded): every fix.
+BEFORE_RECORDED_VERSIONS = '0.0.0'
+
+
+def saves_from(manifest):
+    """Oldest application version the saves of this seed may have been started with, or None
+    when unknown (every fix may be missing).
+
+    A regenerated seed keeps the origin of the seed it replaced (``saves_from`` of its
+    manifest, :func:`oot_rando.randomizer.randomizer_services.generate_in_mods`): a save
+    is never assumed to hold the fixes of a version whose update the player declined.
+    Otherwise the application that made the seed (``app_version``, none before 0.7.3)."""
+    if not isinstance(manifest, dict):
+        return None
+    return manifest.get('saves_from') or manifest.get('app_version')
+
+
+def migration_values(manifest, previous=None):
+    """Booleans to set in the saves of ``manifest``'s seed (start values and :data:`SAVE_FIXES`).
+
+    The fixes the saves may lack are those newer than :func:`saves_from` of the new seed
+    when it recorded the origin of the game it continues, else of ``previous`` (manifest of
+    the seed it replaced); unknown: every fix."""
+    from oot_rando.updater import is_newer
+    since = manifest.get('saves_from') or saves_from(previous)
+    values = dict(manifest.get('start_values') or {})
+    for version, fix in sorted(SAVE_FIXES, key=lambda step: _version_order(step[0])):
+        if since is None or is_newer(version, str(since)):
+            values.update(fix(manifest))
+    if bool_targets(values):
+        # The new seed's own flag, when the save already holds it (the game rewrote the
+        # save with this seed's data): the save then reads as this seed's.
+        values[seed_marker_name(manifest)] = True
+    return values
+
+
+def _version_order(version):
+    from oot_rando.updater import version_key
+    return version_key(version) or ((0, 0, 0), 0, ())
+
+
 def migration_markers(manifest, previous=None):
     """Seed flags of the saves to bring up to date after ``manifest`` was installed.
 
-    The new seed's own flag, plus the flag of ``previous`` (the seed it replaced)
-    when both have the same settings: a seed generated again after an update of
-    the application gets a new identity, but its saves are the same game."""
+    The new seed's own flag, plus those of the same seed made by an earlier generator:
+    a seed generated again after an update of the application gets a new identity, but
+    its saves are the same game. That is the flag of ``previous`` (the seed it replaced)
+    when both have the same settings, and the identity of these settings under every
+    generator version still accepted, so a save started several versions ago (several
+    regenerations ago, or never regenerated) is still recognized."""
     markers = [seed_marker_name(manifest)]
-    if (isinstance(previous, dict) and previous.get('settings') == manifest.get('settings')
-            and seed_marker_name(previous) not in markers):
-        markers.append(seed_marker_name(previous))
+
+    def add(name):
+        if name not in markers:
+            markers.append(name)
+    same = isinstance(previous, dict) and previous.get('settings') == manifest.get('settings')
+    if same:
+        add(seed_marker_name(previous))
+    if not manifest.get('save_seed_id') and isinstance(manifest.get('settings'), dict):
+        from oot_rando.randomizer.randomizer_core import SEED_MARKER_PREFIX, Settings, settings_identity
+        from oot_rando.randomizer.randomizer_services import ACCEPTED_GENERATORS
+        try:
+            settings = Settings.from_dict(manifest['settings'])
+        except (KeyError, TypeError, ValueError):
+            settings = None
+        if settings is not None:
+            for generator, adapter in ACCEPTED_GENERATORS:
+                add(SEED_MARKER_PREFIX + settings_identity(settings, generator, adapter))
     return markers
 
 
 def migration_candidates(paths, manifest, previous=None):
     """``[(path, [names that would change])]`` for the saves of the seed that need it."""
-    start_values = manifest.get('start_values') or {}
-    if not bool_targets(start_values):
+    values = migration_values(manifest, previous)
+    if not bool_targets(values):
         return []
     markers = migration_markers(manifest, previous)
     found = []
     for path in paths:
-        names = pending_changes(path, start_values, markers)
+        names = pending_changes(path, values, markers)
         if names:
             found.append((Path(path), names))
     return found

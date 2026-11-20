@@ -8,6 +8,23 @@ from oot_rando.patching import game_defaults, quest_guard, world_openings as w
 NUP = os.environ.get('OOT_NUP')
 
 
+def unflagged_links(nodes):
+    """Links reading an output its node does not compute (not flagged ``Is Output``).
+
+    Every link of the vanilla logic modules reads a flagged output (5376 of 5376 links
+    in 600 modules, 20/11): the others are never computed and stay false."""
+    by_index, found = {n['Node Index']: n for n in nodes}, []
+    for node in nodes:
+        for kind, inputs in node.get('Parameters', {}).get('Inputs', {}).items():
+            for entry in inputs:
+                sources = entry.get('Sources') or ([entry] if entry.get('Node Index', -1) >= 0 else [])
+                for source in sources:
+                    outputs = by_index.get(source['Node Index'], {}).get('Parameters', {}).get('Outputs', {}).get(kind, [])
+                    if source['Output Index'] < len(outputs) and not outputs[source['Output Index']].get('Is Output'):
+                        found.append((node['Node Index'], entry['Name'], source['Node Index'], source['Output Index']))
+    return found
+
+
 class Option(unittest.TestCase):
     def test_openings_are_offered(self):
         from oot_rando.logic import rando_options
@@ -162,10 +179,27 @@ class ZoraFountain(unittest.TestCase):
         door = ainb.AINB.from_binary(files[w.DOOR_MODULE]).as_dict()['Nodes'][3]['Parameters']['Inputs']['Bool']
         self.assertEqual({i['Name']: (i['Default Value'], i['Node Index']) for i in door
                           if i['Name'] in ('isOpen', 'IsSkipAnim')}, {'isOpen': (True, -1), 'IsSkipAnim': (True, -1)})
-        gate = ainb.AINB.from_binary(files[w.PEDESTAL_MODULE]).as_dict()['Nodes'][1]['Parameters']['Inputs']['Bool']
+        # The song guard and the first pull are in every seed now (story_fixes, 21/11).
+        from oot_rando.patching.story_fixes import DOOR_OPENED
+        self.assertEqual(set(files), {w.DOOR_MODULE})
+        self.assertEqual(game_defaults.read_defaults(gamedata, [DOOR_OPENED]), {DOOR_OPENED: True})
+        # Applied on top of the seed's own door module edit too.
+        from oot_rando.patching.story_fixes import door_opens_on_saved_flag
+        w.door_always_open(door_opens_on_saved_flag(raw(w.DOOR_MODULE))[0])
+        self.assertEqual(report['guarded'], {})
+
+    def test_first_pull_before_sages(self):
+        import ainb
+        raw = lambda path: self.nup.read(self.nup.latest('romfs/' + path))
+        files = {w.PEDESTAL_MODULE: w.pedestal_before_sages(raw(w.PEDESTAL_MODULE))}
+        nodes = ainb.AINB.from_binary(files[w.PEDESTAL_MODULE]).as_dict()['Nodes']
+        gate = nodes[1]['Parameters']['Inputs']['Bool']
         self.assertEqual([(s['Node Index'], s['Output Index']) for s in gate[0]['Sources']], [(5, 1), (6, 2)])
-        self.assertEqual([s for _, s, _ in report['guarded'][w.DOOR_FLOW]], ['Complete'])
-        self.assertEqual(report['expression'], w.DOOR_COMPLETE_ONLY_AFTER)
+        # 20/11: a node only computes its flagged outputs; the gate's query list follows.
+        self.assertTrue(nodes[5]['Parameters']['Outputs']['Bool'][1]['Is Output'])
+        self.assertEqual(nodes[1]['Queries'], [5, 6])
+        self.assertEqual(nodes[1]['Plugs']['Generic'][0]['Node Index'], 5)
+        self.assertEqual(unflagged_links(nodes), [])
         with self.assertRaises(ValueError):    # never applied twice
             w.pedestal_before_sages(files[w.PEDESTAL_MODULE])
 
@@ -176,11 +210,22 @@ class ZoraFountain(unittest.TestCase):
         gamedata, files, reports = w.apply_openings(options, self.read, self.read(game_defaults.GAMEDATA),
                                                     self.read(quest_guard.CHALLENGES), raw)
         self.assertEqual(set(reports), set(options))
+        import ainb
+        for path, data in files.items():
+            if path.endswith('.ainb'):
+                self.assertEqual(unflagged_links(ainb.AINB.from_binary(data).as_dict()['Nodes']), [], path)
         self.assertEqual(game_defaults.read_defaults(gamedata, [w.CARPENTERS_HELPED, w.CARPENTERS_LEFT]),
                          {w.CARPENTERS_HELPED: 3, w.CARPENTERS_LEFT: 1})
-        # Both guards of the Door of Time flow are kept.
-        from oot_rando.patching.story_fixes import _Chart
+        # The Kakariko guard of the Door of Time flow; the completion guard comes from
+        # the story fixes (applied first by the seed build).
+        from oot_rando.patching.story_fixes import _Chart, door_song_before_escape
         names = {e.name for e in _Chart(files[w.DOOR_FLOW]).chart.events}
+        self.assertTrue(any(n.startswith(quest_guard.PREFIX) for n in names))
+        self.assertFalse(any(n.startswith(w.DOOR_PREFIX) for n in names))
+        fixed = door_song_before_escape(self.read(w.DOOR_FLOW))[0]
+        _, both, _ = w.apply_openings(options, lambda p: fixed if p == w.DOOR_FLOW else self.read(p),
+                                      self.read(game_defaults.GAMEDATA), self.read(quest_guard.CHALLENGES), raw)
+        names = {e.name for e in _Chart(both[w.DOOR_FLOW]).chart.events}
         self.assertTrue(any(n.startswith(quest_guard.PREFIX) for n in names))
         self.assertTrue(any(n.startswith(w.DOOR_PREFIX) for n in names))
 

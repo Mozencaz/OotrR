@@ -68,7 +68,7 @@ class LogicTests(unittest.TestCase):
         from oot_rando.game.remake_world import CHEST_RULE_EVENTS, rule_members
         self.assertEqual(sorted(set(CHEST_RULE_EVENTS.values())),
                          ['GC Hammer Rock Chest', 'GC Lower Ledge Chests', 'GC Maze Rocks', 'GC Silver Rock Chest',
-                          'Kak Impas House Heart Piece', 'Kak Windmill Heart Piece'])
+                          'Kak Impas House Heart Piece', 'Kak Windmill Heart Piece', 'LLR Ruins Hookshot Chest'])
         self.logic.virtual = {'chest_6': rule_members({'id': 'GoronCity#3870071239709713434',
                                                        'ap': ['GC Maze Center Chest']}),
                               'chest_4': rule_members({'id': 'GoronCity#14647422914070455120', 'ap': []})}
@@ -99,6 +99,25 @@ class LogicTests(unittest.TestCase):
             self.assertIn('impa', self.reachable({'impa': None}, hookshot))
         finally:
             self.logic.virtual = {}
+
+    def test_lon_lon_ruins_chest_needs_the_hookshot(self):
+        # 20/11: LLR_chest_1, on top of the ruins, was open to a child (HF grotto chests' rules).
+        from oot_rando.game.remake_world import rule_members
+        grottos = ['HF Near Market Grotto Chest', 'HF Open Grotto Chest', 'HF Southeast Grotto Chest']
+        self.logic.virtual = {'ruins': rule_members({'id': 'HyruleField#17445672702269453589', 'ap': grottos})}
+        try:
+            child = {'Bomb Bag': 1, 'Ocarina': 1, 'Time Travel': 1, 'Progressive Strength Upgrade': 1}
+            self.assertNotIn('ruins', self.reachable({'ruins': None}, child))
+            self.assertIn('ruins', self.reachable({'ruins': None}, dict(child, **{'Progressive Hookshot': 1})))
+        finally:
+            self.logic.virtual = {}
+
+    def test_dmt_heart_piece_needs_the_adult_bean_platform(self):
+        # 20/11: no longer reached by falling from the trail (damage, Hover Boots).
+        fall = {'Time Travel': 1, 'Ocarina': 1, 'Hover Boots': 1, 'Bomb Bag': 1}
+        self.assertNotIn('DMT Freestanding PoH', self.reachable({'DMT Freestanding PoH': None}, fall))
+        self.assertIn('DMT Freestanding PoH', self.reachable(
+            {'DMT Freestanding PoH': None}, dict(fall, **{'Magic Bean': 1})))
 
     def test_links_pocket_needs_time_travel(self):
         # Rauru gives this reward after the first Master Sword pull: an ocarina
@@ -144,16 +163,17 @@ class LogicTests(unittest.TestCase):
             _, ring, _ = logic.sweep(chest, logic.new_state(inventory + Counter({'Small Key (Fire Temple)': 8})))
             self.assertIn('Fire Temple Boss Key Chest', ring, mode)
 
-    def test_song_of_time_and_door_wait_for_zelda_and_stones(self):
-        # Zelda's escape and the Door of Time (DoorOfTime) follow Zelda and the
-        # three stones (the game checks the stones held: patching/story_fixes.py).
-        for location in ('Song from Ocarina of Time', 'Master Sword Pedestal'):
-            rule = self.data.remake['location_rules'][location]
-            self.assertIn("'Met Zelda'", rule, location)
-            self.assertIn('has_all_stones', rule, location)
-            self.assertNotIn('Clear', rule, location)
-        self.assertNotIn('Master Sword Pedestal', self.reachable(
+    def test_escape_waits_for_zelda_and_stones_but_not_the_door(self):
+        # Zelda's escape follows Zelda and the three stones (the game checks the stones
+        # held); the Song of Time opens the door before it (story_fixes, 21/11).
+        rule = self.data.remake['location_rules']['Song from Ocarina of Time']
+        self.assertIn("'Met Zelda'", rule)
+        self.assertIn('has_all_stones', rule)
+        self.assertNotIn('Clear', rule)
+        self.assertEqual(self.data.remake['location_rules']['Master Sword Pedestal'], 'True')
+        self.assertIn('Master Sword Pedestal', self.reachable(
             {'Master Sword Pedestal': None}, {'Ocarina': 1, 'Song of Time': 1}))
+        self.assertNotIn('Master Sword Pedestal', self.reachable({'Master Sword Pedestal': None}, {'Ocarina': 1}))
 
     def test_remake_events_compiled(self):
         events = {e for r in self.logic.regions.values() for e, _ in r['events']}
@@ -195,14 +215,26 @@ class LogicTests(unittest.TestCase):
         shop = self.exit_rule('Market Back Alley', 'Market Bombchu Shop')
         self.assertFalse(shop(Day, {}, 'child'))
 
-    def test_water_temple_gate_needs_iron_boots_or_thawed_king(self):
+    def test_water_temple_gate_open_for_adult_without_the_serenade(self):
+        # The lake gate opens for adult Link (story_fixes.water_gate_for_adult, 21/11):
+        # the base rule (Iron Boots, or Longshot and Golden Scale) is back.
         class Day:
             tod = {'adult': True, 'child': True}
+        self.assertNotIn('Lake Hylia -> Water Temple Lobby', self.data.remake['exit_rules'])
         gate = self.exit_rule('Lake Hylia', 'Water Temple Lobby')
-        dive = {'Progressive Hookshot': 2, 'Progressive Scale': 2}
-        self.assertFalse(gate(Day, dive, 'adult'))
-        self.assertTrue(gate(Day, dict(dive, **{'King Zora Thawed': 1}), 'adult'))
+        self.assertTrue(gate(Day, {'Progressive Hookshot': 2, 'Progressive Scale': 2}, 'adult'))
+        self.assertFalse(gate(Day, {'Progressive Hookshot': 1, 'Progressive Scale': 2}, 'adult'))
         self.assertTrue(gate(Day, {'Progressive Hookshot': 1, 'Iron Boots': 1}, 'adult'))
+        self.assertFalse(gate(Day, {'Progressive Hookshot': 1, 'Iron Boots': 1}, 'child'))
+
+    def test_rainbow_bridge_on_two_medallions(self):
+        # The bridge scene follows the Shadow and Spirit Medallions (story_fixes, 21/11).
+        class Day:
+            tod = {'adult': True, 'child': True}
+        bridge = self.exit_rule('Ganons Castle Grounds', 'Ganons Castle Lobby')
+        medals = {'Shadow Medallion': 1, 'Spirit Medallion': 1}
+        self.assertTrue(bridge(Day, medals, 'adult'))
+        self.assertFalse(bridge(Day, {'Shadow Medallion': 1, 'Light Arrows': 1}, 'adult'))
 
     def test_unknown_remake_exit_is_refused(self):
         from oot_rando.logic import world
