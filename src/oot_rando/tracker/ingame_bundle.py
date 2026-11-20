@@ -80,9 +80,10 @@ def module_binary():
 
 
 def module_version():
-    """The bundled module's version, as its source note gives it ((0, 0, 0) if it doesn't)."""
+    """The bundled module's version: the one its build embeds, as its source note gives it ("it embeds `0.6.1 (...)`";
+    (0, 0, 0) if the note doesn't say)."""
     note = resource(*MODULE_NOTE).read_text(encoding='utf-8')
-    match = re.search(r'module version (\d+)\.(\d+)\.(\d+)', note)
+    match = re.search(r'embeds `(\d+)\.(\d+)\.(\d+)', note)
     return tuple(int(part) for part in match.groups()) if match else (0, 0, 0)
 
 
