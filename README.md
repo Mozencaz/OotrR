@@ -92,15 +92,18 @@ On an emulator or a Switch, every seed carries a small module that draws a track
 the game's own style: press **R + right stick up** to open it and again (or **B**) to close it. It shows the
 items (with the game's own icons and their levels), the twelve ocarina songs, the dungeons' small keys and boss keys, the checks found per region and in total,
 the enemy souls, and a warning when the loaded save is not from this seed. The D-pad or the left stick moves
-over the regions, **A** opens a region's checks by name (ticked when collected), **B** goes back. While it is
-open the game does not see R, the right stick, A, B, the D-pad or the left stick. The last entry of the
+over the regions, **A** opens a region's checks by name (ticked when collected), **B** goes back. In a region's
+list, the highlighted check's internal key (its id) shows under the list, and **A** shows where the check is in the
+world: a box and a beam over the picture with how far it is, or the name of the map it's in (only the place, never
+what it holds). While it is open the game does not see R, the right stick, A, B, the D-pad or the left stick. The last entry of the
 regions, **Settings**, has two pages. **Postcard** turns on a small card with only the icons (items, songs, temples, dungeon keys) in a
 corner of the screen; its position, size and opacity are set there. **Console** shows Archipelago messages over the game (on by
 default for an Archipelago seed, see [below](#archipelago-multiworld)); its position, opacity, lines, fade and the kinds of message
 shown are set there. Both are kept in small files on the SD card; the card and the console hide while the game is paused (0.6.2). It only
 reads the game's save data; it never changes the game or the save.
 
-The seed folder gets `romfs/RandoTracker/seed.trk` (the flags to watch, no item placements; the format is in
+The seed folder gets `romfs/RandoTracker/seed.trk` (the flags to watch, the checks' ids and places in the game's maps, no
+item placements; the format is in
 [docs/ingame-tracker-format.md](docs/ingame-tracker-format.md)), `exefs/subsdk7`, the module, and
 `romfs/RandoTracker/icons.bin`, the items' and songs' icons, copied from your game file as the game stores them (nothing of the
 game ships with the application; without that file the items show as letters). They are listed in the seed's
@@ -117,8 +120,9 @@ it with `update-tracker --add` (below); if its data is too old for it, generate 
 
 A newer version of the application brings a newer tracker. **Update the in-game tracker** (Setup > Save,
 next to **Reload the tracker**), or `python -m oot_rando update-tracker SEED_OR_MODS_FOLDER [--nup GAME.nup]`,
-gives the installed seed this version's `seed.trk` and module without generating it again, and the icons from
-the game file (the window uses the one set in Setup; without it, the seed keeps the icons it has): those files and
+gives the installed seed this version's `seed.trk` and module without generating it again, and the icons and the
+checks' places from the game file (the window uses the one set in Setup; without it, the seed keeps the icons and places it
+has): those files and
 their entries in `manifest.json` are rewritten (staged, then moved into place), nothing else in the folder changes,
 so saves of the seed carry on. It refuses a folder that isn't a seed or whose data doesn't match its manifest.
 A seed made without the tracker gets it only when asked (`--add`). Close the game first: the new module loads

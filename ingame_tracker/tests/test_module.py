@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
 REAL_SEED = FIXTURES / "real-seed.trk"
 SOURCES = ["trkfile.c", "tracker.c", "gamedata.c", "grid.c", "text.c", "controls.c", "browse.c", "iconfile.c", "postcard.c", "sizes.c",
-           "cfgtext.c", "console.c", "consolelog.c", "mailbox.c"]
+           "cfgtext.c", "console.c", "consolelog.c", "mailbox.c", "locate.c", "view.c"]
 
 
 def find_compiler():

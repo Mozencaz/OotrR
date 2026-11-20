@@ -16,7 +16,10 @@ save has found:
   the boss key as icons;
 - the checks found, per region and in total, as `collected / trackable` (a check without a save flag can't be
   observed, so it isn't counted), and the enemy souls if the seed has them;
-- each region's checks by name, ticked when collected, so you can see what's still missing there;
+- each region's checks by name, ticked when collected, so you can see what's still missing there, with the highlighted
+  check's internal key (the randomizer's id for it) under the list;
+- **show in the world**: A on a check of a region's list marks where it is in the game, with a box and a beam over the
+  picture and how far it is, or names the map it's in;
 - the seed's id, a warning when the save isn't from this seed, and "Goal reached";
 - a **postcard**: a small card with only the icons (items, songs, temples, dungeon keys) in a corner of the screen while you play;
 - a **console** for Archipelago seeds: the items you receive and send, other players' items, hints, chat and the server's
@@ -25,7 +28,7 @@ save has found:
 The postcard and the console hide while the game is paused, so its menus are clear, and come back when it plays again. The panel
 works while the game is paused too.
 
-Version 0.6.2. Tested in the game (1.1.1, in the Ryuchii emulator): the panel, icons, postcard and songs, and 0.5.0's console with two players. Other players' items (0.6.0), the Console page's rows (0.6.1) and hiding while paused (0.6.2) are **not yet tested in the game**, nor is game 1.0.0. See [docs/TESTING.md](docs/TESTING.md).
+Version 0.7.0. Tested in the game (1.1.1, in the Ryuchii emulator): the panel, icons, postcard and songs, and 0.5.0's console with two players. Other players' items (0.6.0), the Console page's rows (0.6.1), hiding while paused (0.6.2) and show in the world (0.7.0) are **not yet tested in the game**, nor is game 1.0.0. See [docs/TESTING.md](docs/TESTING.md).
 
 ## Controls
 
@@ -33,7 +36,7 @@ Version 0.6.2. Tested in the game (1.1.1, in the Ryuchii emulator): the panel, i
 |---|---|
 | R + right stick up | open the panel, or close it |
 | D-pad or left stick | move the highlight over the regions and the Settings entry after them; in a region's list, scroll (left and right: a page). Held, it repeats |
-| A | open the highlighted region's list of checks, the Settings page or the page of the entry chosen on it; on the console's page, tick or untick the kind of message chosen |
+| A | open the highlighted region's list of checks, the Settings page or the page of the entry chosen on it; in a region's list, show the highlighted check in the world (A on it again puts it away, A on another check shows that one instead); on the console's page, tick or untick the kind of message chosen |
 | B | back a page (a list and the Settings page: to the regions), or close the panel |
 | D-pad or left stick, on a settings page | up and down choose a setting, left and right change its value (on a kind of message, they or A tick or untick it) |
 
@@ -41,6 +44,26 @@ While the panel is open the game doesn't see R, the right stick (so the camera s
 stick (Link stands still); while the combination is held, it doesn't see R or the right stick. A button still held when the
 panel closes stays hidden from the game until it's let go, so closing with B doesn't also swing the sword. R + right stick
 down is sloperinaGZ's menu and is left alone.
+
+## Show in the world
+
+In a region's list, two rows under the checks describe the highlighted one: its name with its internal key on the right
+(`key KokiriForest#1234567`, the id the randomizer gives the check, which stays the same whatever name it is shown with), then
+where it is: `A: show in the world     12 m away, 3 m up`, `... In Kokiri Forest (child)`, or why it can't be shown.
+
+A shows it. In the map the game is in, the check's place is drawn over the picture: a gold box a metre across round the
+check's actor (its position is the box's base) and a beam 30 m up from it, in sloperinaGZ's line style (a soft glow under
+each line). The lines are **not depth-tested**: they show through walls and the ground, so the check can be found from
+anywhere in the map. With the panel closed, a band at the top of the screen (at the bottom while the console is at the top)
+names the check and says how far it is from Link, how far up or down, and, when it is off the picture, which way to look
+(`turn left`, `look up`, `behind you`). In another map, the band says which map it is in (`In Deku Tree`, `... and 1 other map`
+when it is in several). The marker stays while you play, with the panel closed, until A puts it away or another check is
+shown; it is hidden while the game is paused.
+
+Only the place is shown, never what the check holds: the seed's file has no items, only the vanilla scene data's positions.
+A check with no place in the game's maps (an NPC's gift, an event) says `No place in the world for this check`; a seed made
+before 0.7.0 says `No places in this seed's file: update its tracker with the game file` (OotrR's "Update the in-game tracker"
+with the game file, or `update-tracker --nup GAME.nup`).
 
 ## Settings
 
@@ -166,6 +189,12 @@ GPL-3.0-or-later ([LICENSE](LICENSE)); this folder only, the rest of the reposit
 - The console's kinds of message, a check box each, follow sloperinaGZ's watch list (`src/ootgz/menus.c`, master 5b44a21).
 - The game's pause, which hides the postcard and the console, is read as sloperinaGZ's `gd_game_paused` reads it
   (`src/ootgz/gamedata.c`, commit 8a2c73c).
+- Show in the world is drawn the way sloperinaGZ draws its collision boxes (commit 8a2c73c): the camera's basis and
+  projection (`view.c` from its `src/ootgz/view.c`), the cutting of a line at the near plane and to the picture (its
+  `src/ootgz/airwall.c` `clip_near` and `clip_to_picture`), the soft line (`gpuui_line` and its profile, from its
+  `src/ootgz/gpuui.c`) with a glow under it (`src/ootgz/overlayui.c`), the camera's and Link's offsets (`worldmark.c` and
+  `builds.c`, from its `src/ootgz/link.c` and `src/ootgz/z64hd_builds.h`) and the String64 and pause reads (`gamedata.c`, from
+  its `src/ootgz/gamedata.c`).
 - `src/third_party` (see its README) holds [stb_truetype](https://github.com/nothings/stb) (public domain) and zstd's educational decoder
   (BSD or GPLv2, Meta Platforms), both as sloperinaGZ ships them.
 - No game files are included. You need your own copy of the game; the module reads its font and shader from it at run time,

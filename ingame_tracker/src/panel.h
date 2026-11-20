@@ -4,6 +4,7 @@
 
 #include "browse.h"
 #include "console.h"
+#include "locate.h"
 #include "postcard.h"
 #include "tracker.h"
 
@@ -27,6 +28,7 @@ typedef struct {
   browse_t browse;
   uint32_t row_count;    /* with a region's list open: its checks from browse.top */
   check_row_t rows[BROWSE_CHECK_ROWS];
+  locate_detail_t detail; /* with a region's list open: its highlighted check */
 } panel_t;
 
 #endif

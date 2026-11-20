@@ -14,21 +14,22 @@ client writes.
 
 `seed.trk` holds no placement: no item or reward of any check. It lists which flags to observe, grouped by the
 region names the desktop tracker shows, with each check's name as the desktop tracker shows it
-(`src/oot_rando/tracker/check_labels.py`). The writer is `src/oot_rando/tracker/ingame_format.py` (`build`); `parse`
+(`src/oot_rando/tracker/check_labels.py`), its id and where its actor is in the game's maps (from the game's own,
+unrandomized layouts: the same in every seed). The writer is `src/oot_rando/tracker/ingame_format.py` (`build`); `parse`
 there is the reference reader the tests use. The module validates the same bounds and ignores a file that fails.
 
 ## Layout
 
 Everything is little-endian. Offsets are from the start of the file. Tables follow the header in this order:
-string table, regions, checks, items, rules, keys; each table starts 4-byte aligned.
+string table, regions, checks, items, rules, keys, ids, places; each table starts 4-byte aligned.
 
-### Header (76 bytes; 72 in versions 1 and 2)
+### Header (92 bytes; 76 in version 3, 72 in versions 1 and 2)
 
 | Offset | Type | Field |
 |---|---|---|
 | 0 | char[4] | magic `RTRK` |
-| 4 | u16 | version (3; 2 in seeds made before the flags, 1 before the checks had names) |
-| 6 | u16 | header size (76; 72 in versions 1 and 2) |
+| 4 | u16 | version (4; 3 in seeds made before the checks' ids and places, 2 before the flags, 1 before the checks had names) |
+| 6 | u16 | header size (92; 76 in version 3, 72 in versions 1 and 2) |
 | 8 | u32 | file size |
 | 12 | u32 | seed marker: Bool hash, true in a save started with this seed |
 | 16 | u32 | goal marker: Bool hash set when the goal is reached, 0 if the seed has none |
@@ -41,12 +42,16 @@ string table, regions, checks, items, rules, keys; each table starts 4-byte alig
 | 56 | u32, u32 | rules: offset, count |
 | 64 | u32, u32 | keys: offset, count |
 | 72 | u32 | flags (version 3): bit 0 set for a seed generated from an Archipelago patch; other bits 0 |
+| 76 | u32, u32 | ids (version 4): offset, count (the check count, or 0) |
+| 84 | u32, u32 | places (version 4): offset, count |
 
 A reader rejects the file unless the magic, the version, the header size (the one of its version) and the file size
 match, and every table lies inside the file, after the header. Newer versions may add tables or fields; a reader
 refuses versions it doesn't know. Version 2 only gives the checks' reserved field a meaning (their name); version 3
-only adds the flags word. A reader of version 3 reads version 2 files (no flags: a local seed) and version 1 files,
-whose checks are then unnamed. A file holds at most 64 regions and 16 key rows (the module keeps a fixed-size state for
+only adds the flags word; version 4 only adds the ids' and places' tables. A reader of version 4 reads version 3 files
+(no ids or places: show in the world says so), version 2 files (no flags: a local seed) and version 1 files, whose
+checks are then unnamed. The application writes version 4 only once the module it ships reads it (module 0.7.0;
+`ingame_bundle.seed_file_version`), and version 3 until then, since an older module refuses a newer file. A file holds at most 64 regions and 16 key rows (the module keeps a fixed-size state for
 each); the writer refuses more.
 
 ### String table
@@ -129,6 +134,33 @@ The boss key is held when its Bool is true or flag 8 is set. The key items' get 
 obtained; the flags the item-get hook sets when it applies them (`RandoKeyRing.<folder>`, `IsGetBossKey`) can lag
 behind (saves of 13/11: Ganon's Castle's ring obtained, not applied). Files made before 0.2.1 named those; the
 exporter now names the get flags, also when it rewrites an older seed's file (`update-tracker`).
+
+### Ids (4 bytes each, version 4)
+
+One per check, in the checks' order: a string offset, the check's id in the randomizer's catalogue (`checks.json`), the
+internal key the panel shows next to its name: `KokiriForest#<hash>` for a chest, `<area>#<hash>#<field>` for a world
+map's field, `<area>#gs#<hash>` (and `heart`, `pots`, ...) for the other sources, `<area>#shop#<shop>#<slot>` for a shop
+item, a bare number for the first chests, `npc#...` or `ap#...` for an NPC's gift or an Archipelago location. The id
+names the check whatever name it is shown with, so a list of new names can be keyed on it. 0 (the empty string) for a
+check without one; the table's count is the check count, or 0 when the file has no ids.
+
+### Places (24 bytes each, version 4)
+
+| Offset | Type | Field |
+|---|---|---|
+| 0 | u32 | check: index into the checks table |
+| 4 | u32 | map: string offset, the map's name as the save's String64 `map` names it (`KokiriForest_Child`, `GohmaStage`): its layout's name without `_Static` or `_Dynamic` |
+| 8 | u32 | map label: string offset, the map's name to show (`Kokiri Forest (child)`) |
+| 12 | f32 | x |
+| 16 | f32 | y |
+| 20 | f32 | z: the check's own actor's position (`Translate`) in that map, in metres, as in the layout |
+
+Places are in check order (a check's places follow each other), at most one per check and map; a check with none
+(an NPC's gift, an event, an Archipelago-only location) has no row. The position is the actor's own, not a cluster's
+centre: the chest, the Gold Skulltula, the shop item's slot. Coordinates are finite and within ±10,000,000; a reader
+refuses a place out of check order, of a check past the table, with a string outside the string table or a coordinate
+out of range. The exporter (`src/oot_rando/tracker/check_places.py`) finds the actor by its hash (by its shop and slot
+for a shop item) in the game's `Banc` layouts; `update-tracker` keeps a file's places when it isn't given the game.
 
 ## The items' icons (`icons.bin`)
 
@@ -221,7 +253,7 @@ reader's `attach`, `read` and `write`, so it works wherever live memory does (Wi
 | 0x20 | char[64] | status text: the server and slot (`archipelago.gg:38281 as Link`), UTF-8, NUL-ended | client |
 | 0x60 | char[24] | seed id the module runs (as in `seed.trk`), NUL-ended; empty until it has read its seed | module |
 | 0x78 | u32 | read head: entries the module has taken | module |
-| 0x7C | u32 | module version: major << 16 \| minor << 8 \| patch (0x000602 for 0.6.2) | module |
+| 0x7C | u32 | module version: major << 16 \| minor << 8 \| patch (0x000700 for 0.7.0) | module |
 | 0x80 | entry[32] | the ring | client |
 
 Each entry: u8 kind (1 item received, 2 item sent, 3 hint, 4 chat, 5 server notice, 6 other players' item: neither

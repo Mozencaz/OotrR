@@ -3,19 +3,24 @@
 #define MAGIC            0x4B525452u /* "RTRK" read as a little-endian word */
 #define HEADER_SIZE      72 /* versions 1 and 2 */
 #define HEADER_SIZE_V3   76 /* the flags after it */
+#define HEADER_SIZE_V4   92 /* the ids' and places' tables after them */
 #define REGION_SIZE      12
 #define CHECK_SIZE       16
 #define ITEM_SIZE        8
 #define RULE_SIZE        8
 #define KEYS_SIZE        24
+#define IDENT_SIZE       4
+#define PLACE_SIZE       24
 #define MAX_RECORDS      (1u << 20) /* far more than any seed has: a count past this is damage */
+#define MAX_COORDINATE   1e7f       /* metres: a place farther out (or not a number) is damage */
 
 /* header field offsets */
 enum {
   H_MAGIC = 0, H_VERSION = 4, H_HEADER_SIZE = 6, H_FILE_SIZE = 8, H_SEED_MARKER = 12, H_GOAL_MARKER = 16,
   H_SEED_ID = 20, H_STRINGS_AT = 24, H_STRINGS_SIZE = 28, H_REGIONS_AT = 32, H_REGION_COUNT = 36,
   H_CHECKS_AT = 40, H_CHECK_COUNT = 44, H_ITEMS_AT = 48, H_ITEM_COUNT = 52, H_RULES_AT = 56,
-  H_RULE_COUNT = 60, H_KEYS_AT = 64, H_KEY_COUNT = 68, H_FLAGS = 72,
+  H_RULE_COUNT = 60, H_KEYS_AT = 64, H_KEY_COUNT = 68, H_FLAGS = 72, H_IDENTS_AT = 76, H_IDENT_COUNT = 80,
+  H_PLACES_AT = 84, H_PLACE_COUNT = 88,
 };
 
 static uint16_t le16(const uint8_t *p)
@@ -33,9 +38,15 @@ static uint64_t le64(const uint8_t *p)
   return le32(p) | (uint64_t)le32(p + 4) << 32;
 }
 
+static float lef32(const uint8_t *p)
+{
+  union { uint32_t u; float f; } bits = { le32(p) };
+  return bits.f;
+}
+
 static uint32_t header_size_of(uint16_t version)
 {
-  return version >= 3 ? HEADER_SIZE_V3 : HEADER_SIZE;
+  return version >= 4 ? HEADER_SIZE_V4 : version == 3 ? HEADER_SIZE_V3 : HEADER_SIZE;
 }
 
 /* [at, at + count * record) lies in the file, after the header */
@@ -62,6 +73,37 @@ static bool names_fit(const trk_t *trk)
   for (uint32_t i = 0; i < trk->check_count; i++)
     if (trk_check(trk, i).name >= trk->strings_size)
       return false;
+  return true;
+}
+
+/* one id per check (or none), each in the string table */
+static bool idents_fit(const trk_t *trk)
+{
+  if (trk->ident_count && trk->ident_count != trk->check_count)
+    return false;
+  for (uint32_t i = 0; i < trk->ident_count; i++)
+    if (trk_check_ident(trk, i) >= trk->strings_size)
+      return false;
+  return true;
+}
+
+static bool coordinate_ok(float v)
+{
+  return v >= -MAX_COORDINATE && v <= MAX_COORDINATE; /* false for a NaN */
+}
+
+/* the places in check order, each of a check, its names in the string table, its position a point */
+static bool places_fit(const trk_t *trk)
+{
+  uint32_t last = 0;
+  for (uint32_t i = 0; i < trk->place_count; i++) {
+    trk_place_t place = trk_place(trk, i);
+    if (place.check >= trk->check_count || place.check < last || place.map >= trk->strings_size ||
+        place.label >= trk->strings_size || !coordinate_ok(place.x) || !coordinate_ok(place.y) ||
+        !coordinate_ok(place.z))
+      return false;
+    last = place.check;
+  }
   return true;
 }
 
@@ -110,6 +152,14 @@ static void read_header(trk_t *trk, const uint8_t *data, size_t size)
     .rules_at = le32(data + H_RULES_AT), .rule_count = le32(data + H_RULE_COUNT),
     .keys_at = le32(data + H_KEYS_AT), .key_count = le32(data + H_KEY_COUNT),
   };
+  if (version >= 4) {
+    trk->idents_at = le32(data + H_IDENTS_AT);
+    trk->ident_count = le32(data + H_IDENT_COUNT);
+    trk->places_at = le32(data + H_PLACES_AT);
+    trk->place_count = le32(data + H_PLACE_COUNT);
+  } else { /* empty tables, after the header */
+    trk->idents_at = trk->places_at = trk->header_size;
+  }
 }
 
 bool trk_parse(trk_t *trk, const uint8_t *data, size_t size, const char **why)
@@ -127,7 +177,9 @@ bool trk_parse(trk_t *trk, const uint8_t *data, size_t size, const char **why)
       !table_fits(trk, trk->checks_at, trk->check_count, CHECK_SIZE) ||
       !table_fits(trk, trk->items_at, trk->item_count, ITEM_SIZE) ||
       !table_fits(trk, trk->rules_at, trk->rule_count, RULE_SIZE) ||
-      !table_fits(trk, trk->keys_at, trk->key_count, KEYS_SIZE)) {
+      !table_fits(trk, trk->keys_at, trk->key_count, KEYS_SIZE) ||
+      !table_fits(trk, trk->idents_at, trk->ident_count, IDENT_SIZE) ||
+      !table_fits(trk, trk->places_at, trk->place_count, PLACE_SIZE)) {
     *why = "a table leaves the file";
     return false;
   }
@@ -141,6 +193,10 @@ bool trk_parse(trk_t *trk, const uint8_t *data, size_t size, const char **why)
   }
   if (!names_fit(trk)) {
     *why = "a check's name is outside the string table";
+    return false;
+  }
+  if (!idents_fit(trk) || !places_fit(trk)) {
+    *why = "a check's id or place is damaged";
     return false;
   }
   return true;
@@ -179,4 +235,32 @@ trk_keys_t trk_keys(const trk_t *trk, uint32_t index)
 {
   const uint8_t *row = trk->data + trk->keys_at + (size_t)index * KEYS_SIZE;
   return (trk_keys_t){ le32(row), row[4], row[5], le32(row + 8), le32(row + 12), le32(row + 16), le32(row + 20) };
+}
+
+trk_place_t trk_place(const trk_t *trk, uint32_t index)
+{
+  const uint8_t *row = trk->data + trk->places_at + (size_t)index * PLACE_SIZE;
+  return (trk_place_t){ le32(row), le32(row + 4), le32(row + 8), lef32(row + 12), lef32(row + 16), lef32(row + 20) };
+}
+
+uint32_t trk_check_ident(const trk_t *trk, uint32_t check)
+{
+  return check < trk->ident_count ? le32(trk->data + trk->idents_at + (size_t)check * IDENT_SIZE) : 0;
+}
+
+uint32_t trk_places_of(const trk_t *trk, uint32_t check, uint32_t *first)
+{
+  uint32_t low = 0, high = trk->place_count; /* the first place of a check at or after `check` */
+  while (low < high) {
+    uint32_t mid = low + (high - low) / 2;
+    if (trk_place(trk, mid).check < check)
+      low = mid + 1;
+    else
+      high = mid;
+  }
+  uint32_t end = low;
+  while (end < trk->place_count && trk_place(trk, end).check == check)
+    end++;
+  *first = low;
+  return end - low;
 }

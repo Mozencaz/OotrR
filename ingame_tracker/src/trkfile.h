@@ -1,5 +1,6 @@
 /* The seed file the randomizer writes (RandoTracker/seed.trk): which save flags to observe, grouped
- * by region, the items' flags, the seed's markers. The layout is in docs/ingame-tracker-format.md at the root
+ * by region, the items' flags, the seed's markers, and (version 4) each check's id and its places in the game's
+ * maps. The layout is in docs/ingame-tracker-format.md at the root
  * of the OotrR repository (the randomizer writes the file). Parsing checks every
  * offset and count, so a damaged file is refused, never read past its end. Reading is zero-copy: the
  * accessors decode a record out of the file's bytes, which must stay in place while the trk_t is used. */
@@ -10,7 +11,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define TRK_VERSION 3        /* 2: the same without the header's flags; 1: nor the checks' names */
+#define TRK_VERSION 4        /* 3: without the checks' ids and places; 2: nor the header's flags; 1: nor the names */
 #define TRK_OLDEST_VERSION 1
 #define TRK_MAX_REGIONS 64  /* the module keeps a fixed-size state per region */
 #define TRK_MAX_KEY_ROWS 16 /* ... and per dungeon with keys */
@@ -20,6 +21,9 @@ enum { TRK_KEY_SMALL = 1, TRK_KEY_BOSS = 2, TRK_KEY_SMALL_ALL = 4, TRK_KEY_BOSS_
 enum { TRK_FLAG_ARCHIPELAGO = 1 }; /* the header's flags (version 3; 0 in older files: a local seed) */
 
 typedef struct { uint32_t name, first_check, check_count; } trk_region_t;
+/* A check's place (version 4): the map it is in, as the save's "map" string names it, that map's name to show and
+ * the check's actor's position there (metres). The places are in check order. */
+typedef struct { uint32_t check, map, label; float x, y, z; } trk_place_t;
 typedef struct { uint64_t key; uint32_t kind, name; } trk_check_t; /* name: a string offset (0, "", in version 1) */
 typedef struct { uint32_t name, first_rule, rule_count; } trk_item_t;
 typedef struct { uint32_t hash, level; } trk_rule_t;
@@ -41,6 +45,8 @@ typedef struct {
   uint32_t items_at, item_count;
   uint32_t rules_at, rule_count;
   uint32_t keys_at, key_count;
+  uint32_t idents_at, ident_count; /* version 4: one per check (0 in older files) */
+  uint32_t places_at, place_count; /* version 4 */
 } trk_t;
 
 /* Validates `data` and fills `trk`. False with *why set if the file isn't a seed file of a version this module
@@ -56,5 +62,10 @@ trk_check_t trk_check(const trk_t *trk, uint32_t index);
 trk_item_t trk_item(const trk_t *trk, uint32_t index);
 trk_rule_t trk_rule(const trk_t *trk, uint32_t index);
 trk_keys_t trk_keys(const trk_t *trk, uint32_t index);
+trk_place_t trk_place(const trk_t *trk, uint32_t index);
+/* Check `check`'s id (its internal key: a string offset, 0 when the file has none). */
+uint32_t trk_check_ident(const trk_t *trk, uint32_t check);
+/* How many places check `check` has, the first at *first. */
+uint32_t trk_places_of(const trk_t *trk, uint32_t check, uint32_t *first);
 
 #endif

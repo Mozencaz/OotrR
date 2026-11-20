@@ -30,6 +30,8 @@
 #define HINT_ROW_FP       12
 #define LIST_HEAD_ROW_FP  14
 #define LIST_ROW_FP       11
+#define LIST_DETAIL_ROWS  2    /* under a region's list: the highlighted check's name and id, where it is (locate.h) */
+#define DETAIL_ROW_FP     11
 #define SETTING_ROW_FP    14
 #define CARD_CELL_W_FP    22   /* the postcard at full size: item cells this wide, so the icons are nearly square */
 #define CARD_PAD_FP       5
@@ -42,6 +44,8 @@
 #define CONSOLE_PAD_X_FP  5
 #define CONSOLE_PAD_Y_FP  3
 #define CONSOLE_GAP_FP    4    /* kept between the console and the postcard */
+#define MARK_BAND_W_FP    240  /* at most: the band naming the check shown in the world (locate.h), the panel closed */
+#define MARK_ROW_FP       10
 
 /* the items' rows, a gap, the songs' rows */
 #define CELLS_BLOCK_FP (GRID_ROWS * GRID_ROW_FP + SONGS_GAP_FP + SONG_ROWS * SONG_ROW_FP)

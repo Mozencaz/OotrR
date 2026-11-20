@@ -20,13 +20,16 @@ player replaced by a reader of the game's save data. This file covers what diffe
 
 Next to sloperinaGZ (`subsdk9`) and ocarinaMIDI (`subsdk8`) every hook calls what its slot held before, or the sdk's own function when
 the slot still points into main (a lazily bound import: calling it would crash). No symbol is shared: the module is linked with hidden
-visibility. It has no IPS patch and takes no game offset beyond the GameData ones in `builds.c`. It reads `content:` (the game's RomFS, mounted
+visibility. It has no IPS patch and takes no game offset beyond the GameData, camera and Link ones in `builds.c`; it hooks
+nothing new for show in the world (the marker is drawn in the present hook it already has), so it adds no clash with
+sloperinaGZ's hooks. It reads `content:` (the game's RomFS, mounted
 by the game) and, for the postcard's and the console's settings, mounts the SD card once as `ootrtrk` (`sdfile.c`) (a mount name can be used once, and sloperinaGZ
 and ocarinaMIDI have their own).
 
 ## The seed file
 
 `content:/RandoTracker/seed.trk` ([docs/ingame-tracker-format.md](../../docs/ingame-tracker-format.md)): the seed's markers, the flags to watch by region with each check's name, the items' flags, the dungeons' key flags.
+Version 4 files add each check's id (its internal key) and its places in the game's maps (show in the world, below).
 Version 3 files add a flags word (bit 0: an Archipelago seed, which turns the console on by default); version 2 files (no flags: a local
 seed) name the checks; version 1 files (seeds made by the 0.1.0 exporter) are read too, and their checks are shown as "Check N".
 It is read once, on the game thread, 10 s after the first frame, and again at a press of the combination if that first read found
@@ -225,6 +228,41 @@ are in [the format document](../../docs/ingame-tracker-format.md#the-consoles-ma
   pause ends; opening or closing the panel publishes it again, so the preview shows while paused.
   With the console's 12 rows and the postcard the frame stays under `MAX_QUADS`; the console is never drawn with the regions' panel.
 
+## Show in the world
+
+A on a check of a region's list (`app.c` `toggle_located`) makes it the check shown, A on it again none, A on another that one; a
+check the seed file has no place for (an NPC's gift, an event, or a file older than version 4) stays as it was, and the row under the
+list says why. The parts:
+
+- `locate.c` is pure: a region's nth check's index, the toggle, `locate_find` (the check's places, binary-searched in the place table
+  by `trk_places_of`, against the game's map: here, with the point; elsewhere, with the first map's label and how many others; no place;
+  an old file; the map not known yet) and its words (`12 m away, 3 m up`, `In Deku Tree and 1 other map`, `turn left`).
+- `gamedata.c` reads the String64 "map" (`0x1D6189DA`, the type entry at manager + 0x608, objects 0x108 apart with the text's pointer
+  at 0x68 and its capacity after it: sloperinaGZ's `gamedata.c` `string_at` and `gd_get_str`, 8a2c73c), the save's map name, which is
+  the map's layout name without `_Static` or `_Dynamic` (`KokiriForest_Child`, `GohmaStage`): the exporter's `check_places.py` names
+  the places the same way. The pause is sloperinaGZ's `gd_game_paused`: the Bool `Sequence_IsPause` or the Int
+  `Sequence_GamePauseRequestCount` above 0.
+- `app.c` works out a `locate_view_t` every 250 ms while a check is shown (open panel or not) and hands it to the present thread through
+  its own seqlock (`overlay_publish_locate`) when it changes: shown (not while paused), drawn (in this map), the point, the check's name,
+  where it is otherwise, and main + the build's `camera_ptr` and `disp_ptr`. The list's two rows under the checks (`locate_detail_t`
+  in the panel) are worked out with the panel: the check's id, and the line `locate_panel_line` makes.
+- `view.c` is sloperinaGZ's `view.c` (8a2c73c): the camera's basis from its position and look-at (right = (-forward.z, 0, forward.x),
+  up = right x forward), the tangents of its fov and aspect, a world point to camera space and to the picture (0..1 across and down);
+  and its `airwall.c` `clip_near` and `clip_to_picture` (Liang-Barsky) to cut a segment at the near plane and to the picture. The module
+  imports no `sqrtf`: `view_root` is the CPU's `fsqrt` (gamefont.c's way), and Newton's method on the PC for the tests.
+- `worldmark.c`, on the present thread, reads the camera as sloperinaGZ's `link.c` `camera()` and `view.c` `view_camera` do
+  (`[[main + camera_ptr] + 0x68]`: position 0x38, look-at 0x44, near 0x128, fov 0x130, aspect 0x140; every read checked) and Link's
+  drawn position (`[[main + disp_ptr]] + 0x29C`, `link_drawn_pos`), and draws the marker: a box 1 m across and 1 m high on the
+  check's position (an actor's position is its base) and a beam 30 m up from its top centre, each of the 13 lines a `gpuui_line`
+  (sloperinaGZ's soft line: a quad along it sampling a 4 x 32 coverage profile in the glyph atlas) 2.4 px wide at 1080p over a 9 px
+  glow at 22 % (its `overlayui.c` widths), in the panel's gold. They are drawn first, so the panel and the band go over them, and
+  are **not depth-tested** (sloperinaGZ tests its walls against the game's depth; the marker has to be found through walls).
+- `trackerui.c` draws the marker whenever a check is shown, and, with the panel closed, a band at the top centre (the bottom when the
+  console is at the top) with the check's name and how far it is from Link, or where it is; `trackerui_record` and the overlay draw a
+  frame for it alone too.
+
+The marker is 26 quads (13 lines and their glows) and the band about 100, well within `MAX_QUADS`.
+
 ## Failure modes
 
 Each is logged once and leaves the game alone: no `seed.trk` or a damaged one (idle); an unknown build (the panel opens and says so);
@@ -234,6 +272,10 @@ an NVN without the functions the icons need, or no memory for them (the items sh
 that NVN won't take (that item shows as its letters).
 
 ## Known limits
+
+- Show in the world: a check's place is its actor's position in the vanilla layouts, so a check that moves (a Gold Skulltula that
+  flies, an item dropped by an enemy) is shown where it starts; the map's name to show is made from the layout's name, not the
+  game's own text; the marker's lines go through everything, so in a room above or below the check the beam is the way to tell.
 
 - The postcard's and the console's settings are written when their page is left: if the game is closed on that page, the last
   changes are lost.

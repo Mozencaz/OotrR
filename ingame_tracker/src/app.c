@@ -8,6 +8,7 @@
 #include "controls.h"
 #include "gamedata.h"
 #include "gamefile.h"
+#include "locate.h"
 #include "mailbox.h"
 #include "overlay.h"
 #include "panel.h"
@@ -17,6 +18,7 @@
 #include "text.h"
 #include "trackerui.h"
 #include "trkfile.h"
+#include "worldmark.h"
 
 void free(void *p); /* from main */
 
@@ -25,6 +27,7 @@ void free(void *p); /* from main */
 #define PRELOAD_AFTER_MS   10000 /* the seed file is read this long after the first frame: the game's files are mounted */
 #define RETRY_SEED_MS      2000  /* a failed read isn't tried again sooner */
 #define PAUSE_READ_MS      100   /* the game's pause is read this often while the postcard or the console is on */
+#define LOCATE_REFRESH_MS  250   /* the check shown in the world: the game's map and its pause read this often */
 
 static struct {
   game_t game;
@@ -48,11 +51,15 @@ static struct {
   char console_status[CONSOLE_STATUS_ROOM]; /* the status line handed over last */
   bool paused;           /* the game's pause as read last: the postcard and the console hide meanwhile */
   uint64_t next_pause_ms;
+  uint32_t located;          /* the check shown in the world (locate.h), LOCATE_NONE if none */
+  uint64_t next_locate_ms;
+  locate_view_t locate_view; /* handed to the present thread last */
 } app;
 
 /* Runs inside rtld's DT_INIT: checked reads and unformatted logging only. */
 void app_init(uintptr_t nnmain_address)
 {
+  app.located = LOCATE_NONE;
   app.postcard = postcard_defaults();
   app.console = console_defaults();
   app.game = builds_detect(nnmain_address);
@@ -107,6 +114,82 @@ static bool ensure_seed(uint64_t now)
   return app.seed_loaded;
 }
 
+/* --- the check shown in the world (locate.h) ---------------------------------------------------- */
+
+/* the map the game is in (its save's "map" string) in `room`, NULL if it can't be read yet */
+static const char *current_map(char room[GAMEDATA_STRING_ROOM])
+{
+  if (!app.game.build || !gamedata_attach(&app.data))
+    return 0;
+  return gamedata_string(&app.data, GAMEDATA_MAP_STRING, room, GAMEDATA_STRING_ROOM) && room[0] ? room : 0;
+}
+
+static bool link_position(float out[3])
+{
+  return app.game.build && worldmark_link(app.game.main_base + app.game.build->disp_ptr, out);
+}
+
+static uint32_t highlighted_check(void)
+{
+  return app.browse.view == BROWSE_CHECKS ? locate_check_of(&app.seed, app.browse.region, app.browse.check)
+                                          : LOCATE_NONE;
+}
+
+/* the line under the list for the highlighted check: its id, and where it is or what A does */
+static void fill_detail(locate_detail_t *detail)
+{
+  uint32_t check = highlighted_check();
+  char room[GAMEDATA_STRING_ROOM];
+  float link[3];
+  locate_t where = locate_find(&app.seed, check, current_map(room));
+  detail->ident = check == LOCATE_NONE ? "" : trk_string(&app.seed, trk_check_ident(&app.seed, check));
+  detail->shown = check != LOCATE_NONE && check == app.located;
+  detail->state = where.state;
+  locate_panel_line(detail->shown, &where, link_position(link) ? link : 0, detail->line, sizeof(detail->line));
+}
+
+/* What the present thread draws for it: handed over when it changes. Hidden while the game is paused. */
+static void refresh_located(uint64_t now)
+{
+  app.next_locate_ms = now + LOCATE_REFRESH_MS;
+  static locate_view_t view; /* not on the game thread's stack */
+  memset(&view, 0, sizeof(view));
+  if (app.located != LOCATE_NONE && app.seed_loaded && app.game.build) {
+    char room[GAMEDATA_STRING_ROOM];
+    const char *map = current_map(room);
+    locate_t where = locate_find(&app.seed, app.located, map);
+    view.shown = !(map && gamedata_paused(&app.data)); /* the pause is read only once the save data is */
+    view.drawn = view.shown && where.state == LOCATE_HERE;
+    for (int i = 0; i < 3; i++)
+      view.point[i] = where.point[i];
+    text_copy(view.name, sizeof(view.name), trk_string(&app.seed, trk_check(&app.seed, app.located).name));
+    if (!view.drawn)
+      locate_describe(&where, 0, view.where, sizeof(view.where));
+    view.camera_holder = app.game.main_base + app.game.build->camera_ptr;
+    view.link_holder = app.game.main_base + app.game.build->disp_ptr;
+  }
+  if (!memcmp(&view, &app.locate_view, sizeof(view)))
+    return;
+  memcpy(&app.locate_view, &view, sizeof(view)); /* the padding too, for the comparison */
+  overlay_publish_locate(&view);
+}
+
+/* A on a check of a region's list: shown in the world, or put away if it was; a check with no place stays as
+ * it is (the line under the list says why). */
+static void toggle_located(uint64_t now)
+{
+  uint32_t check = highlighted_check();
+  locate_state_t state = locate_find(&app.seed, check, 0).state;
+  if (check == LOCATE_NONE || (check != app.located && (state == LOCATE_NOWHERE || state == LOCATE_OLD_FILE)))
+    return;
+  app.located = locate_toggle(app.located, check);
+  if (app.located == LOCATE_NONE)
+    log_printf("show in the world: off");
+  else
+    log_printf("show in the world: check %u", (unsigned)check);
+  refresh_located(now);
+}
+
 /* --- the panel --------------------------------------------------------------------------------- */
 
 static const char *const mode_names[] = {
@@ -132,9 +215,12 @@ static void fill_browse(panel_t *panel)
   panel->archipelago = app.archipelago;
   panel->browse = app.browse;
   panel->row_count = 0;
-  if (panel->mode == PANEL_TRACKING && app.browse.view == BROWSE_CHECKS)
+  memset(&panel->detail, 0, sizeof(panel->detail));
+  if (panel->mode == PANEL_TRACKING && app.browse.view == BROWSE_CHECKS) {
     panel->row_count = tracker_check_rows(&app.seed, &app.data.source, app.browse.region, app.browse.top, panel->rows,
                                           BROWSE_CHECK_ROWS);
+    fill_detail(&panel->detail);
+  }
 }
 
 static void refresh_panel(uint64_t now)
@@ -243,7 +329,7 @@ static uint32_t highlighted_region_checks(void)
   return app.browse.region < app.seed.region_count ? trk_region(&app.seed, app.browse.region).check_count : 0;
 }
 
-static void navigate(control_t command)
+static void navigate(control_t command, uint64_t now)
 {
   static const nav_t navs[] = {
     [CONTROL_UP] = NAV_UP, [CONTROL_DOWN] = NAV_DOWN, [CONTROL_LEFT] = NAV_LEFT, [CONTROL_RIGHT] = NAV_RIGHT,
@@ -255,6 +341,8 @@ static void navigate(control_t command)
   bool kind_row = app.browse.view == BROWSE_CONSOLE && console_setting_is_kind((console_setting_t)app.browse.setting);
   if (kind_row && (command == CONTROL_SELECT || sideways))
     change_console_setting(direction);
+  else if (command == CONTROL_SELECT && app.browse.view == BROWSE_CHECKS)
+    toggle_located(now);
   else if (command == CONTROL_SELECT)
     browse_open(&app.browse, app.seed.region_count);
   else if (app.browse.view == BROWSE_POSTCARD && sideways)
@@ -284,7 +372,7 @@ static void run(control_t command, uint64_t now)
         close_panel();
       return;
     default:
-      navigate(command);
+      navigate(command, now);
       return;
   }
 }
@@ -357,6 +445,8 @@ void app_frame(uint32_t held)
   save_settings_changes();
   read_pause(now);
   update_console(now);
+  if (app.located != LOCATE_NONE ? now >= app.next_locate_ms : app.locate_view.shown)
+    refresh_located(now);
   if (now < app.next_refresh_ms)
     return;
   if (app.open)

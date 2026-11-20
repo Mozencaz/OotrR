@@ -6,6 +6,7 @@
 #define GAMEDATA_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "builds.h"
@@ -61,5 +62,11 @@ bool gamedata_has_bool64(const gamedata_t *data);
 /* The game's own pause (its pause screen or an item menu), as sloperinaGZ's gd_game_paused tells it, after an
  * attach; false when the game can't say. */
 bool gamedata_paused(const gamedata_t *data);
+
+#define GAMEDATA_MAP_STRING 0x1D6189DAu /* the String64 "map": the map Link is in (sloperinaGZ's GD_STR_MAP) */
+#define GAMEDATA_STRING_ROOM 64         /* a String64's text, with its NUL */
+/* The String64 field `hash`'s text (at most room - 1 characters), read as the game's GetString64 finds it, after an
+ * attach; false (and "") if the game has no such field or it isn't readable. */
+bool gamedata_string(const gamedata_t *data, uint32_t hash, char *out, size_t room);
 
 #endif

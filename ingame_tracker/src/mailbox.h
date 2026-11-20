@@ -19,7 +19,7 @@
 #define MAILBOX_TEXT_ROOM     164 /* an entry's UTF-8 text: `length` bytes of it count */
 #define MAILBOX_STATUS_ROOM   64
 #define MAILBOX_SEED_ID_ROOM  24
-#define MAILBOX_MODULE_VERSION 0x000602 /* 0.6.2: major << 16 | minor << 8 | patch */
+#define MAILBOX_MODULE_VERSION 0x000700 /* 0.7.0: major << 16 | minor << 8 | patch */
 
 /* the client's status */
 enum { MAILBOX_STATUS_NONE, MAILBOX_STATUS_DISCONNECTED, MAILBOX_STATUS_CONNECTING, MAILBOX_STATUS_CONNECTED };

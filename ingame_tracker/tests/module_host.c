@@ -1,5 +1,6 @@
 /* The module's logic on the PC, for tests/test_module.py: the seed file's parser, the tracker's state, the game-data
- * reader over a fake GameData in memory, the controls, the browsing and the icons file's index. `module_host --list` names the tests; `module_host NAME
+ * reader over a fake GameData in memory, the controls, the browsing, the icons file's index and the check shown in
+ * the world (its places, its words, the camera's projection). `module_host --list` names the tests; `module_host NAME
  * [FIXTURE]` runs one (FIXTURE: a seed file for the tests that read one) and exits 0 if it passes. */
 #define _CRT_SECURE_NO_WARNINGS
 #include <stdint.h>
@@ -14,6 +15,7 @@
 #include "../src/gamedata.h"
 #include "../src/grid.h"
 #include "../src/iconfile.h"
+#include "../src/locate.h"
 #include "../src/mailbox.h"
 #include "../src/npad.h"
 #include "../src/postcard.h"
@@ -21,6 +23,7 @@
 #include "../src/text.h"
 #include "../src/tracker.h"
 #include "../src/trkfile.h"
+#include "../src/view.h"
 
 static char failure[256];
 
@@ -36,6 +39,7 @@ static char failure[256];
 
 #define HEADER_BYTES 72 /* versions 1 and 2; version 3 has its flags after them */
 #define HEADER_V3    76
+#define HEADER_V4    92 /* the ids' and places' tables after the flags */
 #define BLOB_MAX     4096
 
 typedef struct { uint8_t bytes[BLOB_MAX]; size_t size; } blob_t;
@@ -43,6 +47,12 @@ typedef struct { uint8_t bytes[BLOB_MAX]; size_t size; } blob_t;
 static void put16(uint8_t *at, uint32_t value) { at[0] = (uint8_t)value; at[1] = (uint8_t)(value >> 8); }
 static void put32(uint8_t *at, uint32_t value) { put16(at, value & 0xFFFF); put16(at + 2, value >> 16); }
 static void put64(uint8_t *at, uint64_t value) { put32(at, (uint32_t)value); put32(at + 4, (uint32_t)(value >> 32)); }
+static void put_float(uint8_t *at, float value)
+{
+  uint32_t bits;
+  memcpy(&bits, &value, sizeof(bits));
+  put32(at, bits);
+}
 
 typedef struct { uint8_t bytes[512]; uint32_t size; } strings_t;
 
@@ -60,12 +70,21 @@ enum { SEED_MARKER = 4000, GOAL_MARKER = 5000, BOOL_A = 100, BOOL_B = 200, BOW_L
 #define BOOL64_KEY 0x1111222233334444ull
 
 static const char *const check_names[3] = { "Mido's House Chest", "Kokiri Sword Chest", "Deku Tree Map Chest" };
+static const char *const check_idents[3] = { "KokiriForest#111", "KokiriForest#222", "npc#Deku Tree Map Chest" };
+/* version 4: Mido's chest in the child's Kokiri Forest, the sword's chest in both, the map's chest nowhere */
+#define PLACES 3
+static const struct { uint32_t check; int map; float x, y, z; } synthetic_places[PLACES] = {
+  { 0, 0, 10.5f, 0.25f, -2.75f }, { 1, 0, -20, 1.5f, 30.125f }, { 1, 1, -20, 1.5f, 30 },
+};
+static const char *const place_maps[2] = { "KokiriForest_Child", "KokiriForest_Adult" };
+static const char *const place_labels[2] = { "Kokiri Forest (child)", "Kokiri Forest (adult)" };
 
 /* Two regions (2 and 1 checks), seven items (the last three are songs), two dungeons with keys; the strings come
- * first. Version 1 has no check names, versions 1 and 2 no flags. */
+ * first, the checks' ids and places last. Version 1 has no check names, versions 1 and 2 no flags, versions 1 to 3
+ * no ids or places. */
 static blob_t synthetic_with(int version, uint32_t flags)
 {
-  uint32_t header = version >= 3 ? HEADER_V3 : HEADER_BYTES;
+  uint32_t header = version >= 4 ? HEADER_V4 : version == 3 ? HEADER_V3 : HEADER_BYTES;
   blob_t blob = { { 0 }, 0 };
   strings_t strings = { { 0 }, 1 };
   uint32_t seed_id = add_string(&strings, "abc123");
@@ -78,9 +97,17 @@ static blob_t synthetic_with(int version, uint32_t flags)
   uint32_t names[3] = { 0, 0, 0 };
   for (int i = 0; version >= 2 && i < 3; i++)
     names[i] = add_string(&strings, check_names[i]);
+  uint32_t idents[3] = { 0, 0, 0 }, maps[2] = { 0, 0 }, labels[2] = { 0, 0 };
+  for (int i = 0; version >= 4 && i < 3; i++)
+    idents[i] = add_string(&strings, check_idents[i]);
+  for (int i = 0; version >= 4 && i < 2; i++) {
+    maps[i] = add_string(&strings, place_maps[i]);
+    labels[i] = add_string(&strings, place_labels[i]);
+  }
   uint32_t strings_padded = (strings.size + 3) & ~3u;
   uint32_t regions_at = header + strings_padded, checks_at = regions_at + 2 * 12, items_at = checks_at + 3 * 16;
-  uint32_t rules_at = items_at + 7 * 8, keys_at = rules_at + 8 * 8, size = keys_at + 2 * 24;
+  uint32_t rules_at = items_at + 7 * 8, keys_at = rules_at + 8 * 8, idents_at = keys_at + 2 * 24;
+  uint32_t places_at = idents_at + (version >= 4 ? 3 * 4 : 0), size = places_at + (version >= 4 ? PLACES * 24 : 0);
   uint8_t *b = blob.bytes;
   memcpy(b, "RTRK", 4);
   put16(b + 4, (uint32_t)version);
@@ -98,6 +125,21 @@ static blob_t synthetic_with(int version, uint32_t flags)
   put32(b + 64, keys_at); put32(b + 68, 2);
   if (version >= 3)
     put32(b + HEADER_BYTES, flags);
+  if (version >= 4) {
+    put32(b + 76, idents_at); put32(b + 80, 3);
+    put32(b + 84, places_at); put32(b + 88, PLACES);
+    for (int i = 0; i < 3; i++)
+      put32(b + idents_at + i * 4, idents[i]);
+    for (int i = 0; i < PLACES; i++) {
+      uint8_t *row = b + places_at + i * 24;
+      put32(row, synthetic_places[i].check);
+      put32(row + 4, maps[synthetic_places[i].map]);
+      put32(row + 8, labels[synthetic_places[i].map]);
+      put_float(row + 12, synthetic_places[i].x);
+      put_float(row + 16, synthetic_places[i].y);
+      put_float(row + 20, synthetic_places[i].z);
+    }
+  }
   memcpy(b + header, strings.bytes, strings.size);
   uint32_t regions[2][3] = { { kokiri, 0, 2 }, { deku, 2, 1 } };
   for (int i = 0; i < 2; i++)
@@ -166,7 +208,7 @@ static int test_parse_reads_every_table(void)
   CHECK(!strcmp(trk_string(&trk, deku.name), "Deku Tree") && deku.first_check == 2 && deku.check_count == 1);
   trk_check_t check = trk_check(&trk, 1);
   CHECK(check.key == BOOL64_KEY && check.kind == TRK_KIND_BOOL64);
-  CHECK(trk.version == 3 && !strcmp(trk_string(&trk, check.name), "Kokiri Sword Chest"));
+  CHECK(trk.version == TRK_VERSION && !strcmp(trk_string(&trk, check.name), "Kokiri Sword Chest"));
   CHECK(trk.flags == 0 && !(trk.flags & TRK_FLAG_ARCHIPELAGO));
   trk_item_t bow = trk_item(&trk, 0);
   CHECK(bow.rule_count == 2 && trk_rule(&trk, 1).hash == BOW_L2 && trk_rule(&trk, 1).level == 2);
@@ -180,8 +222,10 @@ static int test_parse_reads_every_table(void)
 static int test_parse_refuses_damage(void)
 {
   struct { const char *what; size_t at; uint32_t value; int bytes; } damage[] = {
-    { "magic", 0, 0x58585858, 4 },       { "version", 4, 4, 2 },        { "header size", 6, 64, 2 },
-    { "a version 2 header's size", 6, HEADER_BYTES, 2 },
+    { "magic", 0, 0x58585858, 4 },       { "version", 4, 5, 2 },        { "header size", 6, 64, 2 },
+    { "a version 2 header's size", 6, HEADER_BYTES, 2 }, { "a version 3 header's size", 6, HEADER_V3, 2 },
+    { "ids outside", 76, 100000, 4 },    { "id count", 80, 100000, 4 },
+    { "places outside", 84, 100000, 4 }, { "place count", 88, 50, 4 },
     { "version 0", 4, 0, 2 },
     { "file size", 8, 100, 4 },          { "strings outside", 24, 100000, 4 },
     { "strings size", 28, 100000, 4 },   { "regions outside", 32, 100000, 4 },
@@ -235,6 +279,81 @@ static int test_parse_reads_the_archipelago_flag_and_older_versions_as_local(voi
   blob = synthetic_with(3, 0);
   put32(blob.bytes + 32, HEADER_BYTES); /* the regions over the flags */
   CHECK(!parses(&blob));
+  return 0;
+}
+
+static int test_parse_reads_the_checks_ids_and_places(void)
+{
+  blob_t blob = synthetic();
+  trk_t trk;
+  const char *why = "";
+  CHECK(trk_parse(&trk, blob.bytes, blob.size, &why));
+  CHECK(trk.header_size == HEADER_V4 && trk.ident_count == 3 && trk.place_count == PLACES);
+  for (uint32_t i = 0; i < 3; i++)
+    CHECK(!strcmp(trk_string(&trk, trk_check_ident(&trk, i)), check_idents[i]));
+  CHECK(trk_check_ident(&trk, 3) == 0);
+  uint32_t first = 99;
+  CHECK(trk_places_of(&trk, 0, &first) == 1 && first == 0);
+  CHECK(trk_places_of(&trk, 1, &first) == 2 && first == 1);
+  CHECK(trk_places_of(&trk, 2, &first) == 0);
+  trk_place_t place = trk_place(&trk, 2);
+  CHECK(place.check == 1 && place.x == -20 && place.y == 1.5f && place.z == 30);
+  CHECK(!strcmp(trk_string(&trk, place.map), "KokiriForest_Adult"));
+  CHECK(!strcmp(trk_string(&trk, place.label), "Kokiri Forest (adult)"));
+  CHECK(trk.flags == 0);
+  blob = synthetic_with(4, TRK_FLAG_ARCHIPELAGO);
+  CHECK(trk_parse(&trk, blob.bytes, blob.size, &why) && (trk.flags & TRK_FLAG_ARCHIPELAGO));
+  return 0;
+}
+
+static int test_older_files_have_no_ids_or_places(void)
+{
+  for (int version = 1; version <= 3; version++) {
+    blob_t blob = synthetic_of_version(version);
+    trk_t trk;
+    const char *why = "";
+    CHECK(trk_parse(&trk, blob.bytes, blob.size, &why));
+    CHECK(trk.ident_count == 0 && trk.place_count == 0 && trk_check_ident(&trk, 0) == 0);
+    uint32_t first;
+    CHECK(trk_places_of(&trk, 0, &first) == 0);
+    put16(blob.bytes + 4, 4); /* a version 4 file must have the longer header */
+    CHECK(!parses(&blob));
+  }
+  return 0;
+}
+
+static int test_parse_refuses_damaged_ids_and_places(void)
+{
+  blob_t good = synthetic(), blob;
+  trk_t trk;
+  const char *why = "";
+  CHECK(trk_parse(&trk, good.bytes, good.size, &why));
+  struct { const char *what; size_t at; uint32_t value; } damage[] = {
+    { "an id count other than the checks'", 80, 2 },
+    { "an id outside the strings", trk.idents_at + 4, trk.strings_size },
+    { "a place of a check past the checks", trk.places_at + 2 * 24, 3 },
+    { "a place of a check before the place before it", trk.places_at + 2 * 24, 0 },
+    { "a map outside the strings", trk.places_at + 4, trk.strings_size },
+    { "a label outside the strings", trk.places_at + 24 + 8, trk.strings_size },
+    { "a coordinate that isn't a number", trk.places_at + 12, 0x7FC00000u },
+  };
+  for (unsigned i = 0; i < sizeof(damage) / sizeof(*damage); i++) {
+    blob = good;
+    put32(blob.bytes + damage[i].at, damage[i].value);
+    if (parses(&blob)) {
+      snprintf(failure, sizeof(failure), "%s was accepted", damage[i].what);
+      return 1;
+    }
+  }
+  blob = good;
+  put_float(blob.bytes + trk.places_at + 24 + 20, 2e7f); /* off the world */
+  CHECK(!parses(&blob));
+  blob = good;
+  put32(blob.bytes + 80, 0); /* no ids at all: still a file */
+  CHECK(parses(&blob));
+  blob = good;
+  put32(blob.bytes + 88, 0); /* no places */
+  CHECK(parses(&blob));
   return 0;
 }
 
@@ -553,7 +672,7 @@ static void build_fake_game(fake_game_t *fake)
   memset(fake, 0, sizeof(*fake));
   fake->main_block = calloc(1, FAKE_MAIN_SIZE);
   fake->manager = calloc(1, MANAGER_SIZE);
-  fake->build = (game_build_t){ "test", 0, 0, MANAGER_POINTER_AT, INT_VTABLE_AT, BOOL_VTABLE_AT };
+  fake->build = (game_build_t){ "test", 0, 0, MANAGER_POINTER_AT, INT_VTABLE_AT, BOOL_VTABLE_AT, 0, 0 };
   fake->game = (game_t){ &fake->build, (uintptr_t)fake->main_block };
   uintptr_t int_vtable = fake->game.main_base + INT_VTABLE_AT, bool_vtable = fake->game.main_base + BOOL_VTABLE_AT;
   for (int i = 0; i < INT_COUNT; i++) {
@@ -678,6 +797,44 @@ static int test_nothing_is_read_without_a_manager(void)
   uintptr_t null_page = 0x10;
   memcpy(fake.main_block + MANAGER_POINTER_AT, &null_page, sizeof(null_page));
   CHECK(!gamedata_attach(&data));
+  free_fake_game(&fake);
+  return 0;
+}
+
+/* The String64 "map" (and the others) as the game's GetString64 finds them: its type entry at the manager's 0x608,
+ * each object's text pointer at 0x68 and the text's capacity after it. */
+static int test_the_games_strings_are_read_as_it_reads_them(void)
+{
+  static fake_game_t fake;
+  static _Alignas(8) uint8_t objects[3][0x108];
+  static uint32_t table[2 * TABLE_SIZE];
+  static char texts[2][64];
+  build_fake_game(&fake);
+  memset(objects, 0, sizeof(objects));
+  memset(table, 0, sizeof(table));
+  memset(texts, 0, sizeof(texts));
+  strcpy(texts[0], "KokiriForest_Child");
+  strcpy(texts[1], "Short");
+  const uint32_t capacities[3] = { 64, 16, 64 };
+  for (int i = 0; i < 3; i++) {
+    uintptr_t text = i < 2 ? (uintptr_t)texts[i] : 0;
+    memcpy(objects[i] + 0x68, &text, sizeof(text));
+    memcpy(objects[i] + 0x70, &capacities[i], sizeof(capacities[i]));
+  }
+  table_insert(table, GAMEDATA_MAP_STRING, 0);
+  table_insert(table, 77, 1); /* too little room for a String64: the game would refuse it too */
+  table_insert(table, 78, 2); /* no text */
+  fill_type((gd_type_t *)(fake.manager + 0x608), 0, 3, objects, table);
+  gamedata_t data;
+  gamedata_init(&data, fake.game);
+  char out[GAMEDATA_STRING_ROOM];
+  CHECK(!gamedata_string(&data, GAMEDATA_MAP_STRING, out, sizeof(out)) && !out[0]); /* before an attach */
+  CHECK(gamedata_attach(&data));
+  CHECK(gamedata_string(&data, GAMEDATA_MAP_STRING, out, sizeof(out)) && !strcmp(out, "KokiriForest_Child"));
+  CHECK(gamedata_string(&data, GAMEDATA_MAP_STRING, out, 7) && !strcmp(out, "Kokiri"));
+  CHECK(!gamedata_string(&data, 77, out, sizeof(out)) && !out[0]);
+  CHECK(!gamedata_string(&data, 78, out, sizeof(out)));
+  CHECK(!gamedata_string(&data, 12345, out, sizeof(out)));
   free_fake_game(&fake);
   return 0;
 }
@@ -1633,8 +1790,10 @@ static int test_the_panel_fits_the_screen_with_the_songs(void)
   panel_shape_t plain = regions_shape(0), warned = regions_shape(MAX_STATUS_LINES);
   CHECK(sizes_panel_height(&plain) == 326 && sizes_panel_height(&warned) == 350);
   panel_shape_t list = { .tracking = true, .list = true };
+  panel_shape_t warned_list = { .tracking = true, .list = true, .status_lines = MAX_STATUS_LINES };
+  CHECK(sizes_panel_height(&list) == 300 && sizes_panel_height(&warned_list) == 324); /* with the check's two rows */
   panel_shape_t settings = { .tracking = true, .status_lines = MAX_STATUS_LINES, .settings_rows = CONSOLE_SETTING_COUNT };
-  const panel_shape_t *shapes[] = { &plain, &warned, &list, &settings };
+  const panel_shape_t *shapes[] = { &plain, &warned, &list, &warned_list, &settings };
   for (unsigned s = 0; s < sizeof(screens) / sizeof(*screens); s++) {
     float fp = (float)screens[s].height / PICTURE_HEIGHT_FP;
     for (unsigned i = 0; i < sizeof(shapes) / sizeof(*shapes); i++) {
@@ -1811,6 +1970,146 @@ static int test_icons_index_fills_the_atlas(void)
   return 0;
 }
 
+/* --- the check shown in the world ------------------------------------------------------------------ */
+
+static bool near_value(float a, float b)
+{
+  return a - b < 1e-4f && b - a < 1e-4f;
+}
+
+static int test_a_checks_place_is_here_elsewhere_or_nowhere(void)
+{
+  blob_t blob = synthetic();
+  trk_t trk;
+  const char *why = "";
+  CHECK(trk_parse(&trk, blob.bytes, blob.size, &why));
+  CHECK(locate_check_of(&trk, 0, 1) == 1 && locate_check_of(&trk, 1, 0) == 2);
+  CHECK(locate_check_of(&trk, 0, 2) == LOCATE_NONE && locate_check_of(&trk, 2, 0) == LOCATE_NONE);
+  locate_t where = locate_find(&trk, 0, "KokiriForest_Child");
+  CHECK(where.state == LOCATE_HERE && where.point[0] == 10.5f && where.point[1] == 0.25f && where.point[2] == -2.75f);
+  where = locate_find(&trk, 1, "KokiriForest_Adult"); /* its second place */
+  CHECK(where.state == LOCATE_HERE && where.point[2] == 30);
+  where = locate_find(&trk, 1, "Market");
+  CHECK(where.state == LOCATE_ELSEWHERE && !strcmp(where.label, "Kokiri Forest (child)") && where.more_maps == 1);
+  where = locate_find(&trk, 0, 0); /* the game's map isn't known yet */
+  CHECK(where.state == LOCATE_MAP_UNKNOWN && !strcmp(where.label, "Kokiri Forest (child)") && where.more_maps == 0);
+  CHECK(locate_find(&trk, 2, "KokiriForest_Child").state == LOCATE_NOWHERE);
+  CHECK(locate_find(&trk, LOCATE_NONE, "KokiriForest_Child").state == LOCATE_OFF);
+  CHECK(locate_find(&trk, 3, "KokiriForest_Child").state == LOCATE_OFF);
+  blob = synthetic_of_version(3);
+  CHECK(trk_parse(&trk, blob.bytes, blob.size, &why));
+  CHECK(locate_find(&trk, 0, "KokiriForest_Child").state == LOCATE_OLD_FILE);
+  return 0;
+}
+
+static int test_a_shows_a_check_and_puts_it_away(void)
+{
+  CHECK(locate_toggle(LOCATE_NONE, 1) == 1);
+  CHECK(locate_toggle(1, 1) == LOCATE_NONE);
+  CHECK(locate_toggle(1, 2) == 2); /* another check: it is shown instead */
+  return 0;
+}
+
+static int test_what_is_said_of_a_checks_place(void)
+{
+  char text[LOCATE_TEXT_ROOM];
+  const float link[3] = { 0, 0, 0 };
+  locate_t here = { .state = LOCATE_HERE, .point = { 3, 4, 0 } };
+  locate_describe(&here, link, text, sizeof(text));
+  CHECK(!strcmp(text, "5 m away, 4 m up"));
+  locate_panel_line(true, &here, link, text, sizeof(text));
+  CHECK(!strcmp(text, "Shown in the world: 5 m away, 4 m up"));
+  locate_band_line(here.point, link, VIEW_LEFT, text, sizeof(text));
+  CHECK(!strcmp(text, "5 m away, 4 m up, turn left"));
+  locate_band_line(here.point, link, VIEW_ON_PICTURE, text, sizeof(text));
+  CHECK(!strcmp(text, "5 m away, 4 m up"));
+  locate_band_line(here.point, 0, VIEW_BEHIND, text, sizeof(text));
+  CHECK(!strcmp(text, "In this map, behind you"));
+  locate_describe(&here, link, text, 8);
+  CHECK(!strcmp(text, "5 m awa")); /* cut to the room */
+  here.point[1] = -4;
+  locate_describe(&here, link, text, sizeof(text));
+  CHECK(!strcmp(text, "5 m away, 4 m down"));
+  here.point[0] = 0.2f, here.point[1] = 1, here.point[2] = 0;
+  locate_describe(&here, link, text, sizeof(text));
+  CHECK(!strcmp(text, "1 m away")); /* less than 2 m up isn't said */
+  here.point[1] = 0.1f;
+  locate_describe(&here, link, text, sizeof(text));
+  CHECK(!strcmp(text, "Right here"));
+  locate_describe(&here, 0, text, sizeof(text));
+  CHECK(!strcmp(text, "In this map"));
+  here.point[0] = 2e6f;
+  locate_describe(&here, link, text, sizeof(text));
+  CHECK(!strcmp(text, "1000000 m away"));
+  locate_t elsewhere = { .state = LOCATE_ELSEWHERE, .label = "Kokiri Forest (child)", .more_maps = 1 };
+  locate_describe(&elsewhere, link, text, sizeof(text));
+  CHECK(!strcmp(text, "In Kokiri Forest (child) and 1 other map"));
+  locate_panel_line(false, &elsewhere, link, text, sizeof(text));
+  CHECK(!strcmp(text, "A: show in the world     In Kokiri Forest (child) and 1 other map"));
+  elsewhere.more_maps = 2;
+  locate_describe(&elsewhere, link, text, sizeof(text));
+  CHECK(!strcmp(text, "In Kokiri Forest (child) and 2 other maps"));
+  elsewhere.more_maps = 0;
+  locate_describe(&elsewhere, link, text, sizeof(text));
+  CHECK(!strcmp(text, "In Kokiri Forest (child)"));
+  locate_t nowhere = { .state = LOCATE_NOWHERE }, old = { .state = LOCATE_OLD_FILE }, off = { .state = LOCATE_OFF };
+  locate_panel_line(false, &nowhere, link, text, sizeof(text));
+  CHECK(!strcmp(text, "No place in the world for this check")); /* A does nothing there */
+  locate_panel_line(false, &old, link, text, sizeof(text));
+  CHECK(!strcmp(text, "No places in this seed's file: update its tracker with the game file"));
+  locate_panel_line(false, &off, link, text, sizeof(text));
+  CHECK(!strcmp(text, ""));
+  return 0;
+}
+
+static int test_the_camera_projects_as_the_games(void)
+{
+  view_cam_t cam;
+  const float pos[3] = { 0, 0, 0 }, look[3] = { 0, 0, 1 };
+  CHECK(view_from(&cam, pos, look, 0.5f, 2.0f, 0));
+  CHECK(cam.near == VIEW_DEFAULT_NEAR && cam.tan_x == 1.0f && cam.tan_y == 0.5f);
+  /* sloperinaGZ's basis: right = (-forward.z, 0, forward.x), so looking along +z the world's +x is on the left */
+  CHECK(cam.right[0] == -1 && cam.right[2] == 0 && cam.up[1] == 1);
+  float v[3], sx, sy;
+  const float ahead[3] = { 0, 0, 10 }, corner[3] = { -10, -5, 10 };
+  view_point(&cam, ahead, v);
+  view_screen(&cam, v, &sx, &sy);
+  CHECK(near_value(sx, 0.5f) && near_value(sy, 0.5f));
+  view_point(&cam, corner, v); /* the picture's right and bottom edges */
+  view_screen(&cam, v, &sx, &sy);
+  CHECK(near_value(sx, 1) && near_value(sy, 1));
+  const float left[3] = { 30, 0, 10 }, right[3] = { -30, 0, 10 }, above[3] = { 0, 30, 10 }, below[3] = { 0, -30, 10 };
+  const float behind[3] = { 0, 0, -10 };
+  CHECK(view_side(&cam, ahead) == VIEW_ON_PICTURE && view_side(&cam, left) == VIEW_LEFT);
+  CHECK(view_side(&cam, right) == VIEW_RIGHT && view_side(&cam, above) == VIEW_ABOVE);
+  CHECK(view_side(&cam, below) == VIEW_BELOW && view_side(&cam, behind) == VIEW_BEHIND);
+  float s[4];
+  const float low[3] = { 0, -100, 10 }, high[3] = { 0, 100, 10 }; /* a beam: cut to the picture's height */
+  CHECK(view_segment(&cam, low, high, s));
+  CHECK(near_value(s[0], 0.5f) && near_value(s[1], 1) && near_value(s[2], 0.5f) && near_value(s[3], 0));
+  const float back[3] = { 0, 1, -10 }, front[3] = { 0, 1, 10 }; /* cut at the near plane, then at the top */
+  CHECK(view_segment(&cam, back, front, s));
+  CHECK(near_value(s[0], 0.5f) && near_value(s[1], 0) && near_value(s[2], 0.5f) && near_value(s[3], 0.4f));
+  const float further_back[3] = { 0, 1, -20 }, left_up[3] = { 30, 1, 10 };
+  CHECK(!view_segment(&cam, behind, further_back, s)); /* all of it behind */
+  CHECK(!view_segment(&cam, left, left_up, s));         /* all of it to the left */
+  return 0;
+}
+
+static int test_a_camera_that_isnt_one_is_refused(void)
+{
+  view_cam_t cam;
+  const float pos[3] = { 1, 2, 3 }, up[3] = { 1, 5, 3 }, look[3] = { 1, 2, 4 };
+  CHECK(!view_from(&cam, pos, pos, 0.5f, 1.5f, 0.1f)); /* looking at itself */
+  CHECK(!view_from(&cam, pos, up, 0.5f, 1.5f, 0.1f));  /* straight up: no right */
+  CHECK(!view_from(&cam, pos, look, 0.01f, 1.5f, 0.1f));
+  CHECK(!view_from(&cam, pos, look, 0.5f, 10, 0.1f));
+  CHECK(view_from(&cam, pos, look, 0.5f, 1.5f, 0.5f) && cam.near == 0.5f);
+  CHECK(view_from(&cam, pos, look, 0.5f, 1.5f, 50) && cam.near == VIEW_DEFAULT_NEAR);
+  CHECK(view_root(16) == 4 && near_value(view_root(2), 1.41421356f) && view_root(0) == 0 && view_root(-1) == 0);
+  return 0;
+}
+
 /* --- driver ----------------------------------------------------------------------------------- */
 
 typedef struct { const char *name; int (*run)(void); int (*run_with_file)(const char *); } test_t;
@@ -1821,6 +2120,9 @@ static const test_t tests[] = {
   { "parse_refuses_a_row_leaving_its_table", test_parse_refuses_a_row_leaving_its_table, 0 },
   { "parse_refuses_truncation_and_an_unterminated_string", test_parse_refuses_truncation_and_an_unterminated_string, 0 },
   { "parse_reads_version_1_without_names", test_parse_reads_version_1_without_names, 0 },
+  { "parse_reads_the_checks_ids_and_places", test_parse_reads_the_checks_ids_and_places, 0 },
+  { "older_files_have_no_ids_or_places", test_older_files_have_no_ids_or_places, 0 },
+  { "parse_refuses_damaged_ids_and_places", test_parse_refuses_damaged_ids_and_places, 0 },
   { "parse_reads_the_archipelago_flag_and_older_versions_as_local",
     test_parse_reads_the_archipelago_flag_and_older_versions_as_local, 0 },
   { "parse_refuses_a_name_outside_the_strings", test_parse_refuses_a_name_outside_the_strings, 0 },
@@ -1839,6 +2141,7 @@ static const test_t tests[] = {
   { "nothing_is_read_without_a_manager", test_nothing_is_read_without_a_manager, 0 },
   { "the_bool_entry_is_recognised_by_its_vtable", test_the_bool_entry_is_recognised_by_its_vtable, 0 },
   { "moving_data_is_followed_by_the_next_attach", test_moving_data_is_followed_by_the_next_attach, 0 },
+  { "the_games_strings_are_read_as_it_reads_them", test_the_games_strings_are_read_as_it_reads_them, 0 },
   { "the_games_pause_is_its_bool_or_its_requests", test_the_games_pause_is_its_bool_or_its_requests, 0 },
   { "the_combo_toggles_on_its_press_only", test_the_combo_toggles_on_its_press_only, 0 },
   { "a_and_b_and_directions_only_with_the_panel_open", test_a_and_b_and_directions_only_with_the_panel_open, 0 },
@@ -1881,6 +2184,11 @@ static const test_t tests[] = {
   { "icons_index_reads_every_entry", test_icons_index_reads_every_entry, 0 },
   { "icons_index_refuses_damage", test_icons_index_refuses_damage, 0 },
   { "icons_index_fills_the_atlas", test_icons_index_fills_the_atlas, 0 },
+  { "a_checks_place_is_here_elsewhere_or_nowhere", test_a_checks_place_is_here_elsewhere_or_nowhere, 0 },
+  { "a_shows_a_check_and_puts_it_away", test_a_shows_a_check_and_puts_it_away, 0 },
+  { "what_is_said_of_a_checks_place", test_what_is_said_of_a_checks_place, 0 },
+  { "the_camera_projects_as_the_games", test_the_camera_projects_as_the_games, 0 },
+  { "a_camera_that_isnt_one_is_refused", test_a_camera_that_isnt_one_is_refused, 0 },
 };
 
 int main(int argc, char **argv)

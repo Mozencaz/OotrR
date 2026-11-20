@@ -12,6 +12,8 @@ typedef struct {
   uint32_t gd_mgr_ptr;   /* main + this: a pointer to a pointer to the GameData manager */
   uint32_t vt_int_field; /* the vtable of an Int field object */
   uint32_t vt_bool_type; /* the vtable of the Bool type entry in the manager */
+  uint32_t camera_ptr;   /* main + this: the camera manager, its active camera at +0x68 (sloperinaGZ's link.c camera()) */
+  uint32_t disp_ptr;     /* main + this: a pointer to the object holding Link's drawn position at +0x29C */
 } game_build_t;
 
 typedef struct {

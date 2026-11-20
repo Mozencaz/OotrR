@@ -4,7 +4,9 @@
  * them (their icons, from the seed's icons.bin, once they're in; their letters until then or without it), the
  * dungeons' keys, the checks found by region, one of them highlighted; or, with a region's list open, its checks.
  * The postcard is the items, the songs and the keys alone, as a smaller card in a corner, drawn with the same
- * code; the Archipelago console is the desktop client's latest lines in a band at an edge, each fading out. */
+ * code; the Archipelago console is the desktop client's latest lines in a band at an edge, each fading out. The
+ * check shown in the world (locate.h) is drawn over the picture by worldmark.c, with a band naming it while the
+ * panel is closed. */
 #include "trackerui.h"
 
 #include "gamefile.h"
@@ -17,6 +19,7 @@
 #include "text.h"
 #include "uishader.h"
 #include "uitext.h"
+#include "worldmark.h"
 
 #define MIN_LINE_PX          1.0f
 #define LINE_FP              0.5f /* a hairline's thickness */
@@ -63,7 +66,8 @@
 #define SMALL_KEY_ICON   "Small Key" /* the keys' entries in it, after the grid's items */
 #define BOSS_KEY_ICON    "Boss Key"
 _Static_assert(ICONFILE_MAX <= GPUUI_ICONS, "an atlas slot for each icon");
-#define HINT_LIST        "D-pad: scroll (left / right: a page)     B: back to the regions"
+#define HINT_LIST        "D-pad: scroll (left / right: a page)     A: show in the world     B: back"
+#define KEY_PREFIX       "key " /* before a check's internal key, under the list */
 
 static const rgb_t box_colour = { 0x0A, 0x09, 0x08 };
 static const rgb_t title_colour = { 0xF5, 0xD6, 0x85 };
@@ -625,6 +629,34 @@ static void draw_check_row(const layout_t *l, const check_row_t *check, float y,
   draw_text(&l->body, name, x, baseline_in(&l->body, y, row), colour);
 }
 
+/* under the list: the highlighted check's name with its internal key (the randomizer's id for it, which names it
+ * whatever name it is shown with), then where it is in the world or what A does (locate.h) */
+static float draw_list_detail(const layout_t *l, const panel_t *panel, float y)
+{
+  const locate_detail_t *detail = &panel->detail;
+  float row = DETAIL_ROW_FP * l->fp, baseline = baseline_in(&l->body, y, row), key_w = 0;
+  uint32_t at = panel->browse.check - panel->browse.top;
+  const char *name = at < panel->row_count ? panel->rows[at].name : "";
+  if (detail->ident && detail->ident[0]) {
+    char key[LOCATE_NAME_ROOM + sizeof(KEY_PREFIX)], shown[sizeof(key)];
+    size_t prefix = text_copy(key, sizeof(key), KEY_PREFIX);
+    text_copy(key + prefix, sizeof(key) - prefix, detail->ident);
+    fit_text(&l->body, key, l->inner_w / 2, false, shown, sizeof(shown));
+    key_w = text_width(&l->body, shown);
+    draw_text(&l->body, shown, l->inner_x + l->inner_w - key_w, baseline, dim_colour);
+  }
+  char shown_name[NAME_ROOM];
+  fit_text(&l->bold, name, l->inner_w - key_w - REGION_NAME_GAP_FP * l->fp, false, shown_name, sizeof(shown_name));
+  draw_text(&l->bold, shown_name, l->inner_x, baseline_in(&l->bold, y, row), text_colour);
+  y += row;
+  char line[LOCATE_TEXT_ROOM];
+  bool placed = detail->state == LOCATE_HERE || detail->state == LOCATE_ELSEWHERE || detail->state == LOCATE_MAP_UNKNOWN;
+  fit_text(&l->body, detail->line, l->inner_w, false, line, sizeof(line));
+  draw_text(&l->body, line, l->inner_x, baseline_in(&l->body, y, row),
+            detail->shown ? title_colour : placed ? text_colour : dim_colour);
+  return y + row;
+}
+
 static float draw_list(const layout_t *l, const panel_t *panel, float y)
 {
   float row = LIST_ROW_FP * l->fp;
@@ -634,7 +666,7 @@ static float draw_list(const layout_t *l, const panel_t *panel, float y)
       draw_highlight(l, l->inner_x, top, l->inner_w, row);
     draw_check_row(l, &panel->rows[i], top, row);
   }
-  return y + BROWSE_CHECK_ROWS * row + SECTION_GAP_FP * l->fp;
+  return draw_list_detail(l, panel, y + BROWSE_CHECK_ROWS * row + SECTION_GAP_FP * l->fp);
 }
 
 static void draw_panel(const panel_t *panel, nvn_rect_t area)
@@ -787,14 +819,64 @@ static void draw_console(const console_view_t *view, nvn_rect_t area, const box_
   gpuui_set_opacity(1);
 }
 
+/* --- the check shown in the world ------------------------------------------------------------------- */
+
+/* With the panel closed: the check's name and how far it is (or where it is) in a band at the top, at the bottom
+ * while the console is at the top. */
+static void draw_located_band(const locate_view_t *located, const char *where, const console_view_t *console,
+                              nvn_rect_t area)
+{
+  float fp = picture_fp(area);
+  layout_t l = layout_scaled(fp);
+  float pad_x = CONSOLE_PAD_X_FP * fp, pad_y = (float)(int)(CONSOLE_PAD_Y_FP * fp + 0.5f), row = MARK_ROW_FP * fp;
+  float room = MARK_BAND_W_FP * fp - 2 * pad_x;
+  char name[LOCATE_NAME_ROOM], line[LOCATE_TEXT_ROOM];
+  fit_text(&l.bold, located->name, room, false, name, sizeof(name));
+  fit_text(&l.body, where, room, false, line, sizeof(line));
+  float name_w = text_width(&l.bold, name), line_w = text_width(&l.body, line);
+  float w = (float)(int)((name_w > line_w ? name_w : line_w) + 2 * pad_x + 0.5f), h = 2 * row + 2 * pad_y;
+  bool console_top = console->shown && console->settings.position % CONSOLE_POSITION_COUNT == CONSOLE_TOP;
+  float x = (float)(int)((area.w - w) / 2);
+  float y = (float)(int)(console_top ? area.h - MARGIN_FP * fp - h : MARGIN_FP * fp);
+  gpuui_fill(x, y, w, h, to_gpu(box_colour, BOX_OPACITY));
+  draw_text(&l.bold, name, x + pad_x, baseline_in(&l.bold, y + pad_y, row), title_colour);
+  draw_text(&l.body, line, x + pad_x, baseline_in(&l.body, y + pad_y + row, row), text_colour);
+}
+
+/* The marker, under everything else (in this map, when the camera can be read), and the band with the panel
+ * closed. */
+static void draw_located(const locate_view_t *located, const panel_t *panel, const console_view_t *console,
+                         nvn_rect_t area)
+{
+  view_cam_t cam;
+  bool seen = located->drawn && worldmark_camera(located->camera_holder, &cam);
+  if (seen)
+    worldmark_draw(&cam, located->point, (float)area.w, (float)area.h);
+  if (panel->menu)
+    return; /* the list says where it is */
+  char line[LOCATE_TEXT_ROOM];
+  const char *where = located->where;
+  if (located->drawn) {
+    float link[3];
+    bool linked = worldmark_link(located->link_holder, link);
+    locate_band_line(located->point, linked ? link : 0, seen ? view_side(&cam, located->point) : VIEW_ON_PICTURE,
+                     line, sizeof(line));
+    where = line;
+  }
+  draw_located_band(located, where, console, area);
+}
+
 /* --- a frame ---------------------------------------------------------------------------------------- */
 
 /* The panel when it is open; the postcard when it is on, with the panel closed or showing the postcard's
  * settings (the card then shows what they do); the console when it is on, with the panel closed or showing the
  * console's settings (every line at full strength, clear of where the card is once the panel closes, and under the
  * panel, whose rows it would hide). */
-static void draw_frame(const panel_t *panel, const console_view_t *console, nvn_rect_t area, uint64_t now)
+static void draw_frame(const panel_t *panel, const console_view_t *console, const locate_view_t *located,
+                       nvn_rect_t area, uint64_t now)
 {
+  if (located->shown)
+    draw_located(located, panel, console, area);
   bool card_on = panel->mode == PANEL_TRACKING && panel->postcard.shown;
   box_t card = card_on ? sizes_card_box(&panel->postcard, panel->state.key_count, area.w / picture_fp(area))
                        : (box_t){ 0, 0, 0, 0 };
@@ -810,14 +892,15 @@ static void draw_frame(const panel_t *panel, const console_view_t *console, nvn_
 }
 
 bool trackerui_record(nvn_obj_t *cmd, int slot, nvn_texture_t *texture, const nvn_texture_info_t *info,
-                      nvn_rect_t area, const panel_t *panel, const console_view_t *console, uint64_t now)
+                      nvn_rect_t area, const panel_t *panel, const console_view_t *console,
+                      const locate_view_t *located, uint64_t now)
 {
-  if (area.h <= 0 || (panel->mode == PANEL_HIDDEN && !console_view_showing(console, now)))
+  if (area.h <= 0 || (panel->mode == PANEL_HIDDEN && !console_view_showing(console, now) && !located->shown))
     return false;
   if (gpuui_atlas_resetting() && !slots_wait_idle())
     return false;
   gpuui_begin(texture, area, info->height, nvn_origin_lower_left(), slot);
   icons_step();
-  draw_frame(panel, console, area, now);
+  draw_frame(panel, console, located, area, now);
   return gpuui_end(cmd, nvn_game_texture_pool(), nvn_game_sampler_pool());
 }

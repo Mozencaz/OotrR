@@ -9,7 +9,8 @@ float sizes_panel_height(const panel_shape_t *shape)
 {
   float h = 2 * PAD_Y_FP + TITLE_ROW_FP + TITLE_GAP_FP + shape->status_lines * STATUS_ROW_FP;
   if (shape->list)
-    return h + LIST_HEAD_ROW_FP + BROWSE_CHECK_ROWS * LIST_ROW_FP + SECTION_GAP_FP + HINT_ROW_FP;
+    return h + LIST_HEAD_ROW_FP + BROWSE_CHECK_ROWS * LIST_ROW_FP + SECTION_GAP_FP + LIST_DETAIL_ROWS * DETAIL_ROW_FP +
+           HINT_ROW_FP;
   if (shape->settings_rows)
     return h + LIST_HEAD_ROW_FP + shape->settings_rows * SETTING_ROW_FP + SECTION_GAP_FP + HINT_ROW_FP;
   if (shape->tracking)

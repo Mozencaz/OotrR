@@ -16,6 +16,13 @@
 #define INT_STRIDE         0x28
 #define INT_VALUE_OFFSET   0x1C
 
+/* String64 (sloperinaGZ's z64hd.h and gamedata.c string_at, 8a2c73c): the type entry at a fixed place, each
+ * object holding a pointer to its text and the text's capacity after it */
+#define MANAGER_STRING_TYPE  0x608
+#define STRING_STRIDE        0x108
+#define STRING_VALUE_OFFSET  0x68
+#define STRING_LENGTH        64
+
 /* the game's own pause (sloperinaGZ's gd_game_paused, 8a2c73c) */
 #define SEQUENCE_IS_PAUSE                  0x604AEBE1u /* Sequence_IsPause (Bool) */
 #define SEQUENCE_GAME_PAUSE_REQUEST_COUNT  0x64A61098u /* Sequence_GamePauseRequestCount (Int) */
@@ -232,6 +239,32 @@ bool gamedata_attach(gamedata_t *data)
 bool gamedata_has_bool64(const gamedata_t *data)
 {
   return data->bool64_type != 0;
+}
+
+/* --- String64, for the place shown in the world (locate.h) ----------------------------------- */
+
+bool gamedata_string(const gamedata_t *data, uint32_t hash, char *out, size_t room)
+{
+  if (!room)
+    return false;
+  out[0] = 0;
+  const gd_type_t *type = data->manager ? (const gd_type_t *)(data->manager + MANAGER_STRING_TYPE) : 0;
+  if (!type || !type_plausible(type))
+    return false;
+  const uint32_t *pair = find_pair(type, hash);
+  if (!pair || pair[1] >= type->count)
+    return false;
+  uintptr_t field = (uintptr_t)type->objects + (uintptr_t)pair[1] * STRING_STRIDE + STRING_VALUE_OFFSET;
+  uintptr_t text = sys_ptr(field);
+  uint32_t capacity;
+  if (!text || !sys_read32(field + sizeof(uintptr_t), &capacity) || capacity < STRING_LENGTH ||
+      !sys_mapped(text, STRING_LENGTH, SYS_PERM_R | SYS_PERM_W))
+    return false;
+  size_t i = 0;
+  for (const volatile char *at = (const volatile char *)text; i + 1 < room && i < STRING_LENGTH && at[i]; i++)
+    out[i] = at[i];
+  out[i] = 0;
+  return true;
 }
 
 /* --- the game's pause ------------------------------------------------------------------------ */

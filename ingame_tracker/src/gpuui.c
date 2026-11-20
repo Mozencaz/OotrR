@@ -24,6 +24,7 @@
 
 #include "sys.h"
 #include "uishader.h"
+#include "view.h"
 
 void *aligned_alloc(size_t align, size_t size); /* from main */
 void free(void *p);                             /* from main */
@@ -43,6 +44,10 @@ void free(void *p);                             /* from main */
 #define ATLAS_STRIDE (ATLAS_W * ATLAS_BPP) /* a staging row, in bytes */
 #define ATLAS_SLOTS 512                    /* a power of two */
 #define GLYPH_PAD 1                        /* empty texels around each glyph, so linear filtering doesn't bleed */
+#define LINE_FACE 0xFF                     /* atlas_map's face for the line's profile (not a gf_face_t) */
+#define LINE_PROFILE_ID 0xFFF0u            /* ... and its codepoint and size (sloperinaGZ's gpuui.c, 8a2c73c) */
+#define LINE_PROFILE_W 4
+#define LINE_PROFILE_H 32
 #define CODE_ALIGN 0x100
 #define CODE_PADDING 0x800    /* after the last code area (NVN 2's shader pool padding) */
 #define CMD_RESERVE 0x4000    /* command memory kept free (the caller's own commands, the restore) */
@@ -690,6 +695,57 @@ float gpuui_glyph_shadowed(gf_face_t face, int em, uint32_t cp, float x, float b
   if (s->state == 1) /* pixel-aligned, as the glyph was rasterised (its shadow is in the image, to its right and below) */
     textured_quad(s, (float)(int)(x + 0.5f) + s->x0, baseline + s->y0, colour);
   return s->advance;
+}
+
+/* --- lines (the check shown in the world, worldmark.c) ---------------------------------------------------- */
+
+/* The line's profile across it: nothing at its sides, full over its middle half, smooth between (sloperinaGZ's
+ * gpuui.c paint_line_profile and gpuui_line, GPL-3; 8a2c73c). In the atlas as a glyph is: luminance 1, coverage. */
+static const atlas_slot_t *line_profile(void)
+{
+  atlas_slot_t *s = atlas_find(LINE_FACE, LINE_PROFILE_W, LINE_PROFILE_ID << 16 | LINE_PROFILE_H);
+  if (s && !s->state) {
+    if (!atlas_place(s, LINE_FACE, LINE_PROFILE_W, LINE_PROFILE_ID << 16 | LINE_PROFILE_H, LINE_PROFILE_W,
+                     LINE_PROFILE_H)) {
+      atlas_full = true;
+      return 0;
+    }
+    for (int y = 0; y < LINE_PROFILE_H; y++) {
+      float v = (y + 0.5f) / LINE_PROFILE_H, edge = v < 0.5f ? v : 1 - v; /* 0 at a side, 0.5 in the middle */
+      float c = edge >= 0.25f ? 1 : edge / 0.25f;
+      uint8_t *row = staging_at(s->x, s->y + y);
+      for (int x = 0; x < LINE_PROFILE_W; x++) {
+        row[ATLAS_BPP * x] = 255;
+        row[ATLAS_BPP * x + 1] = (uint8_t)(c * c * (3 - 2 * c) * 255 + 0.5f);
+      }
+    }
+  }
+  return s && s->state == 1 ? s : 0;
+}
+
+void gpuui_line(float x0, float y0, float x1, float y1, float width, gpu_colour_t colour)
+{
+  float dx = x1 - x0, dy = y1 - y0, len = view_root(dx * dx + dy * dy);
+  if (!ready || !(len >= 0.01f) || !(width > 0))
+    return;
+  const atlas_slot_t *s = line_profile();
+  if (!s)
+    return;
+  quad_t *q = new_quad();
+  if (!q)
+    return;
+  /* a len x h quad along the line, turned about the line's start: (0, h / 2) on (x0, y0) */
+  float h = width * 2, c = dx / len, sn = dy / len;
+  float m[12] = { c, -sn, 0, x0 + sn * h / 2, sn, c, 0, y0 - c * h / 2, 0, 0, 0, 0 };
+  memcpy(q->m, m, sizeof(m));
+  for (int i = 0; i < 4; i++)
+    q->c[i] = colour;
+  q->w = len;
+  q->h = h;
+  float sm = (s->x + 2.0f) / ATLAS_W, t0 = (float)s->y / ATLAS_H, t1 = (float)(s->y + s->h) / ATLAS_H;
+  float st[8] = { sm, t0, sm, t0, sm, t1, sm, t1 };
+  memcpy(q->st, st, sizeof(st));
+  q->source = QUAD_GLYPH;
 }
 
 /* --- the items' icons -------------------------------------------------------------------------------- */

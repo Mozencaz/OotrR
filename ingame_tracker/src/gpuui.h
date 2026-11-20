@@ -2,8 +2,8 @@
  * the selection band), glyphs from the game's fonts and the items' icons, alpha-blended over the game's
  * picture in the frame being presented, with no read-back. Used by trackerui.c from the present hook.
  * Adapted from sloperinaGZ's src/ootgz/gpuui.h (GPL-3; master 8c3a940636), without its pictures, icons,
- * shapes, lines and depth-tested layer; the icons' textures follow its later gpuui.c (5287f64: the game's
- * packaged textures, its render-target layer).
+ * shapes and depth-tested layer; the icons' textures follow its later gpuui.c (5287f64: the game's
+ * packaged textures, its render-target layer), and the lines its gpuui_line (8a2c73c).
  * Taken from ocarinaMIDI (c599fa5, GPL-3). */
 #ifndef GPUUI_H
 #define GPUUI_H
@@ -42,6 +42,10 @@ void gpuui_fill(float x, float y, float w, float h, gpu_colour_t colour);
 #define GPUUI_SHADOW_ALPHA 0.55f
 float gpuui_glyph_shadowed(gf_face_t face, int em, uint32_t codepoint, float x, float baseline,
                            gpu_colour_t colour);
+/* A line from (x0, y0) to (x1, y1), `width` pixels across its full part with a soft edge as wide again, in one
+ * colour: over the picture and the panel alike (not depth-tested). */
+void gpuui_line(float x0, float y0, float x1, float y1, float width, gpu_colour_t colour);
+
 /* The items' icons: the game's pictures (ASTC 4x4, in its packaged block-linear layout), each shrunk once on
  * the GPU into a slot of an icon atlas (RGBA16F, premultiplied), so that only one picture's bytes are ever
  * held. */

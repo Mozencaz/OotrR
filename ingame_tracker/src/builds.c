@@ -12,11 +12,13 @@ static const game_build_t known_builds[] = {
     .version = "1.0.0",
     .nnmain = 0x11C1FB0, .mod0 = 0x3BE705C, .gd_mgr_ptr = 0x4C184D8,
     .vt_int_field = 0x4BBAB10, .vt_bool_type = 0x4BB9538,
+    .camera_ptr = 0x4E27C08, .disp_ptr = 0x4C18A98,
   },
   {
     .version = "1.1.1",
     .nnmain = 0x1202CD0, .mod0 = 0x3C4705C, .gd_mgr_ptr = 0x4C7E180,
     .vt_int_field = 0x4C20718, .vt_bool_type = 0x4C1F140,
+    .camera_ptr = 0x4E98068, .disp_ptr = 0x4C7E740,
   },
 };
 

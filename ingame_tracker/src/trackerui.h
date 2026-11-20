@@ -8,6 +8,7 @@
 #include <stdbool.h>
 
 #include "consolelog.h"
+#include "locate.h"
 #include "nvn.h"
 #include "panel.h"
 
@@ -20,6 +21,7 @@ bool trackerui_usable(void);
 /* Records the panel, the postcard and the console as they are at `now` into `cmd` (a slot's, slots.h); false if
  * there is nothing to draw. */
 bool trackerui_record(nvn_obj_t *cmd, int slot, nvn_texture_t *texture, const nvn_texture_info_t *info,
-                      nvn_rect_t area, const panel_t *panel, const console_view_t *console, uint64_t now);
+                      nvn_rect_t area, const panel_t *panel, const console_view_t *console,
+                      const locate_view_t *located, uint64_t now);
 
 #endif

@@ -51,6 +51,21 @@ void overlay_publish_console(const console_view_t *view)
   publish(&published_console, &published_console_seq, view, sizeof(published_console));
 }
 
+static locate_view_t published_locate;
+static uint32_t published_locate_seq;
+
+void overlay_publish_locate(const locate_view_t *view)
+{
+  publish(&published_locate, &published_locate_seq, view, sizeof(published_locate));
+}
+
+static const locate_view_t *newest_locate(void)
+{
+  static locate_view_t newest, attempt;
+  read_newest(&newest, &attempt, &published_locate, &published_locate_seq, sizeof(newest));
+  return &newest;
+}
+
 static const panel_t *newest_panel(void)
 {
   static panel_t newest, attempt;
@@ -77,10 +92,12 @@ void overlay_before_present(nvn_queue_t *queue, nvn_window_t *window, nvn_textur
 {
   const panel_t *panel = newest_panel();
   const console_view_t *console = newest_console();
+  const locate_view_t *located = newest_locate();
   uint64_t now = sys_ms();
   nvn_texture_info_t info;
   bool console_shown = console_view_showing(console, now);
-  if ((panel->mode == PANEL_HIDDEN && !console_shown) || state == OV_FAILED || !nvn_texture_info(texture, &info))
+  if ((panel->mode == PANEL_HIDDEN && !console_shown && !located->shown) || state == OV_FAILED ||
+      !nvn_texture_info(texture, &info))
     return;
   if (state == OV_NONE) {
     if (!slots_init(COMMAND_BYTES)) {
@@ -98,7 +115,7 @@ void overlay_before_present(nvn_queue_t *queue, nvn_window_t *window, nvn_textur
     return;
   }
   nvn_rect_t area = nvn_visible_area(window, &info);
-  if (trackerui_record(slots_begin(slot), slot, texture, &info, area, panel, console, now))
+  if (trackerui_record(slots_begin(slot), slot, texture, &info, area, panel, console, located, now))
     slots_submit(queue, slot);
   else
     slots_discard();
