@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath
 from oot_rando.randomizer.randomizer_core import Settings, settings_identity
 from oot_rando.patching.randomize_kokiri import TITLE, BUILD
 from oot_rando.pc_port import is_port_folder
-from oot_rando.tracker import ingame_bundle, ingame_icons
+from oot_rando.tracker import check_places, ingame_bundle, ingame_format, ingame_icons
 from oot_rando.tracker.ingame_bundle import MODULE_FILE, SEED_FILE
 from oot_rando.tracker.ingame_icons import ICON_FILE
 
@@ -337,8 +337,9 @@ def _replace_files(directory, contents):
 def update_ingame_tracker(directory, add=False, nup=None):
     """Bring a seed's in-game tracker to this version of the application: ``romfs/RandoTracker/seed.trk``,
     ``exefs/subsdk7`` and their entries in ``manifest.json``; with the game's ``nup``, the items' icons too
-    (``romfs/RandoTracker/icons.bin``). Nothing else in the folder changes. A seed made without the tracker
-    gets it only with ``add``. Returns the files written (none when already up to date)."""
+    (``romfs/RandoTracker/icons.bin``) and where the checks are in its maps (without it, the seed file keeps the
+    places it has). Nothing else in the folder changes. A seed made without the tracker gets it only with ``add``.
+    Returns the files written (none when already up to date)."""
     directory = Path(directory).resolve()
     if not (directory / 'manifest.json').is_file():
         raise ValueError('Not a seed folder (no manifest.json): ' + str(directory))
@@ -352,10 +353,12 @@ def update_ingame_tracker(directory, add=False, nup=None):
     if not has_ingame_tracker(manifest) and not add:
         raise ValueError('This seed was made without the in-game tracker. Ask to add it to update it.')
     tracking = json.loads((directory / 'tracking.json').read_bytes())
-    icons = _game_icons(nup) if nup is not None else None
+    ids = [check['id'] for check in catalogue['checks']]
+    icons, places = _from_game(nup, ids) if nup is not None else (None, _seed_places(directory))
     updated, files, exefs = copy.deepcopy(manifest), {}, {}
     try:
-        ingame_bundle.attach(updated, files, exefs, catalogue['checks'], tracking, icons, _key_actors(directory))
+        ingame_bundle.attach(updated, files, exefs, catalogue['checks'], tracking, icons, _key_actors(directory),
+                             places)
     except (KeyError, TypeError) as error:
         raise ValueError('This seed\'s tracking data is too old for the in-game tracker: generate it again.') from error
     contents = {}
@@ -381,17 +384,30 @@ def _key_actors(directory):
             for path in folder.glob(pattern)} if folder.is_dir() else set()
 
 
-def _game_icons(nup):
-    """icons.bin from the game file at ``nup`` (a path), or None if it has none of the icons."""
+def _from_game(nup, check_ids):
+    """From the game file at ``nup`` (a path): icons.bin (None if it has none of the icons), and where the checks
+    are in its maps (check_places.places)."""
     from oot_rando.formats.inspect_nup import Nup
+    from oot_rando.formats.inspect_resources import dictionaries
     try:
         game = Nup(nup)
     except OSError as error:
         raise ValueError('Can\'t read the game file: ' + str(error)) from error
     try:
-        return ingame_icons.nup_icons(game)
+        dicts = dictionaries(game)
+        maps = check_places.nup_maps(game, dicts, check_places.folders(check_ids))
+        return ingame_icons.nup_icons(game, dicts), check_places.places(check_ids, maps)
     finally:
         game.stream.close()
+
+
+def _seed_places(directory):
+    """The places the seed's seed.trk has (none if it is older than version 4, or unreadable)."""
+    path = Path(directory) / 'romfs' / SEED_FILE
+    try:
+        return ingame_format.places_by_id(path.read_bytes()) if path.is_file() else {}
+    except ValueError:
+        return {}
 
 
 def update_ingame_trackers(folder, add=False, nup=None):

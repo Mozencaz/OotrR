@@ -33,7 +33,7 @@ from oot_rando.game.world_maps import SAFE_CATEGORIES, build_world, effective_me
 from oot_rando.game.resource_allocations import allocation, grow_resources, add_resources
 from oot_rando.formats.byml_writer import lift_actors, patch_strings
 from oot_rando.logic import rando_options
-from oot_rando.tracker import ingame_bundle, ingame_icons
+from oot_rando.tracker import check_places, ingame_bundle, ingame_icons
 
 GENERATOR_VERSION = '0.12.0'
 ADAPTER_VERSION = 'ap-glitchless-v5'   # v5: progressive tokens (every copy gives the next level)
@@ -368,8 +368,10 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, ingam
             sources.update(world['sources'])
         full = None
         extra_raw, new_files = {}, {}
+        located = {}   # the in-game tracker's places of the full randomizer's checks (check_places.py), by id
         if settings.full is not None:
-            full, extra_raw, new_files = _build_full(nup, d, members, settings, raw_maps, sources, read, report)
+            full, extra_raw, new_files = _build_full(nup, d, members, settings, raw_maps, sources, read, report,
+                                                     located if ingame_tracker else None)
         chests = []
         active = settings.randomize_chests and len(settings.excluded_checks) < len(CHESTS)
         if active or settings.open_forest:
@@ -829,7 +831,11 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, ingam
         if ingame_tracker:
             report('In-game tracker: the items\' icons from the game…')
             icons = ingame_icons.nup_icons(nup, d)
-            ingame_bundle.attach(manifest, files, exefs, checks['checks'], tracking, icons)
+            report('In-game tracker: where the checks are in the game\'s maps…')
+            rest = [check['id'] for check in checks['checks'] if check['id'] not in located]
+            places = {ident: rows for ident, rows in located.items() if rows}
+            places.update(check_places.places(rest, check_places.nup_maps(nup, d, check_places.folders(rest))))
+            ingame_bundle.attach(manifest, files, exefs, checks['checks'], tracking, icons, places=places)
         tracking_bytes = json.dumps(tracking, ensure_ascii=False, indent=2).encode('utf-8')
         manifest['tracking'] = {'schema_version': 1, 'sha256': sha256(tracking_bytes),
                                 'new_save_required': True, 'mode': 'save'}
@@ -847,8 +853,9 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, ingam
         nup.stream.close()
 
 
-def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, report):
-    """Plan and compose the complete randomizer. Returns (plan, modified, new)."""
+def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, report, located=None):
+    """Plan and compose the complete randomizer. Returns (plan, modified, new). ``located`` (a dict) gets each
+    planned check's places in the game's maps (check_places.places; [] for none), while the maps are decoded."""
     from collections import defaultdict
     from oot_rando.logic.world import World
     from oot_rando.formats import byml_codec
@@ -1176,4 +1183,8 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
     plan['derived_actors'] = derived + sorted(repeatable_actors)
     plan['logic_world_version'] = data.version
     plan['logic_world_sha256'] = data.fingerprint()
+    if located is not None:
+        ids = [check['id'] for check in plan['checks']]
+        found = check_places.places(ids, maps)
+        located.update({ident: found.get(ident, []) for ident in ids})
     return plan, modified, new

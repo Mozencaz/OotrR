@@ -20,7 +20,7 @@ from oot_rando.randomizer.randomizer_services import (_key_actors, generate_in_m
                                                       update_ingame_tracker, update_ingame_trackers)
 from oot_rando.__main__ import main as command_line
 from oot_rando.paths import resource
-from oot_rando.tracker import ingame_bundle, ingame_format as fmt, ingame_icons
+from oot_rando.tracker import check_places, ingame_bundle, ingame_format as fmt, ingame_icons
 from oot_rando.tracker.game_overlay import GRID
 from oot_rando.tracker.check_labels import check_labels
 from test_randomizer_services import ServiceTests
@@ -33,23 +33,49 @@ REPOSITORY = Path(__file__).resolve().parents[1]
 LAYOUT, SWIZZLE = bytes([4, 0, 0, 0, 0, 0, 0, 0]), bytes([2, 3, 4, 5])
 
 
+MIDO_PLACES = [('KokiriForest_Adult', 'Kokiri Forest (adult)', 10.5, 0.25, -3.0),
+               ('KokiriForest_Child', 'Kokiri Forest (child)', 10.5, 0.25, -2.75)]
+BEAN_PLACES = [('KokiriForest_Child', 'Kokiri Forest (child)', -20.0, 1.5, 30.125)]
+
+
 def sample_file():
     return fmt.build('0123456789abcdef', 1220450581, 3488204275,
-                     [('Kokiri Forest', [(fmt.KIND_BOOL, 1740986978, "Mido's House Chest"),
-                                         (fmt.KIND_BOOL64, 2056926167552020049, 'GS Kokiri Bean Patch')]),
-                      ('Deku Tree', [(fmt.KIND_BOOL, 7, 'Deku Tree Map Chest')])],
+                     [('Kokiri Forest', [(fmt.KIND_BOOL, 1740986978, "Mido's House Chest", 'KokiriForest#111',
+                                          MIDO_PLACES),
+                                         (fmt.KIND_BOOL64, 2056926167552020049, 'GS Kokiri Bean Patch',
+                                          'KokiriForest#gs#222', BEAN_PLACES)]),
+                      ('Deku Tree', [(fmt.KIND_BOOL, 7, 'Deku Tree Map Chest', 'npc#Deku Tree Map Chest', [])])],
                      [('Bomb Bag', [(2525649529, 3), (2999220442, 2)]), ('Ice Arrows', [(1552887961, 1)])],
                      [{'name': 'Forest Temple', 'flags': fmt.KEY_SMALL | fmt.KEY_BOSS, 'total': 5,
                        'found': 11, 'held': 12, 'ring': 13, 'boss': 14}])
 
 
 def older(data, version):
-    """``data`` (version 3) as a file of an older version: no flags word, every offset 4 bytes earlier."""
-    head = bytearray(data[:fmt.HEADER_V2.size])
-    struct.pack_into('<HH', head, 4, version, fmt.HEADER_V2.size)
-    for offset in (8, 24, 32, 40, 48, 56, 64):   # file size, strings, the tables
-        struct.pack_into('<I', head, offset, struct.unpack_from('<I', head, offset)[0] - 4)
-    return bytes(head) + data[fmt.HEADER.size:]
+    """``data`` (version 4) as a file of an older version: without the ids' and places' tables at its end, without
+    their header fields (and the flags word, before version 3), every offset as much earlier."""
+    header = fmt.HEADER_V3 if version == 3 else fmt.HEADER_V2
+    shift = fmt.HEADER.size - header.size
+    ident_offset = struct.unpack_from('<I', data, 76)[0]
+    head = bytearray(data[:header.size])
+    struct.pack_into('<HHI', head, 4, version, header.size, ident_offset - shift)   # the file ends at the ids
+    for offset in (24, 32, 40, 48, 56, 64):   # the strings, the tables
+        struct.pack_into('<I', head, offset, struct.unpack_from('<I', head, offset)[0] - shift)
+    return bytes(head) + data[fmt.HEADER.size:ident_offset]
+
+
+def newest_seed_files(test):
+    """The exporter writes the newest seed file version for the rest of ``test``, as it does once the bundled
+    module reads it (ingame_bundle.seed_file_version)."""
+    patcher = patch.object(ingame_bundle, 'seed_file_version', return_value=fmt.VERSION)
+    patcher.start()
+    test.addCleanup(patcher.stop)
+
+
+def without_ids(parsed):
+    """A parsed file as an older version reads it: its checks without ids or places."""
+    regions = [(name, [(kind, key, check_name, '', []) for kind, key, check_name, _, _ in checks])
+               for name, checks in parsed['regions']]
+    return {**parsed, 'regions': regions}
 
 
 class FormatTests(unittest.TestCase):
@@ -57,9 +83,11 @@ class FormatTests(unittest.TestCase):
         parsed = fmt.parse(sample_file())
         self.assertEqual(parsed['seed_id'], '0123456789abcdef')
         self.assertEqual((parsed['seed_marker'], parsed['goal_marker']), (1220450581, 3488204275))
-        self.assertEqual(parsed['regions'], [('Kokiri Forest', [(1, 1740986978, "Mido's House Chest"),
-                                                               (2, 2056926167552020049, 'GS Kokiri Bean Patch')]),
-                                             ('Deku Tree', [(1, 7, 'Deku Tree Map Chest')])])
+        self.assertEqual(parsed['regions'],
+                         [('Kokiri Forest', [(1, 1740986978, "Mido's House Chest", 'KokiriForest#111', MIDO_PLACES),
+                                             (2, 2056926167552020049, 'GS Kokiri Bean Patch', 'KokiriForest#gs#222',
+                                              BEAN_PLACES)]),
+                          ('Deku Tree', [(1, 7, 'Deku Tree Map Chest', 'npc#Deku Tree Map Chest', [])])])
         self.assertEqual(parsed['items'], [('Bomb Bag', [(2525649529, 3), (2999220442, 2)]),
                                            ('Ice Arrows', [(1552887961, 1)])])
         self.assertEqual(parsed['keys'][0]['name'], 'Forest Temple')
@@ -73,16 +101,48 @@ class FormatTests(unittest.TestCase):
     def test_header_layout_is_the_documented_one(self):
         data = sample_file()
         self.assertEqual(data[:4], b'RTRK')
-        self.assertEqual(struct.unpack_from('<HHIII', data, 4), (3, 76, len(data), 1220450581, 3488204275))
+        self.assertEqual(struct.unpack_from('<HHIII', data, 4), (4, 92, len(data), 1220450581, 3488204275))
         self.assertEqual(struct.unpack_from('<I', data, 72)[0], 0)   # the flags: a local seed
         flagged = fmt.build('x', 0, 0, [], [], [], flags=fmt.FLAG_ARCHIPELAGO)
         self.assertEqual(struct.unpack_from('<I', flagged, 72)[0], fmt.FLAG_ARCHIPELAGO)
         self.assertEqual(fmt.parse(flagged)['flags'], fmt.FLAG_ARCHIPELAGO)
+        ident_offset, ident_count, place_offset, place_count = struct.unpack_from('<4I', data, 76)
+        keys_offset, key_count = struct.unpack_from('<II', data, 64)
+        self.assertEqual((ident_offset, ident_count), (keys_offset + key_count * fmt.KEYS.size, 3))
+        self.assertEqual((place_offset, place_count), (ident_offset + 3 * fmt.IDENT.size, 3))
+        self.assertEqual(place_offset + place_count * fmt.PLACE.size, len(data))
+        check, map_name, label, *point = fmt.PLACE.unpack_from(data, place_offset + 2 * fmt.PLACE.size)
+        self.assertEqual((check, point), (1, [-20.0, 1.5, 30.125]))   # the bean patch's, by check index
+        strings = struct.unpack_from('<I', data, 24)[0]
+        self.assertEqual(data[strings + map_name:].split(b'\0')[0], b'KokiriForest_Child')
+        self.assertEqual(data[strings + label:].split(b'\0')[0], b'Kokiri Forest (child)')
+        ident = struct.unpack_from('<I', data, ident_offset + fmt.IDENT.size)[0]
+        self.assertEqual(data[strings + ident:].split(b'\0')[0], b'KokiriForest#gs#222')
+
+    def test_version_3_files_still_read_without_ids_or_places(self):
+        data = older(sample_file(), 3)
+        self.assertEqual(struct.unpack_from('<HH', data, 4), (3, 76))
+        self.assertEqual(fmt.parse(data), without_ids(fmt.parse(sample_file())))
+        self.assertEqual(fmt.places_by_id(data), {})
+        self.assertEqual(fmt.places_by_id(sample_file()), {'KokiriForest#111': MIDO_PLACES,
+                                                           'KokiriForest#gs#222': BEAN_PLACES})
+
+    def test_version_3_is_written_for_an_older_module(self):
+        args = fmt.parse(sample_file())
+        data = fmt.build(**args, version=3)
+        self.assertEqual((fmt.version_of(data), struct.unpack_from('<H', data, 6)[0]), (3, 76))
+        self.assertEqual(fmt.parse(data), without_ids(args))
+        for written in (b'KokiriForest#111', b'KokiriForest_Child', b'Kokiri Forest (child)'):
+            self.assertNotIn(written, data)
+        with self.assertRaises(ValueError):
+            fmt.build(**args, version=5)
+        with self.assertRaises(ValueError):
+            fmt.build(**args, version=2)
 
     def test_version_2_files_still_read_as_local_seeds(self):
         parsed = fmt.parse(older(sample_file(), 2))
         self.assertEqual(parsed['flags'], 0)
-        self.assertEqual({**parsed, 'flags': 0}, fmt.parse(sample_file()))
+        self.assertEqual({**parsed, 'flags': 0}, without_ids(fmt.parse(sample_file())))
 
     def test_version_1_files_still_read_with_unnamed_checks(self):
         data = bytearray(older(sample_file(), 1))
@@ -90,7 +150,37 @@ class FormatTests(unittest.TestCase):
         for index in range(check_count):
             struct.pack_into('<I', data, checks_offset + index * fmt.CHECK.size + 12, 0)   # reserved in version 1
         parsed = fmt.parse(bytes(data))
-        self.assertEqual(parsed['regions'][0][1], [(1, 1740986978, ''), (2, 2056926167552020049, '')])
+        self.assertEqual(parsed['regions'][0][1], [(1, 1740986978, '', '', []), (2, 2056926167552020049, '', '', [])])
+
+    def test_places_out_of_check_order_past_the_checks_or_off_the_world_are_refused(self):
+        data = sample_file()
+        place_offset = struct.unpack_from('<I', data, 84)[0]
+
+        def placed(index, check=None, point=None):
+            copy = bytearray(data)
+            at = place_offset + index * fmt.PLACE.size
+            if check is not None:
+                struct.pack_into('<I', copy, at, check)
+            if point is not None:
+                struct.pack_into('<3f', copy, at + 12, *point)
+            return bytes(copy)
+        broken = {
+            'out of check order': placed(0, check=1),   # checks 1, 0, 1
+            'past the checks': placed(2, check=3),
+            'not a number': placed(0, point=(float('nan'), 0, 0)),
+            'off the world': placed(0, point=(0, 2e7, 0)),
+        }
+        for name, content in broken.items():
+            with self.subTest(name), self.assertRaises(ValueError):
+                fmt.parse(content)
+        with self.assertRaises(ValueError):
+            fmt.build('x', 0, 0, [('r', [(fmt.KIND_BOOL, 1, 'c', 'r#1', [('Map', 'Map', 0, float('inf'), 0)])])], [], [])
+
+    def test_ids_must_be_one_per_check(self):
+        data = bytearray(sample_file())
+        struct.pack_into('<I', data, 80, 2)   # two ids for three checks
+        with self.assertRaises(ValueError):
+            fmt.parse(bytes(data))
 
     def test_a_check_name_outside_the_strings_is_refused(self):
         data = bytearray(sample_file())
@@ -108,11 +198,16 @@ class FormatTests(unittest.TestCase):
             return bytes(copy)
         broken = {
             'magic': b'XXXX' + bytes(data[4:]),
-            'version': changed(4, '<H', 4),
+            'version': changed(4, '<H', 5),
             'version 0': changed(4, '<H', 0),
             'version 2 with the longer header': changed(4, '<H', 2),
+            'version 3 with the longer header': changed(4, '<H', 3),
             'version 3 with the shorter header': bytes(bytearray(older(sample_file(), 2))[:4]) + struct.pack('<H', 3)
                                                  + older(sample_file(), 2)[6:],
+            'version 4 with the shorter header': older(sample_file(), 3)[:4] + struct.pack('<H', 4)
+                                                 + older(sample_file(), 3)[6:],
+            'place table outside': changed(88, '<I', 1 << 20),
+            'id table outside': changed(76, '<I', len(data) - 2),
             'header size': changed(6, '<H', 64),
             'truncated': bytes(data[:-1]),
             'longer': bytes(data) + b'\0',
@@ -181,21 +276,24 @@ def synthetic_seed():
 
 
 class ExportTests(unittest.TestCase):
+    def setUp(self):
+        newest_seed_files(self)
+
     def test_groups_observable_checks_by_region_in_catalogue_order(self):
         manifest, checks, tracking = synthetic_seed()
         parsed = fmt.parse(ingame_bundle.seed_file(manifest, checks, tracking))
         self.assertEqual(parsed['seed_id'], 'f' * 16)
         self.assertEqual(parsed['seed_marker'], 4000000000)
         self.assertEqual(parsed['goal_marker'], 0)
-        self.assertEqual(parsed['regions'], [('Kokiri Forest', [(fmt.KIND_BOOL, 100, 'Mido Chest')]),
-                                             ('Deku Tree', [(fmt.KIND_BOOL64, (1 << 64) - 1, 'Chest 1'),
-                                                            (fmt.KIND_BOOL, 200, 'Slingshot Chest')])])
+        self.assertEqual(parsed['regions'], [('Kokiri Forest', [(fmt.KIND_BOOL, 100, 'Mido Chest', 'a', [])]),
+                                             ('Deku Tree', [(fmt.KIND_BOOL64, (1 << 64) - 1, 'Chest 1', 'b', []),
+                                                            (fmt.KIND_BOOL, 200, 'Slingshot Chest', 'e', [])])])
 
     def test_check_names_are_the_ones_the_window_tracker_shows(self):
         manifest, checks, tracking = synthetic_seed()
         parsed = fmt.parse(ingame_bundle.seed_file(manifest, checks, tracking))
         labels = check_labels(checks)
-        exported = [name for _, region in parsed['regions'] for _, _, name in region]
+        exported = [name for _, region in parsed['regions'] for _, _, name, _, _ in region]
         self.assertEqual(exported, [labels[c['id']] for c in checks if tracking['checks'][c['id']]['collection']])
         self.assertEqual(labels['b'], 'Chest 1')   # a world chest: numbered in its region, as in the window
         self.assertEqual(labels['e'], 'Slingshot Chest')
@@ -285,6 +383,17 @@ class ExportTests(unittest.TestCase):
         del tracking['keys']
         self.assertEqual(fmt.parse(ingame_bundle.seed_file(manifest, checks, tracking))['keys'], [])
 
+    def test_each_check_has_its_id_and_its_places(self):
+        manifest, checks, tracking = synthetic_seed()
+        places = {'a': MIDO_PLACES, 'd': BEAN_PLACES, 'z': BEAN_PLACES}   # d isn't observable, z isn't a check
+        parsed = fmt.parse(ingame_bundle.seed_file(manifest, checks, tracking, places=places))
+        rows = [(ident, located) for _, region in parsed['regions'] for _, _, _, ident, located in region]
+        self.assertEqual(rows, [('a', MIDO_PLACES), ('b', []), ('e', [])])
+        files, exefs = {}, {}
+        with patch.object(ingame_bundle, 'module_binary', return_value=FAKE_MODULE):
+            ingame_bundle.attach(dict(manifest, files={}), files, exefs, checks, tracking, places=places)
+        self.assertEqual(fmt.places_by_id(files[ingame_bundle.SEED_FILE]), {'a': MIDO_PLACES})
+
     def test_no_reward_or_placement_reaches_the_file(self):
         manifest, checks, tracking = synthetic_seed()
         data = ingame_bundle.seed_file(manifest, checks, tracking)
@@ -307,12 +416,77 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(parsed['seed_marker'], int(tracking['seed_marker']))
         self.assertEqual(parsed['goal_marker'], int(tracking['goal_marker']))
         self.assertEqual(sum(len(rules) for _, rules in parsed['items']), len(inventory_rules(tracking['inventory'])))
-        self.assertEqual({kind for _, c in parsed['regions'] for kind, _, _ in c}, {fmt.KIND_BOOL, fmt.KIND_BOOL64})
+        self.assertEqual({kind for _, c in parsed['regions'] for kind, *_ in c}, {fmt.KIND_BOOL, fmt.KIND_BOOL64})
         data = ingame_bundle.seed_file(manifest, checks, tracking)
         rewards = {r['reward'] for r in tracking['checks'].values() if r['reward']} - {name for name, _ in parsed['items']}
         self.assertTrue(rewards)
         stored = set(data.split(b'\0'))
         self.assertFalse([r for r in rewards if r.encode() in stored])
+
+
+def layout(*actors):
+    return {'root': {'Actors': list(actors)}}
+
+
+class CheckPlacesTests(unittest.TestCase):
+    """Where the checks are, from the maps' layouts (made here: no game data)."""
+    MAPS = {
+        'Banc/KokiriForest/KokiriForest_Child_Dynamic.bcett.byml.zs': layout(
+            {'Gyaml': 'Obj_TBox_A_01', 'Hash': 111, 'Translate': [1.0, 2.0, 3.0]},
+            {'Gyaml': 'Enemy_Skulltula_Gold', 'Hash': 222, 'Translate': [4, 5, 6]},
+            {'Gyaml': 'Shop_DekuNuts', 'Hash': 9, 'Dynamic': {'ShopItemIndex': 2}, 'Translate': [7, 8, 9]},
+            {'Gyaml': 'Shop_DekuNuts', 'Hash': 10, 'Translate': [0, 0, 0]},   # no ShopItemIndex: slot 0
+            {'Gyaml': 'Obj_TBox_A_01', 'Hash': 333},                          # no Translate
+            {'Gyaml': 'Obj_TBox_A_01', 'Hash': 777, 'Translate': [float('nan'), 0, 0]}),
+        'Banc/KokiriForest/KokiriForest_Child_Static.bcett.byml.zs': layout(
+            {'Gyaml': 'Obj_TBox_A_01', 'Hash': 111, 'Translate': [1.5, 2.0, 3.0]}),   # the same map: the first stays
+        'Banc/KokiriForest/KokiriForest_Adult_Dynamic.bcett.byml.zs': layout(
+            {'Gyaml': 'Obj_TBox_A_01', 'Hash': 111, 'Translate': [-1, 2, 3]}),
+        'Banc/DeathMountainCrater/DeathMountainCrater_Child_Static.bcett.byml.zs': layout(
+            {'Gyaml': 'Obj_Heart_Piece', 'Hash': 444, 'Translate': [0, 0, 0]}),     # left out with the child crater
+        'Banc/DeathMountainCrater/DeathMountainCrater_Adult_Static.bcett.byml.zs': layout(
+            {'Gyaml': 'Obj_Heart_Piece', 'Hash': 444, 'Translate': [5, 5, 5]}),
+        'Banc/GohmaStage/GohmaStage_Static.bcett.byml.zs': layout(
+            {'Gyaml': 'Obj_Heart_Container', 'Hash': 555, 'Translate': [0, 1, 0]}),
+        'Pack/Actor/Obj_TBox_A_01.pack.zs': layout({'Hash': 111, 'Translate': [9, 9, 9]}),   # not a map
+    }
+    IDS = ['KokiriForest#111', '111', 'KokiriForest#222#Drop__DropActor', 'KokiriForest#gs#222',
+           'KokiriForest#shop#Shop_DekuNuts#2', 'KokiriForest#shop#Shop_DekuNuts#0', 'KokiriForest#333',
+           'KokiriForest#777', 'DeathMountainCrater#free#444', 'GohmaStage#heart#555', 'LostWood#666',
+           'npc#Kokiri Sword Chest', 'ap#KF Midos Top Left Chest', 'song#Song from Saria']
+
+    def test_each_check_is_found_by_its_own_actor_once_a_map(self):
+        child, adult = ('KokiriForest_Child', 'Kokiri Forest (child)'), ('KokiriForest_Adult', 'Kokiri Forest (adult)')
+        chest = [adult + (-1, 2, 3), child + (1, 2, 3)]
+        self.assertEqual(check_places.places(self.IDS, self.MAPS), {
+            'KokiriForest#111': chest, '111': chest,
+            'KokiriForest#222#Drop__DropActor': [child + (4, 5, 6)], 'KokiriForest#gs#222': [child + (4, 5, 6)],
+            'KokiriForest#shop#Shop_DekuNuts#2': [child + (7, 8, 9)],
+            'KokiriForest#shop#Shop_DekuNuts#0': [child + (0, 0, 0)],
+            'DeathMountainCrater#free#444': [('DeathMountainCrater_Adult', 'Death Mountain Crater (adult)', 5, 5, 5)],
+            'GohmaStage#heart#555': [('GohmaStage', 'Gohma Stage', 0, 1, 0)],
+        })
+
+    def test_the_areas_read_are_the_checks_own(self):
+        self.assertEqual(check_places.folders(self.IDS), ['DeathMountainCrater', 'GohmaStage', 'KokiriForest', 'LostWood'])
+
+    def test_map_names_are_the_saves_and_their_labels_readable(self):
+        self.assertEqual(check_places.map_name('Banc/Market/Market_Child_Static.bcett.byml.zs'), 'Market_Child')
+        self.assertEqual(check_places.map_name('Banc/IceCavern/IceCavern_Dynamic.bcett.byml.zs'), 'IceCavern')
+        self.assertEqual(check_places.map_name('Banc/KakarikoVillage/KakarikoVillage_Adult_Alternative_Static'
+                                               '.bcett.byml.zs'), 'KakarikoVillage_Adult_Alternative')
+        self.assertEqual(check_places.map_label('KakarikoVillage_Adult_Alternative'),
+                         'Kakariko Village (adult, alternative)')
+        self.assertEqual(check_places.map_label('HountedWasteland_Child'), 'Haunted Wasteland (child)')
+        self.assertEqual(check_places.map_label('IceCavern'), 'Ice Cavern')
+        self.assertEqual(check_places.map_label('BossRushIntervalRoom'), 'Boss Rush Interval Room')
+
+    def test_no_reward_reaches_the_places(self):
+        # only the layouts' names, hashes and positions are read: a seed's rewards never are
+        maps = {path: layout(*[dict(a, Dynamic=dict(a.get('Dynamic', {}), Drop__DropActor='Item_Ice_Arrow'))
+                               for a in m['root']['Actors']]) for path, m in self.MAPS.items()}
+        self.assertEqual(check_places.places(self.IDS, maps), check_places.places(self.IDS, self.MAPS))
+        self.assertNotIn('Item_Ice_Arrow', repr(check_places.places(self.IDS, maps)))
 
 
 def synthetic_bntx(width=8, height=8, texture_format=0x2D01, tile_mode=0, levels=1, data=None):
@@ -504,6 +678,17 @@ class IconTests(unittest.TestCase):
 
 
 class ShippedModuleTests(unittest.TestCase):
+    def test_the_seed_file_is_a_version_the_shipped_module_reads(self):
+        version = ingame_bundle.module_version()
+        self.assertGreater(version, (0, 0, 0))   # the source note names it
+        data = ingame_bundle.seed_file(*synthetic_seed(), places={'a': MIDO_PLACES})
+        if version >= ingame_bundle.FIRST_MODULE_WITH_PLACES:
+            self.assertEqual(fmt.version_of(data), fmt.VERSION)
+            self.assertEqual(fmt.places_by_id(data), {'a': MIDO_PLACES})
+        else:   # it would refuse version 4 and stay off: the file it reads, without ids or places
+            self.assertEqual(fmt.version_of(data), 3)
+            self.assertEqual(fmt.places_by_id(data), {})
+
     def test_the_module_is_an_nso_with_the_checksum_its_source_note_gives(self):
         module = ingame_bundle.module_binary()
         self.assertEqual(module[:4], b'NSO0')
@@ -605,6 +790,7 @@ class UpdateTests(unittest.TestCase):
         patcher = patch.object(ingame_bundle, 'module_binary', return_value=FAKE_MODULE)
         patcher.start()
         self.addCleanup(patcher.stop)
+        newest_seed_files(self)
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.mods = Path(directory.name) / '0400486024DEC000'
@@ -739,28 +925,30 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(self.snapshot(root), before)
         self.assertEqual([path.name for path in root.iterdir() if path.name.startswith('.')], [])
 
-    def test_the_games_icons_come_with_the_update_and_stay_without_the_game(self):
+    def test_the_games_icons_and_places_come_with_the_update_and_stay_without_the_game(self):
         root, received = self.installed_seed(), []
-        icon_path = 'romfs/' + ingame_icons.ICON_FILE
+        icon_path, seed_path = 'romfs/' + ingame_icons.ICON_FILE, 'romfs/' + ingame_bundle.SEED_FILE
 
-        def game_icons(nup):
-            received.append(nup)
-            return FAKE_ICONS
-        with patch('oot_rando.randomizer.randomizer_services._game_icons', game_icons):
+        def from_game(nup, check_ids):
+            received.append((nup, check_ids))
+            return FAKE_ICONS, {'a': MIDO_PLACES, 'e': BEAN_PLACES}
+        with patch('oot_rando.randomizer.randomizer_services._from_game', from_game):
             self.assertEqual(update_ingame_tracker(root, nup='game.nup'),
-                             ['romfs/' + ingame_bundle.SEED_FILE, icon_path, 'exefs/subsdk7', 'manifest.json'])
+                             [seed_path, icon_path, 'exefs/subsdk7', 'manifest.json'])
             self.assertEqual(update_ingame_tracker(root, nup='game.nup'), [])
-        self.assertEqual(received, ['game.nup', 'game.nup'])
+        self.assertEqual(received, [('game.nup', ['a', 'b', 'c', 'd', 'e'])] * 2)
         before = self.snapshot(root)
         self.assertEqual(before[icon_path], FAKE_ICONS)
-        self.assertEqual(update_ingame_tracker(root), [])
+        self.assertEqual(fmt.places_by_id(before[seed_path]), {'a': MIDO_PLACES, 'e': BEAN_PLACES})
+        self.assertEqual(update_ingame_tracker(root), [])   # the icons and the places stay
         self.assertEqual(self.snapshot(root), before)
         self.assertEqual(read_artifact(root)[0]['files'][ingame_icons.ICON_FILE], ingame_bundle.describe(FAKE_ICONS))
 
     def test_the_command_takes_the_game_for_the_icons(self):
         self.installed_seed()
         received, output = [], io.StringIO()
-        with patch('oot_rando.randomizer.randomizer_services._game_icons', lambda nup: received.append(nup) or FAKE_ICONS), \
+        with patch('oot_rando.randomizer.randomizer_services._from_game',
+                   lambda nup, ids: (received.append(nup), (FAKE_ICONS, {}))[1]), \
                 contextlib.redirect_stdout(output):
             self.assertEqual(command_line(['update-tracker', '--nup', 'game.nup', str(self.mods)]), 0)
             self.assertEqual(command_line(['update-tracker', str(self.mods), '--nup']), 2)
@@ -818,6 +1006,13 @@ class GenerateTests(unittest.TestCase):
         parsed = fmt.parse(data)
         tracking = json.loads((output / 'tracking.json').read_text(encoding='utf-8'))
         self.assertEqual(parsed['seed_marker'], int(tracking['seed_marker']))
+        self.assertEqual(fmt.version_of(data), ingame_bundle.seed_file_version())   # one the shipped module reads
+        for _, _, _, ident, places in (check for _, region in parsed['regions'] for check in region):
+            if fmt.version_of(data) < 4:
+                break   # the shipped module predates the ids and places
+            self.assertTrue(ident)
+            if ident.isdigit():   # the first chests: in Kokiri Forest's map, where the game's save names it
+                self.assertIn('KokiriForest_Child', [place[0] for place in places], ident)
         module = (output / 'exefs' / 'subsdk7').read_bytes()
         self.assertEqual(module, ingame_bundle.module_binary())
         self.assertEqual(manifest['exefs']['subsdk7']['sha256'], hashlib.sha256(module).hexdigest())
