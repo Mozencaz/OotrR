@@ -31,8 +31,51 @@ class GuardTests(unittest.TestCase):
         self.assertFalse(_behind_wall(variant(position=None), walls))
 
 
+class SameChestTests(unittest.TestCase):
+    def test_map_copy_joins_its_chest(self):
+        # 20/11: KF_chest_1 was the Lost Woods ledge chest seen from the Kokiri Forest map.
+        from oot_rando.game.remake_world import SAME_CHESTS, merge_same_chests
+        (copy_id, original_id), = SAME_CHESTS.items()
+        groups = {copy_id: [variant(resource='Banc/KokiriForest/K.bcett.byml.zs')],
+                  original_id: [variant(resource='Banc/LostWood/L.bcett.byml.zs')], 'Other#1': [variant()]}
+        merged = merge_same_chests(groups)
+        self.assertNotIn(copy_id, merged)
+        self.assertEqual([v['resource'] for v in merged[original_id]],
+                         ['Banc/LostWood/L.bcett.byml.zs', 'Banc/KokiriForest/K.bcett.byml.zs'])
+        self.assertEqual(merge_same_chests({copy_id: [variant()]}), {copy_id: [variant()]})  # original absent
+
+    def test_rule_events_exist(self):
+        # Each chest's own rule is a remake event of the logic.
+        import json
+        from oot_rando.game.remake_world import CHEST_RULE_EVENTS
+        events = json.loads((Path(__file__).resolve().parents[1] / 'src/oot_rando/logic/world/remake.json')
+                            .read_text(encoding='utf-8'))['events']
+        names = {name for region in events.values() for name in region}
+        self.assertLessEqual(set(CHEST_RULE_EVENTS.values()), names)
+        self.assertEqual(events['Lon Lon Ranch']['LLR Ruins Hookshot Chest']['rule'], 'can_use(Hookshot)')
+
+
 @unittest.skipUnless(NUP, 'OOT_NUP absent')
 class RealGameGuardTests(unittest.TestCase):
+    def test_kokiri_copy_of_the_lost_woods_chest(self):
+        from oot_rando.formats.inspect_nup import Nup
+        from oot_rando.formats.inspect_resources import dictionaries
+        from oot_rando.game.remake_world import SAME_CHESTS, scan_maps
+        from oot_rando.game.world_maps import effective_members
+        nup = Nup(NUP)
+        _, groups, _ = scan_maps(nup, dictionaries(nup), effective_members(nup))
+        (copy_id, original_id), = SAME_CHESTS.items()
+        self.assertNotIn(copy_id, groups)
+        chest = groups[original_id]
+        self.assertEqual(sorted(v['folder'] for v in chest), ['KokiriForest'] * 2 + ['LostWood'] * 2)
+        # Same chest: the two maps are offset by one vector, the same for both ages.
+        by_folder = {}
+        for v in chest:
+            by_folder.setdefault(v['folder'], []).append(v['position'])
+        offset = [a - b for a, b in zip(by_folder['KokiriForest'][0], by_folder['LostWood'][0])]
+        self.assertAlmostEqual(offset[0], -82.78, places=1)
+        self.assertAlmostEqual(offset[2], -87.86, places=1)
+
     def test_guarded_chests(self):
         from oot_rando.formats.inspect_nup import Nup
         from oot_rando.formats.inspect_resources import dictionaries

@@ -261,6 +261,40 @@ class GameFlows(unittest.TestCase):
         with self.assertRaises(ValueError):    # never applied twice
             s.pedestal_after_first_adult_arrival(patched)
 
+    def test_temple_sheik_leaves_the_pedestal_between_his_scenes(self):
+        # 20/11: Sheik stood at the pedestal until the Prelude: no put-in prompt.
+        import ainb
+        import copy
+        from oot_rando.patching.game_defaults import GAMEDATA
+        from oot_rando.patching.soul_adapter import murmur3
+        raw = self.nup.read(self.nup.latest('romfs/' + s.SHEIK_TEMPLE_MODULE))
+        patched, report = s.sheik_leaves_the_pedestal(raw)
+        before, after = (ainb.AINB.from_binary(x).as_dict() for x in (raw, patched))
+        expected = copy.deepcopy(before)
+        npc, prelude, reader = expected['Nodes']
+        next(p for p in npc['Parameters']['Inputs']['Bool'] if p['Name'] == 'Logic_Delete')['Node Index'] = 2
+        npc['Queries'], npc['Plugs'] = [2], {'Generic': [{'Node Index': 2, 'Name': 'Logic_Delete'}]}
+        reader['Parameters']['Inputs']['String'][0]['Default Value'] = s.SHEIK_TEMPLE_GONE
+        reader['Parameters']['Outputs']['Bool'][0]['Is Output'] = True
+        prelude['Parameters']['Outputs']['Bool'][0]['Is Output'] = False
+        self.assertEqual(after, expected)
+        with self.assertRaises(ValueError):
+            s.sheik_leaves_the_pedestal(patched)
+        gamedata = self.read(GAMEDATA)
+        with_exp, _ = s.sheik_temple_expression(gamedata)
+        self.assertTrue(s.sheik_temple_applied(with_exp))
+        self.assertFalse(s.sheik_temple_applied(gamedata))
+        old, new = (byml_codec.load(x)['root']['Data'] for x in (gamedata, with_exp))
+        self.assertEqual(new['BoolExp'][:-1], old['BoolExp'])
+        self.assertEqual(int(new['BoolExp'][-1]['Hash']), murmur3(s.SHEIK_TEMPLE_GONE))
+        with self.assertRaises(ValueError):
+            s.sheik_temple_expression(with_exp)
+        # Sheik stands beside the sword in the adult temple map.
+        root = Byml(self.read(s.TEMPLE_MAP)).root
+        sheik = next(a for a in root['Actors'] if a.get('Gyaml') == s.SHEIK)
+        sword = next(a for a in root['Actors'] if a.get('Gyaml') == 'Obj_TimeTemple_MasterSword_A_01')
+        self.assertLess(sum((a - b) ** 2 for a, b in zip(sheik['Translate'], sword['Translate'])) ** 0.5, 1.6)
+
     def test_prelude_requires_forest_medallion_and_preserves_native_one_shot(self):
         import ainb
         import copy
@@ -633,6 +667,136 @@ class GameFlows(unittest.TestCase):
         for name in (s.AFTER_SARIA_PLAY, s.SHEIK_PRESENCE, s.DOOR_STARTED, s.DOOR_BEFORE_ESCAPE,
                      s.FIRE_QUEST_STARTED, s.DOOR_PAST_SREP, s.PRELUDE_LATER_STEP):
             self.assertIn(murmur3(name), exps, name)
+        for name in (s.DOOR_OPENED, s.CHILDHOOD, s.BRIDGE_PLAYED) + s.BRIDGE_MEDALS:
+            self.assertIn(murmur3(name), bools, name)
+        for name in (s.WATER_GATE_STEP, s.DOOR_SONG_STEP, s.DOOR_COMPLETE_ONLY_AFTER, s.BRIDGE_VANILLA,
+                     s.GANON_PAST_REVELATION):
+            self.assertIn(murmur3(name), exps, name)
+
+    # --- Scenes no longer required (21/11) ------------------------------------------
+    def module(self, path):
+        return self.nup.read(self.nup.latest('romfs/' + path))
+
+    def nodes(self, raw):
+        import ainb
+        return ainb.AINB.from_binary(raw).as_dict()['Nodes']
+
+    def test_scene_steps_match_the_table(self):
+        steps = self.steps()
+        self.assertEqual(tuple(steps['SageOfWater']), s.SAGE_OF_WATER_STEPS)
+        self.assertEqual(tuple(steps['Defeat_Ganon']), s.DEFEAT_GANON_STEPS)
+
+    def test_scene_expressions_in_game_data(self):
+        from oot_rando.patching.soul_adapter import GAMEDATA, murmur3
+        source = self.read(GAMEDATA)
+        self.assertFalse(s.scene_expressions_applied(source))
+        raw, report = s.scene_expressions(source)
+        self.assertTrue(s.scene_expressions_applied(raw))
+        self.assertEqual(report['expressions'], [s.WATER_GATE_OPEN, s.BRIDGE_READY])
+        programs = {e['Hash']: [list(v) for v in e['Values']] for e in Byml(raw).root['Data']['BoolExp']}
+        # Water: Step05 passed OR NOT childhood. Bridge: vanilla OR (both medals AND NOT shown).
+        self.assertEqual(programs[murmur3(s.WATER_GATE_OPEN)],
+                         [[10, murmur3(s.WATER_GATE_STEP)], [0, murmur3(s.CHILDHOOD)], [5], [4]])
+        self.assertEqual(programs[murmur3(s.BRIDGE_READY)],
+                         [[10, murmur3(s.BRIDGE_VANILLA)], [0, murmur3(s.BRIDGE_MEDALS[0])],
+                          [0, murmur3(s.BRIDGE_MEDALS[1])], [3], [0, murmur3(s.BRIDGE_PLAYED)], [5], [3], [4]])
+        with self.assertRaises(ValueError):    # never applied twice
+            s.scene_expressions(raw)
+
+    def test_water_gate_opens_for_adult(self):
+        from test_world_openings import unflagged_links
+        raw, _ = s.water_gate_for_adult(self.module(s.WATER_GATE_MODULE))
+        nodes = self.nodes(raw)
+        self.assertEqual(nodes[3]['Name'], 'HoldGameDataGetBoolExpSimple')
+        self.assertEqual(nodes[3]['Parameters']['Inputs']['String'][0]['Default Value'], s.WATER_GATE_OPEN)
+        # The gate's OR and the "scene played" setter still read it.
+        self.assertEqual(sorted(s._links_to(nodes, 3)), [(2, 'BoolMulti', 0), (16, 'IsDrive', 0)])
+        self.assertEqual(unflagged_links(nodes), [])
+        with self.assertRaises(ValueError):
+            s.water_gate_for_adult(raw)
+
+    def test_serenade_never_moves_the_water_quest_back(self):
+        source = self.read(s.SAGE_OF_WATER_FLOW)
+        raw, report = s.serenade_keeps_water_temple(source)
+        self.assertEqual(sorted((e, step) for e, step, _ in report['guarded']),
+                         [('Event280', 'Step05'), ('Event282', 'Step04'), ('Event39', 'Step05')])
+        events = self.chart(raw)
+        for name in ('Event280', 'Event282'):
+            guard = next(e for e in events.values() if e.name.startswith('RandoWaterForward_')
+                         and getattr(e.data.cases.get(1), 'v', None) is events[name])
+            self.assertEqual(guard.data.params.data, {'GameDataName': s.WATER_GATE_STEP})
+        self.check_kept(source, raw)
+        with self.assertRaises(ValueError):
+            s.serenade_keeps_water_temple(raw)
+
+    def test_door_reads_its_saved_flag(self):
+        from test_world_openings import unflagged_links
+        raw, _ = s.door_opens_on_saved_flag(self.module(s.DOOR_MODULE))
+        nodes = self.nodes(raw)
+        gate = nodes[5]
+        self.assertEqual([(x['Node Index'], x['Output Index']) for x in gate['Parameters']['Inputs']['Bool'][0]['Sources']],
+                         [(4, 1), (8, 0), (8, 2), (6, 0)])
+        self.assertEqual(gate['Queries'], [4, 8, 8, 6])
+        self.assertTrue(nodes[6]['Parameters']['Outputs']['Bool'][0]['Is Output'])
+        self.assertEqual(unflagged_links(nodes), [])
+        with self.assertRaises(ValueError):
+            s.door_opens_on_saved_flag(raw)
+
+    def test_song_opens_the_door_before_the_escape(self):
+        # 21/11: the song was refused while DoorOfTime was not past Step04 (Event60).
+        source = self.read(s.DOOR_FLOW)
+        for current in (source, s.zelda_escape_door_flow(source)[0]):
+            raw, report = s.door_song_before_escape(current)
+            events = self.chart(raw)
+            self.assertEqual(events['Event60'].data.cases[1].v.name, 'Event69')   # any step: door check
+            # Step06 (Event57 and the new one) only past Step04; Complete only past Step05.
+            guards = {e.name: e for e in events.values() if e.name.startswith(s.DOOR_SONG_PREFIX)}
+            self.assertEqual(len(guards), 2)
+            for guard in guards.values():
+                self.assertEqual(guard.data.params.data, {'GameDataName': s.DOOR_SONG_STEP})
+                self.assertIn(guard.data.cases[0].v.name, ('Event57', 'RandoDoorOpenedStep06'))
+            complete = [e for e in events.values() if e.name.startswith(s.DOOR_COMPLETE_PREFIX)]
+            self.assertEqual(len(complete), 1)
+            self.assertEqual(complete[0].data.params.data, {'GameDataName': s.DOOR_COMPLETE_ONLY_AFTER})
+            self.assertEqual(complete[0].data.cases[0].v.name, 'Event93')
+            # Step05 (escape) with the door already opened: Step06 at once.
+            check = events['Event14'].data.nxt.v
+            self.assertEqual((check.name, check.data.params.data), ('RandoDoorOpenedBefore',
+                                                                     {'GameDataName': s.DOOR_OPENED, 'Index': -1}))
+            self.assertTrue(check.data.cases[0].v.name.startswith(s.DOOR_SONG_PREFIX))
+            self.assertEqual(check.data.cases[1].v.name, 'Event171')
+            self.assertEqual(events['RandoDoorOpenedStep06'].data.params.data, events['Event57'].data.params.data)
+            self.check_kept(current, raw)
+            with self.assertRaises(ValueError):
+                s.door_song_before_escape(raw)
+
+    def test_bridge_on_two_medallions(self):
+        from test_world_openings import unflagged_links
+        raw, _ = s.bridge_on_medallions(self.module(s.BRIDGE_MODULE))
+        nodes = self.nodes(raw)
+        self.assertEqual(nodes[4]['Parameters']['Inputs']['String'][0]['Default Value'], s.BRIDGE_READY)
+        # Still ANDed with "not past Step01" (node 6 = NOT node 3).
+        self.assertEqual(nodes[3]['Parameters']['Inputs']['String'][0]['Default Value'], s.GANON_PAST_REVELATION)
+        self.assertEqual(unflagged_links(nodes), [])
+        with self.assertRaises(ValueError):
+            s.bridge_on_medallions(raw)
+
+    def test_revelation_never_moves_ganon_quest_back(self):
+        source = s.prelude_keeps_later_sage_progress(self.read(s.ALL_SAGE_FLOW))[0]
+        raw, report = s.revelation_keeps_ganon_quest(source)
+        self.assertEqual([(e, step) for e, step, _ in report['guarded']], [('Event11', 'Step01')])
+        events = self.chart(raw)
+        guard = events['RandoGanonForward_0'].data
+        self.assertEqual(guard.params.data, {'GameDataName': s.GANON_PAST_REVELATION})
+        self.assertEqual(guard.cases[1].v.name, 'Event11')
+        self.check_kept(source, raw)
+
+    def test_scene_modules_listed_once(self):
+        paths = [path for path, _, _ in s.scene_module_fixes()]
+        self.assertEqual(len(paths), len(set(paths)))
+        for path, key, fix in s.scene_module_fixes():
+            with self.subTest(key=key):
+                fix(self.module(path))
 
 
 if __name__ == '__main__':

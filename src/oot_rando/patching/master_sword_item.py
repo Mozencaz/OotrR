@@ -20,6 +20,16 @@ RSDB_FILES = {name: f'RSDB/{name}.Product.111.rstbl.byml.zs'
               for name in ('ActorInfo', 'GameActorInfo', 'PouchActorInfo')}
 ANIMATIONS = [{'ModelProjectName': 'Item_Common_Animation'}]
 
+# Adult pedestal prompt. Its client param checks only adulthood and position, and
+# Market_Adult_Prefab_89da gates it on AllSage (story_fixes): yet without the Master
+# Sword owned no prompt shows (20/11), so the ``PutIn`` verb is refused outside the
+# data. The child's ``PullOut`` verb works without owning the sword: the adult client
+# now sends it. The attention still fires the same put-in event. Not validated in game.
+PEDESTAL_PACK = 'Pack/Actor/Obj_TimeTemple_MasterSword_A_01.pack.zs'
+PUT_IN_CLIENT = 'Attention/ClientParam/TimeTemple_MasterSwordAttention_PutIn.game__attention__ClientParam.bgyml'
+PUT_IN = 2411603822     # murmur3('PutIn')
+PULL_OUT = 1302650721   # murmur3('PullOut')
+
 
 def _resource(kind, suffix):
     return f'{kind}/{MASTER_SWORD_ACTOR}.{suffix}.bgyml'
@@ -93,6 +103,20 @@ def add_rows(table, rows):
     rows.sort(key=lambda entry: entry['__RowId'])
 
 
+def pedestal_put_in_without_sword(raw_pack):
+    """Raw pedestal pack whose adult put-in prompt uses the ``PullOut`` verb."""
+    files = sarc(raw_pack)
+    document = codec.load(files[PUT_IN_CLIENT])
+    root = document['root']
+    adult = root['CheckList'][0].get('CheckGameData', {})
+    if (root.get('ActionType') != PUT_IN
+            or (adult.get('GameDataPath'), adult.get('IsReverseCondition')) != ('Sequence_IsChildhood', True)):
+        raise ValueError('Unexpected Master Sword put-in prompt (already patched?).')
+    root['ActionType'] = PULL_OUT
+    files[PUT_IN_CLIENT] = codec.dump(document)
+    return codec.build_sarc(files)
+
+
 def build_files(read_raw):
     """Return ``(modified, new)`` raw resources, like other item adapters.
 
@@ -104,7 +128,7 @@ def build_files(read_raw):
         return sarc(read_raw(f'Pack/Actor/{actor}.pack.zs'))
 
     new = {PACK: (build_pack(read_pack), TEMPLATE_PACK)}
-    modified = {}
+    modified = {PEDESTAL_PACK: pedestal_put_in_without_sword(read_raw(PEDESTAL_PACK))}
     for table, path in RSDB_FILES.items():
         document = codec.load(read_raw(path))
         add_rows(table, document['root'])

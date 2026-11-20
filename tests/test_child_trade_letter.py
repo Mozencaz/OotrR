@@ -86,5 +86,30 @@ class LetterRemovedTests(unittest.TestCase):
         self.assertFalse(state.has('Zeldas Letter'))
 
 
+RUTO = 'LakeHylia#letter#1'
+
+
+def ruto_source():
+    entry = _entry('quest', 'world', RUTO, 'LakeHylia', 'Obj_Bottle_Letter', 'Rutos Letter')
+    entry.update(kind='exact', ap=['LH Underwater Item'], actors=['Obj_Bottle_Letter'],
+                 variants=[{'resource': 'Map/LakeHylia.bcett.byml.zs', 'index': 0,
+                            'field': 'Gyaml', 'before': 'Obj_Bottle_Letter'}])
+    return entry
+
+
+class RutoLetterTests(unittest.TestCase):
+    """Zora's Fountain open: Ruto's Letter becomes an empty bottle in the pool."""
+    def pool(self, **options):
+        options = dict(rando_options.defaults(), shuffle_quest_rewards=True, **options)
+        extra = dict(quest_sources(), **{RUTO: ruto_source()})
+        return prepare(World(), options, {}, [], 'ruto-letter', True, extra=extra).pool
+
+    def test_open_fountain_swaps_the_letter_for_a_bottle(self):
+        closed, opened = Counter(self.pool()), Counter(self.pool(zora_fountain='open'))
+        self.assertEqual(closed['Rutos Letter'], 1)
+        self.assertEqual(opened['Rutos Letter'], 0)
+        self.assertEqual(opened['Bottle'], closed['Bottle'] + 1)
+
+
 if __name__ == '__main__':
     unittest.main()
