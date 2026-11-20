@@ -313,12 +313,17 @@ static void publish_hidden(void)
   overlay_publish(&hidden);
 }
 
+static uint32_t highlighted_region_checks(void)
+{
+  return app.browse.region < app.seed.region_count ? trk_region(&app.seed, app.browse.region).check_count : 0;
+}
+
 static void open_panel(uint64_t now)
 {
   trackerui_load(); /* the game's font and shader, once: a pause the first time */
   app.open = true;
   app.console_dirty = true; /* paused, the Console page's preview shows it all the same */
-  browse_show_regions(&app.browse, app.seed.region_count);
+  browse_reopen(&app.browse, app.seed.region_count, highlighted_region_checks());
   refresh_panel(now);
 }
 
@@ -364,11 +369,6 @@ static void save_settings_changes(void)
     app.marks_changed = false;
     marksfile_save(&app.marks, &app.seed);
   }
-}
-
-static uint32_t highlighted_region_checks(void)
-{
-  return app.browse.region < app.seed.region_count ? trk_region(&app.seed, app.browse.region).check_count : 0;
 }
 
 static void navigate(control_t command, uint64_t now)

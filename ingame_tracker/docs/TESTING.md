@@ -1,6 +1,6 @@
 # Live test plan
 
-0.2.0's icons were seen in the game (13/11: upright, right colours, smooth); 0.2.1 to 0.4.0 (key rows, postcard, songs) were checked in the game on 1.1.1 in the Ryuchii emulator (14/11); 0.5.0's console was used in the game by two players in one room (items received and sent, hints, chat, notices), which is how other players' items were found missing. 0.6.0 (other players' items), 0.6.1 (a row per kind on the Console page), 0.6.2 (the postcard and the console hide while the game is paused) and 0.7.0 (show in the world, ticks by hand) are not yet tested in the game, nor is game 1.0.0. The PC tests (`make test`) cover the seed file's parser (versions 1 to 4, the checks' ids and places), show in the world's places, words and camera projection, the String64 and pause reads, what the pause hides, the ticks by hand and their file (read back, damaged, another seed's), the state, a
+0.2.0's icons were seen in the game (13/11: upright, right colours, smooth); 0.2.1 to 0.4.0 (key rows, postcard, songs) were checked in the game on 1.1.1 in the Ryuchii emulator (14/11); 0.5.0's console was used in the game by two players in one room (items received and sent, hints, chat, notices), which is how other players' items were found missing. 0.6.0 (other players' items), 0.6.1 (a row per kind on the Console page), 0.6.2 (the postcard and the console hide while the game is paused), 0.6.3 (the panel reopens where it was closed) and 0.7.0 (show in the world, ticks by hand) are not yet tested in the game, nor is game 1.0.0. The PC tests (`make test`) cover the seed file's parser (versions 1 to 4, the checks' ids and places), show in the world's places, words and camera projection, the String64 and pause reads, what the pause hides, the ticks by hand and their file (read back, damaged, another seed's), the state, a
 region's list of checks, the game-data reader over a fake GameData, the controls (repeat, what the game doesn't see), the browsing, the
 icons file's index, the postcard's and the console's settings and files, the console's lines and fading, its mailbox (half-written
 writes, a full ring, the status line) and where the console goes next to every postcard. OotrR's `tests/test_console_bridge.py` covers
@@ -34,6 +34,8 @@ R3 + D-pad).
 - While it is open, R, the right stick, A, B, the D-pad and the left stick do nothing in the game (the camera and Link stay still).
 - B closes it and doesn't act in the game (no sword swing, even if B is held a moment after closing).
 - R + right stick up again closes it. Opening and closing ten times in a row works.
+- Open a region's list, scroll down a page and close with R + right stick up: opening again shows the same list, scrolled
+  the same, with the same check highlighted. The same from the Settings page and the Postcard and Console pages (0.6.3).
 
 ## 3b. Browsing the regions
 

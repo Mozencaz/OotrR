@@ -253,7 +253,7 @@ reader's `attach`, `read` and `write`, so it works wherever live memory does (Wi
 | 0x20 | char[64] | status text: the server and slot (`archipelago.gg:38281 as Link`), UTF-8, NUL-ended | client |
 | 0x60 | char[24] | seed id the module runs (as in `seed.trk`), NUL-ended; empty until it has read its seed | module |
 | 0x78 | u32 | read head: entries the module has taken | module |
-| 0x7C | u32 | module version: major << 16 \| minor << 8 \| patch (0x000700 for 0.7.0) | module |
+| 0x7C | u32 | module version: major << 16 \| minor << 8 \| patch (0x000701 for 0.7.1) | module |
 | 0x80 | entry[32] | the ring | client |
 
 Each entry: u8 kind (1 item received, 2 item sent, 3 hint, 4 chat, 5 server notice, 6 other players' item: neither

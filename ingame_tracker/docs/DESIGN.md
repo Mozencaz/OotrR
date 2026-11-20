@@ -99,7 +99,8 @@ stick down is sloperinaGZ's menu, R3 + D-pad is ocarinaMIDI's.
 `browse.c` is pure: the highlighted region, and with its list open the highlighted check and the first one shown. The regions are drawn in
 three columns filled top to bottom: up and down step through them in that order, left and right jump a column (to the last region of a
 shorter last column). In a list, up and down step one check and left and right a page, and the list scrolls to keep the highlight shown.
-B goes back to the regions, and B there closes the panel. Opening the panel shows the regions again, with the highlight where it was.
+B goes back to the regions, and B there closes the panel. Opening the panel shows the page it was closed on, with its highlight
+(`browse_reopen`: in a list, the same check, kept in sight). The browse state lives as long as the game runs.
 
 After the regions comes the **Settings** entry (the region count). A opens `BROWSE_SETTINGS`, whose two rows (`browse_t.entry`) open
 `BROWSE_POSTCARD` and `BROWSE_CONSOLE` (`browse_t.setting`); the console's rows after Fade are its kinds of message
