@@ -18,8 +18,10 @@ logic world (`logic/world/`) is bundled.
 - Linux: `chmod +x OoT-Randomizer` if needed. A graphical desktop (X11 or
   XWayland) with at least one installed font is required (any desktop has one).
 - A start-up error is written to `data/error.log` (the application has no console).
-- The in-game overlay, turbo A and live memory reading only exist on Windows
-  (Hookshot); everything else works on Linux.
+- The in-game overlay and turbo A only exist on Windows (Hookshot). Live memory
+  reading (live tracking, Archipelago items) works on Linux with a native Linux
+  emulator such as Ryuchii, from this Linux build (not the Windows build under
+  Proton/Wine); everything else works on Linux too.
 
 ## Checking a build
 

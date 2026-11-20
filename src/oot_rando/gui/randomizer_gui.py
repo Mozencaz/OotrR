@@ -105,6 +105,14 @@ OPTION_TIPS = {
     'open_door_of_time': 'The Door of Time is open from the start and the Master Sword can be pulled without the '
                          'Spiritual Stones or the Song of Time. Zelda\'s escape still gives the Ocarina of Time '
                          'and the Song of Time. To be confirmed in game.',
+    'door_of_time_requirement': 'Play the Song of Time with an ocarina at the door. Choose whether this also '
+                                'needs all three Spiritual Stones, only the Goron Ruby and Zora Sapphire, or '
+                                'no stones. Door of Time open overrides this choice. The stones for Zelda\'s '
+                                'escape are a separate setting. To be confirmed in game.',
+    'spiritual_stones': 'The stones Zelda\'s escape asks for to give the Ocarina of Time and the Song of Time. '
+                        'Door of Time requirements are separate. Require all: the Kokiri Emerald, the Goron Ruby and the '
+                        'Zora Sapphire. Vanilla: the Goron Ruby and the Zora Sapphire only, as in the original game '
+                        '(the game\'s own check, DoorOfTime_CheckStoneNum, only looks at those two).',
     'zora_fountain': 'Ruto\'s Letter required: King Zora blocks the way to Zora\'s Fountain until he reads the '
                      'letter, as in the vanilla game. Always moved: he stands aside from the start and stays '
                      'there; the letter can no longer be delivered, so it never becomes a bottle. '
@@ -162,6 +170,8 @@ OPTION_TIPS = {
                             'every kind of enemy has its own soul. A new game is required.',
     'big_poe_count': 'The Poe collector gives his reward after this many Big Poes (vanilla: 10). '
                      'To be confirmed in game.',
+    'chicken_count': 'The cucco lady in Kakariko gives her reward once this many of her cuccos are back in the '
+                     'pen (vanilla: 7). Her lines name the new number. To be confirmed in game.',
     'skip_child_zelda': 'Start as if Malon, Talon, Zelda and Impa had been met: Zelda\'s Letter and Lullaby '
                         'are shuffled elsewhere. The child castle grounds become optional: their shuffled checks hold '
                         'green rupees, except the Great Fairy. Later events keep their conditions (Kokiri '
@@ -172,7 +182,7 @@ OPTION_TIPS = {
 # A visible option missing here is shown at the end, in a card named after its tab.
 SETTING_GROUPS = (
     ('Open world', 'Zones and quests open from the start.',
-     ['game:open_forest', 'open_kakariko', 'open_door_of_time', 'zora_fountain', 'gerudo_fortress',
+     ['game:open_forest', 'open_kakariko', 'open_door_of_time', 'door_of_time_requirement', 'spiritual_stones', 'zora_fountain', 'gerudo_fortress',
       'open_gerudo_valley_bridge', 'skip_child_zelda']),
     ('Logic and accessibility', '',
      ['accessibility', 'logic_no_night_tokens_without_suns_song', 'game:skulltulas_always_present']),
@@ -190,7 +200,7 @@ SETTING_GROUPS = (
     ('Enemy souls', '', ['shuffle_enemy_spawns']),
     ('Cutscenes and dialogues', 'Scenes that do not play at all: their item and quest progress are given directly.',
      ['skip_song_lessons', 'skip_story_timelines', 'auto_skip_cutscenes', 'skip_npc_dialogues']),
-    ('Minigames', '', ['big_poe_count']),
+    ('Minigames', '', ['big_poe_count', 'chicken_count']),
 )
 # Kept in the settings files (older seeds, AP YAML) but never shown: no effect any more.
 HIDDEN_OPTIONS = ('progressive_order', 'progressive_strict', 'fast_chests')
@@ -399,8 +409,11 @@ class Application:
         canvas.pack(side='left', fill='both', expand=True)
         def wheel(event):
             if str(event.widget).startswith(str(outer)):
-                canvas.yview_scroll(int(-event.delta / 120), 'units')
-        self.root.bind_all('<MouseWheel>', wheel, add='+')
+                units = theme.wheel_units(event.num, event.delta)
+                if units:
+                    canvas.yview_scroll(units, 'units')
+        for sequence in theme.WHEEL_EVENTS:
+            self.root.bind_all(sequence, wheel, add='+')
         return parent
 
     def card(self, parent, title=None, subtitle=None, fill='x', expand=False, side='top', padx=0):
@@ -489,7 +502,7 @@ class Application:
         for event in ('<FocusOut>', '<Return>'):
             entry.bind(event, lambda e: self.save_extra_emulators())
         ttk.Label(box, text='Live tracking finds Hookshot, Longshot, Lichii, Ryuchii, Eden, yuzu, suyu, citron and sudachi. '
-                  'Another yuzu-based emulator? Add its .exe name here (comma-separated).',
+                  'Another yuzu-based emulator? Add its executable name here (comma-separated; on Linux, with or without .exe).',
                   style='Small.TLabel', wraplength=780).pack(anchor='w')
         self.build_qol_card(parent)
         box = self.card(parent, 'Save', 'The tracker reads your progress.sav. It is found automatically; pick it by hand only if needed.')
@@ -1447,7 +1460,7 @@ class Application:
             if not messagebox.askyesno(
                     'Regenerate the seed',
                     f'Seed "{settings.seed}" was made by an older version of the randomizer. Generate it '
-                    f'again with version {GENERATOR_VERSION}, with the same name and settings?\n\n'
+                    f'again with version {APP_VERSION}, with the same name and settings?\n\n'
                     'The current copy is moved to the archive (never deleted). The new version may '
                     'place items differently: a new game may be needed.'):
                 return
@@ -1499,10 +1512,11 @@ class Application:
                 'holds are changed.'):
             return
         markers = save_patch.migration_markers(manifest, previous)
+        values = save_patch.migration_values(manifest, previous)
         done, failed = [], []
         for path, _ in candidates:
             try:
-                done.append(save_patch.patch_save(path, manifest.get('start_values') or {}, markers))
+                done.append(save_patch.patch_save(path, values, markers))
             except save_patch.GameRunning as error:
                 failed.append(str(error))
                 break
@@ -1725,7 +1739,7 @@ class Application:
         try:
             manifest, catalogue = read_artifact(self.artifact)
             self.current_checks = catalogue['checks']
-            live = live_memory.LiveGameData() if os.name == 'nt' else None
+            live = live_memory.LiveGameData() if live_memory.supported() else None
             self.tracker = TrackerSession(self.artifact, self.slot.get(), save_path=self.save_path.get(), live=live)
             self.connection_status.set('Reading at the latest save' if self.save_path.get() else 'Choose a progress.sav file to enable automatic tracking.')
             self.render_tracker()
@@ -1811,6 +1825,8 @@ class Application:
                 elif not completed and state.get('missing_souls'):
                     from oot_rando.patching.soul_adapter import soul_name
                     label += ' • soul: ' + ', '.join(soul_name(s, False) for s in state['missing_souls'])
+                if not completed and state.get('untracked'):
+                    label += ' • not tracked'
                 tree.insert(zones[region], 'end', iid=check['id'], text=name, values=(label, reward, kind), tags=('done' if completed else access,))
                 visible += 1
             tree.bind('<<TreeviewOpen>>', lambda event, widget=tree: self.remember_zone(widget, True))

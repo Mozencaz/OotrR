@@ -155,6 +155,42 @@ class Units(unittest.TestCase):
         self.assertEqual(soul_actor(soul_item('Region:ForestTemple')), 'Item_Soul_R_ForestTemple')
 
 
+class PoolBalance(unittest.TestCase):
+    """The pool always holds one item per shuffled check (green rupees adjust it)."""
+
+    @staticmethod
+    def removable(item):
+        return item.startswith(('Rupee', 'Deku', 'Arrows'))
+
+    def balance(self, pool, slots, keep=None):
+        from oot_rando.randomizer.full_randomizer import balance_pool
+        return balance_pool(pool, slots, self.removable, keep)
+
+    def test_too_many_items_drop_green_rupees_first(self):
+        pool = ['Rupee (1)', 'Hookshot', 'Rupees (5)', 'Rupee (1)', 'Soul (Keese)', 'Key Ring']
+        self.assertEqual(self.balance(pool, 4), ['Hookshot', 'Rupees (5)', 'Soul (Keese)', 'Key Ring'])
+
+    def test_other_filler_once_green_rupees_are_gone(self):
+        pool = ['Rupee (1)', 'Rupees (20)', 'Deku Nuts (5)', 'Hookshot', 'Bow']
+        self.assertEqual(self.balance(pool, 3), ['Rupees (20)', 'Hookshot', 'Bow'])
+
+    def test_too_few_items_get_green_rupees(self):
+        self.assertEqual(self.balance(['Hookshot'], 3), ['Hookshot', 'Rupee (1)', 'Rupee (1)'])
+
+    def test_exact_pool_unchanged(self):
+        pool = ['Hookshot', 'Rupee (1)']
+        self.assertEqual(self.balance(pool, 2), pool)
+
+    def test_reserved_green_rupees_stay(self):
+        pool = ['Rupee (1)', 'Rupee (1)', 'Rupees (5)', 'Hookshot']
+        self.assertEqual(self.balance(pool, 3, keep={'Rupee (1)': 2}), ['Rupee (1)', 'Rupee (1)', 'Hookshot'])
+
+    def test_not_enough_filler_raises(self):
+        from oot_rando.randomizer.full_randomizer import FillError
+        with self.assertRaises(FillError):
+            self.balance(['Hookshot', 'Bow', 'Rupee (1)'], 1)
+
+
 class RoomLocks(unittest.TestCase):
     @staticmethod
     def enemy(hash_, locks):
@@ -261,6 +297,14 @@ class Integration(unittest.TestCase):
                           rando_options.PRESETS['everything']['values']):
             for seed in ('t1', 't2'):
                 with self.subTest(overrides=overrides, seed=seed):
+                    self.assert_valid(self.run_plan(overrides, seed), overrides)
+
+    def test_both_stone_options_are_beatable(self):
+        # Rewards shuffled: the stones sit anywhere, so what the escape asks for matters.
+        for value in rando_options.BY_NAME['spiritual_stones'].allowed():
+            for seed in ('s1', 's2'):
+                overrides = dict(rando_options.PRESETS['everything']['values'], spiritual_stones=value)
+                with self.subTest(spiritual_stones=value, seed=seed):
                     self.assert_valid(self.run_plan(overrides, seed), overrides)
 
     def test_hookshot_copies_are_tokens(self):

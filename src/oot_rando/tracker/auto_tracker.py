@@ -171,10 +171,13 @@ class TrackerSession:
             row = (self.metadata or {}).get('checks', {}).get(ident, {})
             # A manually checked row is not evidence that the planned reward was obtained.
             reward = row.get('reward', '') if automatic else ''
+            # No saved flag to read (an NPC gift, a shop refill, a source left in place
+            # that keeps no flag): only a manual tick completes the row.
+            untracked = self.metadata is not None and not row.get('collection')
             return {'completed': completed, 'access': self._access.get(ident, 'unknown'),
                     'reward': reward, 'source': 'save' if automatic else (
                         'manual' if completed else ''), 'observed': automatic,
-                    'missing_souls': tuple(self._soul_reasons.get(ident, ()))}
+                    'untracked': untracked, 'missing_souls': tuple(self._soul_reasons.get(ident, ()))}
 
     def _get_logic(self):
         if self._logic is not None or self._logic_error:

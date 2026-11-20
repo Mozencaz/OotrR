@@ -112,6 +112,18 @@ the melody of the current `MelodyType`) and also adds it silently
 points held before a sale (100 per Big Poe): `Event70` against 100 × (N − 1)
 instead of 900, `Event265` lets those points through. **Not validated in game.**
 
+## Cuccos to bring back (`cuccos.py`)
+
+`chicken_count` (1 to 7): the cucco lady's pen in Kakariko (child). In
+`Logic/MiniGame_CatchCucco_c69b.logic.module.ainb` (patched in place), node 17 compares
+the cuccos in the pen with N − 1 instead of 7, and `Npc_Hylia_049_Child_Cucco06_IsInTheCage`
+(the flag her flows test before the reward) is set when more than N − 1 are in the pen
+instead of exactly 7; it is still cleared below N − 1, so N − 1 after having had N keeps
+it. In `Minigame_CatchCucco`, `Event3` (her "left to find" count, N minus the pen) and
+`Event82` (some brought back) use N. Her request and reward lines (`Talk_19`, `Talk_21`,
+`Talk_21_1`, `Talk_40` of `Npc_Hylia_049_Child.msbt`) name N, as a digit, in every
+language. 0 (a reward without a cucco) is not supported. **Not validated in game.**
+
 ## Item forms and derived actors (`item_forms.py`)
 
 The remake gives an item through three kinds of actors: `Item_*` (chest, event),
@@ -142,9 +154,28 @@ The source itself keeps its map entry, but for its drop: no `Presence` and no va
 copy. The game remembers a broken pot, rock, crate, bush or beehive by its hash (a
 `Bool64bitKey`) until the scene changes; a copy under another hash, or a source under a
 `Presence` condition, came back while the area stayed loaded. Each pickup runs its own
-clone of the `DropItem` AI: when it spawns, it reads its check flag and deletes itself
-once the check is collected. A collected source therefore drops nothing afterwards
-(not its vanilla rupee or heart).
+clone of the `DropItem` AI: when it spawns, it reads its check flag, and once the check
+is collected it hands over to the source's vanilla drop. The pickup carries that drop
+as its own `DropRef`: the source pack's drop component (its lottery: hearts, magic,
+ammo, nuts and bombs from pots, grass and crates, rupees from rocks and beehives) or,
+for a source whose map entry names its drop (`Drop__DropActor`), a table of that one
+rupee or heart. The pickup reserves that drop and requests its death, as the Poe's
+lantern does when it leaves its spirit (`Weapon_PoeCantera.root`:
+`OneShotDropReserveDropItemCreate`, then `OneShotDeathRequestDeath`, reason 10). A
+source whose drop is unknown (its pack has none, or its map entry names a table)
+drops nothing once collected. Not validated in game.
+
+When the check is collected depends on the reward. A key reward plays its get event
+on every pickup, and that event's graph sets the check flag once the item is in the
+pouch. A minor reward (rupees, ammunition, recovery hearts, magic jars) keeps the
+native pick-up, without Link stopping: the game plays its get event only the first
+time an item of that kind is ever got, so that graph cannot record the check. No
+graph sees the short pick-up: `DropItem.root` holds no pick-up node, and no node of
+the game's AI reads a pick-up. Its drop AI therefore sets the check flag when the
+pickup spawns, right after the "already collected" test, if the pouch can take the
+reward then (`QueryPouchMgrIsEnablePushToPouch`): a full wallet keeps a rupee check
+for later. A minor drop that is not picked up while the pouch has room still counts
+as collected.
 
 ## Dungeon-specific keys (`key_adapter.py`)
 
@@ -218,8 +249,8 @@ the dialogue box stayed empty and blocked the game. A new save is required.
 - A source found only in the child maps (`*_Child_*`) or only in the adult maps
   (`*_Adult_*`) is collected at that age: each of its AP locations that this age can
   ever reach must be reachable **at that age** (`Child|`/`Adult|` members, the AP
-  `is_child`/`is_adult` rules). Being adult needs `Time Travel` (Door of Time: Song
-  of Time, which the child gets for the three spiritual stones). A source with no
+  `is_child`/`is_adult` rules). Being adult needs `Time Travel` (reach the sword
+  through the Door of Time, following *Door of Time requirements* below). A source with no
   such location only receives filler. Its tracker name ends in `(child)`/`(adult)`;
   an object on both maps under one hash is one check for either age.
 - NPCs: exact AP location; for the man on the roof (adult only in the remake) and
@@ -249,6 +280,64 @@ Mido, outside the grotto) use `KF Links House Pot`, at the age of their maps (ch
 copies at start, adult-only copies once the adult reaches the forest); bean platform
 rupees use `KF Bean Platform Red Rupee`.
 Mido's house: the 4 grouped chests are matched to Mido's 4 AP chests.
+
+### Door of Time requirements (`door_of_time_requirement`)
+
+Play the Song of Time with an ocarina in front of the door. The *Open world* card
+adds a separate choice of stones required at that moment:
+
+| Value | Door requirements |
+|---|---|
+| `song` (default) | Ocarina and Song of Time |
+| `vanilla` | Ocarina, Song of Time, Goron Ruby and Zora Sapphire |
+| `all` | Ocarina, Song of Time and all three Spiritual Stones |
+
+`open_door_of_time` opens the door from the start and overrides this choice. Beyond
+the door, the child can pull the sword without another stone requirement. The setting
+is independent of Zelda's escape below. The solver applies its exit rule in Python,
+preserving the world's fingerprint. Missing stored values mean `song`, and that value
+is omitted from stored settings to preserve earlier seed identities. Behaviour in game
+still needs confirmation.
+
+The native altar pack (`Obj_TimeTemple_SpiritStoneBase_A_01`) checks the invalid-condition
+`Market_Child_TimeTempleDoor_OcarinaReacts` before calling the opening event. Its original
+expression rejects the song outside `DoorOfTime` step `Step05`, even after the event flow
+was freed in 0.7.3. The generator now replaces that expression with "door already open OR
+required stones missing"; the native ocarina point still recognises the Song of Time.
+Independent verification checks the emitted expression against the selected requirement.
+
+The child pedestal module also routes the first pull through the inverse of the native
+`AllSage IsAfter Ready` check used for subsequent pulls. Comparing `IsBefore Ready`
+instead left both requests disabled at exactly `Ready`: the prompt appeared but pressing
+the action did nothing. Both requests still require the pedestal action, and exactly one
+can run regardless of the current quest step.
+
+### Spiritual Stones for Zelda's escape (`spiritual_stones`)
+
+The game's own check (`DoorOfTime/DoorOfTime_CheckStoneNum`) reads only the Fire and
+Water stone quests (`Get_StoneOfFire`, `Get_StoneOfWater`), never the Kokiri Emerald.
+The option, in the *Open world* card, picks what Zelda's escape asks for, and so what
+gates the Ocarina of Time (`HF Ocarina of Time Item`) and the Song of Time. The door's
+own stone requirement is set separately:
+
+| Value | Stones | Logic and patch |
+|---|---|---|
+| `all` (default, "Require all") | Kokiri Emerald, Goron Ruby, Zora Sapphire | `has_all_stones` (the rules of the base world); `story_fixes.STONE_SETS['all']` checks the three saved `IsGet.Item_Stone_*` flags |
+| `vanilla` ("Vanilla") | Goron Ruby, Zora Sapphire | the Goron Ruby and the Zora Sapphire in the rules, and `Met Zelda` for the ocarina item too; `STONE_SETS['vanilla']` checks the two |
+
+The logic files (`remake.json`, `helpers.json`) keep the rules of one value, the one the
+builds before the option used (`rando_options.UNRECORDED`); `rules.ESCAPE_RULES` holds both,
+and the other value replaces them in `Logic` when the rules compile. So the world
+fingerprint (`World.fingerprint`, a hash of those files that seeds and Archipelago
+patches keep) does not change with the option, and a seed or patch made before it loads
+and tracks as before. Seeds and patches that chose the other value store it in their
+settings, from which the tracker and the apworld rebuild the same logic. The Mask of
+Truth (`has_all_stones`) is not affected.
+
+Seed identity: an option at the default value is left out of the stored settings
+(`rando_options.UNRECORDED`, `Settings.to_dict`), so seeds made before the option, whose
+settings never held it, keep their identity and regenerate identically; `vanilla` is
+stored. The seed string already writes only the values that differ from the defaults.
 
 ## Mechanism cutscenes are never skippable
 
@@ -313,8 +402,9 @@ outside the maps are not covered (except chest events).
     and Lullaby (found elsewhere, the lullaby possibly as a harp in a chest); with the forest closed, the Kokiri guard and Mido still wait for the Deku
     Tree; Saria teaches her song in the meadow; the Kakariko gate opens with the letter;
     Talon and Malon are at Lon Lon Ranch (Epona's Song, the cucco game); Kaepora's first
-    field talk does not move the castle quest back; with the three stones, Zelda flees
-    and the Door of Time opens.
+    field talk does not move the castle quest back; with the stones the option asks
+    for (all three, or the Goron Ruby and the Zora Sapphire), Zelda flees and the Door
+    of Time opens.
 14. **Pickup visuals**: progressive slingshot, bow and hookshot copies use their
     native item poses. Gold Skulltula drops no longer use the skull-shaped aura.
     Items without an effect borrow the moat ocarina glow; check visibility under
@@ -323,6 +413,8 @@ outside the maps are not covered (except chest events).
 15. **Child Death Mountain Crater**: child actors remain vanilla and are excluded
     from both shuffle candidates and logic. Adult copies remain eligible. Child
     bean planting is also out of logic, including for the adult volcano heart.
+16. **Cuccos**: with 3 to bring back, the cucco lady's request says 3, her "left to find"
+    count starts at 3, and she gives her reward once 3 are in the pen.
 
 Known limits: some NPCs decide "already given" from the vanilla item (e.g. silver
 scale for the diving game) and can give their new item again; shop texts of

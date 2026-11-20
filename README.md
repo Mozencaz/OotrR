@@ -70,6 +70,8 @@ the seed's rules, without crediting rewards of locations not picked up yet.
 
 **Unknown** means the reading or the matching is not reliable enough. These rows
 stay visible; a manual fallback mark is possible without revealing the reward.
+**not tracked** marks a row the save never records (an NPC gift or a shop refill
+left in place, for example): only a manual mark completes it.
 Old seeds still open, but must be regenerated to get the newer metadata. The
 tracker refuses a save that does not carry the new-game marker of the selected seed.
 
@@ -79,9 +81,22 @@ persistent flag, then the source goes back to its native loot (a rock without
 vanilla loot gives nothing again). A guard forbids a second randomized reward
 coming from an old copy of the same drop.
 
-Live reading of the game memory (Windows) finds Hookshot and the yuzu-family
-emulators Lichii, Ryuchii, Eden, yuzu, suyu, citron and sudachi. Another fork can
-be added by its executable name in **Setup → Other emulator executables**.
+Live reading of the game memory finds Hookshot and the yuzu-family emulators
+Lichii, Ryuchii, Eden, yuzu, suyu, citron and sudachi on Windows, and the native
+Linux builds of these emulators (Ryuchii on a Steam Deck, for instance) on Linux.
+On Linux, run the Linux application (`OoT-Randomizer`): the Windows `.exe` started
+through Proton or Wine cannot read a native Linux process. Another fork can be added
+by its executable name in **Setup → Other emulator executables** (on Linux, with or
+without `.exe`).
+
+On Linux, the yuzu-family emulators keep the game's memory in a file
+(`/memfd:HostMemory`). The application reads it through `/proc/<pid>/fd` at the
+offsets `/proc/<pid>/maps` gives. That only needs the same user as the emulator, so
+it also works with `kernel.yama.ptrace_scope` at 1 (SteamOS, Ubuntu). For an
+emulator without that file it reads `/proc/<pid>/mem`, which `ptrace_scope` 1 allows
+only when the emulator allows it (`prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY)`) or the
+setting is 0; the Tracker tab names the value when Linux refuses. The application
+never changes it.
 
 The **in-game overlay** (Windows, Hookshot) shows the item grid plus the soul and
 check counts over the game window; toggle it with **Ctrl + Shift + O**.
@@ -128,13 +143,14 @@ world, with the same locations, item pool and glitchless rules as the built-in f
 5. **Connect** in the Archipelago row of the Tracker tab (server address, slot, password),
    or run `python -m oot_rando ap-client MOD_FOLDER SERVER [--password P]` without the window.
    The client sends the checks the tracker sees (save, plus the running game's memory on
-   Windows) and the goal (Ganon defeated, read live: set just before the ending). The row
+   Windows and Linux) and the goal (Ganon defeated, read live: set just before the ending). The row
    also shows the server messages and takes chat or server commands (`!hint`…).
    Checks ticked by hand in the tracker are sent too.
 
 Items of other players show in game as an Archipelago medallion with the item and player
 name. Items of this game found in other worlds are handed over in game by the client
-while a save of the seed is loaded (Windows, Hookshot or a yuzu-family emulator), one at
+while a save of the seed is loaded (Hookshot or a yuzu-family emulator on Windows, a native
+yuzu-family emulator on Linux), one at
 a time in server order: Link holds the item up (consumables arrive as a pickup). An item
 the game does not take after several tries is set aside and reported in the client log,
 so the next ones still arrive. Archipelago starting items are given at the end of the

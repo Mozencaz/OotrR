@@ -1,15 +1,22 @@
 import _src_path  # noqa: F401  (src on sys.path)
+import ctypes
 import os
 import struct
+import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from oot_rando.tracker.auto_tracker import TrackerSession
 from oot_rando.tracker.game_overlay import ICONS, icon_name, overlay_model
-from oot_rando.tracker import icon_extract
+from oot_rando.tracker import icon_extract, live_memory
 from oot_rando.tracker.live_memory import (LiveGameData, LiveUnavailable, parse_bools, GAMEDATA_SLOT,
                                            SEQUENCE_IS_CHILDHOOD, HOOKSHOT_MAIN, MEM_COMMIT, emulator_layout,
-                                           BOOL64_PROBE, BOOL64_TYPE)
+                                           BOOL64_PROBE, BOOL64_TYPE, EMULATOR_EXES, LinuxProcessMemory,
+                                           denied_message, exe_link_name, linux_emulator_pids, names_match,
+                                           parse_exe_names, parse_maps, plain_name, ptrace_scope,
+                                           readable_regions, MemfdWindows, is_guest_memfd, memfd_mappings)
 
 
 def gamedata_image(bools, size=16, gamedata_slot=GAMEDATA_SLOT, at=0, bool64=None, bool64_at=BOOL64_TYPE):
@@ -137,6 +144,251 @@ class EmulatorLayoutTests(unittest.TestCase):
     def test_game_data_not_loaded(self):
         listing, read, _ = self.host_memory(loaded=False)
         self.assertIsNone(emulator_layout(listing, read))
+
+    def test_finds_base_and_slot_from_linux_maps(self):
+        # Ryuchii on Linux: guest pages are mappings of its memfd inside one reserved window.
+        listing, read, slot = self.host_memory()
+        lines = [f'{self.BASE:x}-{self.BASE + self.MAIN:x} ---p 00000000 00:00 0']
+        lines += [f'{start:x}-{start + size:x} rw-s 00012000 00:01 4321    /memfd:HostMemory (deleted)'
+                  for start, size, _ in listing]
+        self.assertEqual(emulator_layout(readable_regions(parse_maps('\n'.join(lines))), read), (self.BASE, slot))
+
+
+class LinuxProcessTests(unittest.TestCase):
+    """Linux process access, from fake /proc text and folders (the syscalls run in the Linux CI)."""
+    MAPS = (
+        '55d0c0a00000-55d0c0a21000 r--p 00000000 08:02 1234                       /usr/bin/ryuchii\n'
+        '7f0000000000-7f0000001000 rw-s 00012000 00:01 4321                       /memfd:HostMemory (deleted)\n'
+        '7f0000001000-7f0000002000 ---p 00000000 00:00 0 \n'
+        '7f0000002000-7f0000003000 rw-s 00000000 00:0e 99                         /dev/dri/renderD128\n'
+        '7f0000003000-7f0000004000 rw-s 00000000 00:19 98                         /dev/shm/eden_mem\n'
+        '7f0000005000-7f0000006000 rw-p 00000000 00:00 0 \n'
+        '7ffd1c3fe000-7ffd1c402000 r--p 00000000 00:00 0                          [vvar]\n'
+        '7ffd1c402000-7ffd1c404000 r-xp 00000000 00:00 0                          [vdso]\n'
+        'ffffffffff600000-ffffffffff601000 --xp 00000000 00:00 0                  [vsyscall]\n')
+
+    def fake_proc(self, processes, scope=None):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        for pid, comm in processes.items():
+            (root / str(pid)).mkdir()
+            (root / str(pid) / 'comm').write_text(comm + '\n', encoding='utf-8')
+            (root / str(pid) / 'maps').write_text(self.MAPS, encoding='utf-8')
+        (root / 'self').mkdir()
+        if scope is not None:
+            (root / 'sys' / 'kernel' / 'yama').mkdir(parents=True)
+            (root / 'sys' / 'kernel' / 'yama' / 'ptrace_scope').write_text(f'{scope}\n', encoding='ascii')
+        return str(root)
+
+    def test_parses_maps(self):
+        rows = parse_maps(self.MAPS)
+        self.assertEqual(len(rows), 9)
+        self.assertEqual(rows[1], (0x7F0000000000, 0x1000, 'rw-s', '/memfd:HostMemory (deleted)'))
+        self.assertEqual(rows[2], (0x7F0000001000, 0x1000, '---p', ''))
+
+    def test_keeps_readable_mappings_only(self):
+        regions = readable_regions(parse_maps(self.MAPS))
+        self.assertEqual([start for start, _, _ in regions],
+                         [0x55D0C0A00000, 0x7F0000000000, 0x7F0000003000, 0x7F0000005000, 0x7FFD1C402000])
+        self.assertEqual({state for _, _, state in regions}, {MEM_COMMIT})
+
+    def test_names_with_or_without_exe(self):
+        self.assertEqual(plain_name('C:\\Emu\\Ryuchii.EXE'), 'ryuchii')
+        self.assertEqual(plain_name('ryuchii'), 'ryuchii')
+        self.assertEqual(exe_link_name('/home/deck/Ryuchii/usr/bin/ryuchii (deleted)'), 'ryuchii')
+        self.assertTrue(names_match({'ryuchii'}, {plain_name(name) for name in EMULATOR_EXES}))
+        # /proc/<pid>/comm keeps 15 characters of a longer name.
+        self.assertTrue(names_match({'ryuchii-green-h'}, {'ryuchii-green-hat-boy'}))
+        self.assertFalse(names_match({'ryuchii-green'}, {'ryuchii-green-hat-boy'}))
+        self.assertFalse(names_match({'bash', ''}, {'ryuchii'}))
+
+    def test_finds_emulators_by_comm(self):
+        proc = self.fake_proc({100: 'ryuchii', 200: 'bash', 300: 'MyEmu', 400: 'ryuchii'})
+        emulators = EMULATOR_EXES | parse_exe_names('MyEmu.exe')
+        self.assertEqual(linux_emulator_pids(emulators, proc, own=400), [100, 300])
+        self.assertEqual(linux_emulator_pids(EMULATOR_EXES, proc + '-missing'), [])
+
+    def test_ptrace_scope(self):
+        self.assertEqual(ptrace_scope(self.fake_proc({}, scope=1)), 1)
+        self.assertIsNone(ptrace_scope(self.fake_proc({})))
+
+    def test_denied_messages_name_the_value_and_the_fix(self):
+        self.assertIn('PR_SET_PTRACER_ANY', denied_message(1))
+        for scope in (0, 1, 2, 3):
+            self.assertIn(f'ptrace_scope is {scope}', denied_message(scope))
+        self.assertNotIn('ptrace_scope', denied_message(None))
+
+    def test_refused_memory_reports_ptrace_scope(self):
+        class Refused(LinuxProcessMemory):
+            def _open(self, pid, flags):
+                raise PermissionError(13, 'Permission denied')
+        memory = Refused(self.fake_proc({100: 'ryuchii'}, scope=1))
+        with mock.patch.object(live_memory, 'emulator_exes', return_value=EMULATOR_EXES):
+            with self.assertRaises(LiveUnavailable) as caught:
+                LiveGameData(memory).snapshot()
+        self.assertIn('ptrace_scope is 1', str(caught.exception))
+        self.assertIn('PR_SET_PTRACER', str(caught.exception))
+        with self.assertRaises(LiveUnavailable) as again:   # before the next scan: the same reason
+            LiveGameData(memory).snapshot()
+        self.assertEqual(str(again.exception), str(caught.exception))
+
+    def test_no_emulator_running(self):
+        memory = LinuxProcessMemory(self.fake_proc({200: 'bash'}))
+        with mock.patch.object(live_memory, 'emulator_exes', return_value=EMULATOR_EXES):
+            with self.assertRaises(LiveUnavailable) as caught:
+                memory.attach()
+        self.assertEqual(str(caught.exception), 'game not running')
+
+    def test_process_memory_of_this_system(self):
+        if os.name == 'nt':
+            self.assertIsInstance(live_memory.process_memory(), live_memory.ProcessMemory)
+        elif sys.platform.startswith('linux'):
+            self.assertIsInstance(live_memory.process_memory(), LinuxProcessMemory)
+        self.assertEqual(live_memory.supported(), os.name == 'nt' or sys.platform.startswith('linux'))
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'reads /proc/self/mem')
+    def test_reads_and_writes_this_process(self):
+        buffer = ctypes.create_string_buffer(b'ootrr-live', 16)
+        address = ctypes.addressof(buffer)
+        rows = readable_regions(parse_maps(Path('/proc/self/maps').read_text(encoding='utf-8')))
+        self.assertTrue(any(start <= address < start + size for start, size, _ in rows))
+        memory = LinuxProcessMemory()
+        memory.fd, memory.pid, memory.base = os.open('/proc/self/mem', os.O_RDONLY), 'self', 0
+        try:
+            self.assertEqual(memory.read(address, 10), b'ootrr-live')
+            memory.write(address, b'O')
+            self.assertEqual(buffer.raw[:10], b'Ootrr-live')
+            with self.assertRaises(LiveUnavailable):
+                memory.read(0, 8)   # unmapped
+        finally:
+            memory.close()
+
+
+class MemfdTests(unittest.TestCase):
+    """The guest memory file route, which kernel.yama.ptrace_scope 1 allows."""
+    BASE, MAIN, DATA = 0x7EE300000000, 0x80347000, 0x90000000
+    # The rows of a Steam Deck's maps (round 3b) look like these: page-sized protection changes, one inode.
+    MAPS = (
+        '7ee397e00000-7ee397e17000 ---s 21000000 00:01 1369                       /memfd:HostMemory (deleted)\n'
+        '7ee397e17000-7ee397e18000 rw-s 21017000 00:01 1369                       /memfd:HostMemory (deleted)\n'
+        '7ee397e18000-7ee397e23000 ---s 21018000 00:01 1369                       /memfd:HostMemory (deleted)\n'
+        '7ee398000000-7ee398001000 rw-s 00000000 00:01 1369                       /memfd:HostMemory\n'
+        '7ee398001000-7ee398002000 rw-s 00004000 00:01 1369                       /memfd:HostMemory (deleted)\n'
+        '7ee398002000-7ee398003000 rw-s 00000000 00:01 77                         /memfd:Other\n'
+        '7ee398003000-7ee398004000 rw-p 00000000 00:00 0 \n')
+
+    def test_link_names(self):
+        self.assertTrue(is_guest_memfd('/memfd:HostMemory (deleted)'))
+        self.assertTrue(is_guest_memfd('/memfd:HostMemory'))
+        self.assertFalse(is_guest_memfd('/memfd:HostMemoryX'))
+        self.assertFalse(is_guest_memfd('/dev/shm/HostMemory'))
+
+    def test_mappings_of_any_protection(self):
+        rows = memfd_mappings(self.MAPS)
+        self.assertEqual(len(rows), 5)
+        self.assertEqual(rows[0], (0x7EE397E00000, 0x17000, 0x21000000, 1369))
+        self.assertEqual(rows[4], (0x7EE398001000, 0x1000, 0x4000, 1369))
+
+    def test_windows_join_only_continuous_mappings(self):
+        windows = MemfdWindows(memfd_mappings(self.MAPS))
+        self.assertEqual(windows.windows, [(0x7EE397E00000, 0x23000, 0x21000000), (0x7EE398000000, 0x1000, 0),
+                                           (0x7EE398001000, 0x1000, 0x4000)])
+        self.assertEqual(windows.pieces(0x7EE397E16FF8, 16), [(0x21016FF8, 16)])   # across a protection change
+        self.assertEqual(windows.pieces(0x7EE398000FFC, 8), [(0xFFC, 4), (0x4000, 4)])
+        self.assertIsNone(windows.pieces(0x7EE397E22FFC, 8))   # runs past the mapping
+        self.assertIsNone(windows.pieces(0x7EE397DFFFFF, 2))   # starts before it
+        self.assertIsNone(windows.pieces(0x7EE398002000, 1))
+        self.assertEqual(windows.pieces(0x7EE398000000, 0), [])
+
+    def guest_file(self, folder):
+        """A guest memory file and its maps text: main, the GameData slot (a protected page) and the data."""
+        slot = self.MAIN + GAMEDATA_SLOT - HOOKSHOT_MAIN
+        image = gamedata_image({SEQUENCE_IS_CHILDHOOD: True, 17: False}, gamedata_slot=slot, at=self.DATA)
+        image[self.MAIN] = struct.pack('<II', 1, 0x40) + bytes(56) + b'MOD0'
+        # guest page -> (file offset, size, protection); the file pages are not in guest order
+        layout = {self.MAIN: (0x20000, 0x1000, 'rw-s'), slot & ~0xFFF: (0x0, 0x1000, '---s'),
+                  self.DATA: (0x1000, 0x10000, 'rw-s')}
+        content = bytearray(0x21000)
+        for guest, data in image.items():
+            page = max(start for start in layout if start <= guest)
+            offset = layout[page][0] + guest - page
+            content[offset:offset + len(data)] = data
+        path = Path(folder, 'HostMemory')
+        path.write_bytes(bytes(content))
+        inode = os.stat(path).st_ino
+        lines = [f'{self.BASE + page:x}-{self.BASE + page + size:x} {protection} {offset:08x} 00:01 {inode}'
+                 f'    /memfd:HostMemory (deleted)' for page, (offset, size, protection) in sorted(layout.items())]
+        return path, '\n'.join(lines) + '\n', slot
+
+    def test_attaches_and_writes_through_the_file(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        path, maps, slot = self.guest_file(folder.name)
+        proc = Path(folder.name, 'proc')
+        (proc / '100').mkdir(parents=True)
+        (proc / '100' / 'comm').write_text('ryuchii\n', encoding='utf-8')
+        (proc / '100' / 'maps').write_text(maps, encoding='utf-8')
+
+        def pread(fd, size, offset):   # os.pread is POSIX only; the file is read by path
+            with open(path, 'rb') as file:
+                file.seek(offset)
+                return file.read(size)
+
+        def pwrite(fd, data, offset):
+            with open(path, 'r+b') as file:
+                file.seek(offset)
+                return file.write(data)
+
+        class Memfd(LinuxProcessMemory):
+            def _guest_memfds(self, pid):
+                return [str(path)]
+
+            def _open(self, pid, flags):
+                raise AssertionError('/proc/<pid>/mem opened')
+
+        memory = Memfd(str(proc))
+        with mock.patch.object(live_memory, 'emulator_exes', return_value=EMULATOR_EXES), \
+                mock.patch.object(live_memory.os, 'pread', pread, create=True), \
+                mock.patch.object(live_memory.os, 'pwrite', pwrite, create=True):
+            try:
+                snapshot = LiveGameData(memory).snapshot()
+                self.assertEqual((memory.base, memory.slot), (self.BASE, slot))
+                self.assertTrue(snapshot['bool'][SEQUENCE_IS_CHILDHOOD])
+                memory.write(self.DATA + 0x5000 + 24 + 22, b'\x01')   # key 17's value byte
+                self.assertTrue(LiveGameData(memory).snapshot()['bool'][17])
+                with self.assertRaises(LiveUnavailable):
+                    memory.read(self.DATA + 0x20000, 8)   # not mapped, even after reading maps again
+            finally:
+                memory.close()
+
+    @unittest.skipUnless(sys.platform.startswith('linux') and hasattr(os, 'memfd_create'), 'a Linux memfd')
+    def test_reads_and_writes_a_memfd_of_this_process(self):
+        import mmap
+        fd = os.memfd_create('HostMemory', 0)
+        try:
+            os.ftruncate(fd, 0x3000)
+            os.pwrite(fd, b'ootrr-live', 0x2000)
+            view = mmap.mmap(fd, 0x1000, offset=0x2000)
+            pointer = ctypes.c_char.from_buffer(view)
+            address = ctypes.addressof(pointer)
+            memory = LinuxProcessMemory()
+            paths = memory._guest_memfds(os.getpid())
+            self.assertTrue(paths)
+            mine = [p for p in paths if os.stat(p).st_ino == os.fstat(fd).st_ino]
+            self.assertTrue(mine)   # two entries: mmap keeps its own duplicate of the descriptor
+            memory.fd, memory.pid, memory.base, memory.memfd = os.open(mine[0], os.O_RDONLY), os.getpid(), 0, mine[0]
+            memory.inode = os.fstat(fd).st_ino
+            memory.windows = MemfdWindows([row for row in memfd_mappings(Path('/proc/self/maps').read_text())
+                                           if row[3] == memory.inode])
+            self.assertEqual(memory.read(address, 10), b'ootrr-live')
+            memory.write(address, b'O')
+            self.assertEqual(view[:10], b'Ootrr-live')
+            memory.close()
+            del pointer
+            view.close()
+        finally:
+            os.close(fd)
 
 
 class FakeLive:

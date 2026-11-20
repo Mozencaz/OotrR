@@ -128,7 +128,7 @@ class OoTRemakeWorld(World):
             self.multiworld.itempool.append(self.create_item(name))
 
     def get_filler_item_name(self):
-        return 'Rupees (5)'
+        return 'Rupee (1)'   # green rupee, like the pool balance (full_randomizer.balance_pool)
 
     def set_rules(self):
         remake, player = self.remake, self.player

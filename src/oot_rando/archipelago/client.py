@@ -143,7 +143,8 @@ class ArchipelagoClient:
         self.room_seed = None
         # Items handed to the running game (None: not on this system, or disabled).
         self.delivery = delivery
-        if self.delivery is None and __import__('os').name == 'nt':
+        from oot_rando.tracker import live_memory
+        if self.delivery is None and live_memory.supported():
             from oot_rando.archipelago.receive import LiveDelivery
             self.delivery = LiveDelivery(manifest)
         self._delivery_thread = None
@@ -434,7 +435,6 @@ class ArchipelagoClient:
 def main(argv=None):
     """``ap-client MOD_FOLDER SERVER [--password P] [--slot NAME] [--save progress.sav]``: headless client."""
     import argparse
-    import os
     from pathlib import Path
     from oot_rando.randomizer.randomizer_services import read_artifact
     from oot_rando.tracker.auto_tracker import TrackerSession, newest_save
@@ -451,9 +451,9 @@ def main(argv=None):
     hookshot = args.hookshot or (args.mod.resolve().parent.parent if args.mod.resolve().parent.name.lower() == 'mods'
                                  else None)
     live = None
-    if os.name == 'nt':
-        from oot_rando.tracker.live_memory import LiveGameData
-        live = LiveGameData()
+    from oot_rando.tracker import live_memory
+    if live_memory.supported():
+        live = live_memory.LiveGameData()
     tracker = TrackerSession(args.mod, 'archipelago', save_path=args.save or '', live=live)
     shown = [0]
 

@@ -10,6 +10,7 @@ from oot_rando.randomizer.randomizer_services import (ManualTracker, continued_s
                                                         installed_regeneration, read_artifact,
                                                         regeneration_settings, validate_mod_directory)
 from oot_rando.patching.randomize_kokiri import TITLE, BUILD
+from oot_rando import __version__ as APP_VERSION
 
 
 class ServiceTests(unittest.TestCase):
@@ -22,7 +23,7 @@ class ServiceTests(unittest.TestCase):
         identity = settings_identity(settings)
         manifest = {'schema_version': 1, 'title_id': TITLE, 'build_id': BUILD,
                     'generator_version': GENERATOR_VERSION, 'adapter_version': ADAPTER_VERSION,
-                    'seed_id': identity, 'settings': settings.to_dict(),
+                    'app_version': APP_VERSION, 'seed_id': identity, 'settings': settings.to_dict(),
                     'files': {'resource': {'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}}}
         (root / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
         (root / 'checks.json').write_text(json.dumps({'seed_id': identity, 'checks': []}), encoding='utf-8')
@@ -95,7 +96,7 @@ class ServiceTests(unittest.TestCase):
             original.write_bytes(b'original')
             calls = []
 
-            def fake_generate(nup, output, settings, progress):
+            def fake_generate(nup, output, settings, progress, **options):
                 calls.append(output)
                 self.make_artifact(output, settings.seed)
             archive = base / 'archive'
@@ -115,6 +116,46 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual(sorted(p.name for p in mods.iterdir()), [second.name])
             self.assertEqual(original.read_bytes(), b'original')
 
+    def test_regeneration_keeps_the_oldest_origin_of_the_saves(self):
+        # A save update declined after a regeneration must not be taken as done: the
+        # regenerated seed records the origin of the game, not the version it replaced.
+        cases = [({'app_version': '0.7.1'}, '0.7.1'),
+                 ({'app_version': '0.7.2', 'saves_from': '0.7.0'}, '0.7.0'),
+                 ({}, '0.0.0'),                                  # made before 0.7.3
+                 ({'app_version': 'not a version'}, '0.0.0'),
+                 ({'app_version': APP_VERSION}, None),           # same version: nothing older
+                 ({'app_version': '99.0.0'}, None)]
+        for fields, expected in cases:
+            with self.subTest(fields=fields), tempfile.TemporaryDirectory() as directory:
+                base = Path(directory)
+                mods = self.make_hookshot(base / 'Hookshot')
+                mods.mkdir()
+                settings = Settings('kept')
+                installed = self.make_artifact(mods / ('OoT_Randomizer_' + settings_identity(settings)[:16]), 'kept')
+                manifest = json.loads((installed / 'manifest.json').read_text(encoding='utf-8'))
+                manifest.pop('app_version')
+                manifest.update(fields)
+                (installed / 'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+                received = []
+
+                def fake_generate(nup, output, settings, progress, **options):
+                    received.append(options)
+                    self.make_artifact(output, settings.seed)
+                generate_in_mods('game.nup', mods, settings, archive=base / 'archive', generate=fake_generate)
+                self.assertEqual(received, [{'saves_from': expected} if expected else {}])
+
+    def test_a_new_seed_records_no_origin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            mods = self.make_hookshot(base / 'Hookshot')
+            received = []
+
+            def fake_generate(nup, output, settings, progress, **options):
+                received.append(options)
+                self.make_artifact(output, settings.seed)
+            generate_in_mods('game.nup', mods, Settings('fresh'), archive=base / 'archive', generate=fake_generate)
+            self.assertEqual(received, [{}])
+
     def make_old_artifact(self, root, settings, version='0.10.0'):
         """Seed folder as an older generator wrote it (identity bound to that version)."""
         self.make_artifact(root, settings.seed)
@@ -122,21 +163,30 @@ class ServiceTests(unittest.TestCase):
         path = root / 'manifest.json'
         manifest = json.loads(path.read_text(encoding='utf-8'))
         manifest.update(generator_version=version, seed_id=identity, settings=settings.to_dict())
+        manifest.pop('app_version')   # not recorded before 0.7.3
         path.write_text(json.dumps(manifest), encoding='utf-8')
         (root / 'checks.json').write_text(json.dumps({'seed_id': identity, 'checks': []}), encoding='utf-8')
         return root
 
-    def test_regeneration_offered_only_for_an_accepted_seed_of_an_older_generator(self):
+    def test_regeneration_offered_only_for_an_accepted_seed_of_an_older_application(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             current = self.make_artifact(base / 'current', 'up-to-date')
             self.assertIsNone(installed_regeneration(current))
             old = self.make_old_artifact(base / 'old', Settings('old-seed'))
             self.assertEqual(installed_regeneration(old).seed, 'old-seed')
-            # Same seed seen from a later generator: offered as long as it is accepted.
+            # Seeds made before 0.7.3 record no application version: always older.
             manifest = read_artifact(old)[0]
-            self.assertIsNone(regeneration_settings(manifest, '0.10.0'))
-            self.assertIsNotNone(regeneration_settings(manifest, '9.9.9'))
+            self.assertNotIn('app_version', manifest)
+            self.assertIsNotNone(regeneration_settings(manifest, '0.7.3'))
+            # The application version decides, even when the generator did not change.
+            made = dict(read_artifact(current)[0], app_version='0.7.3')
+            self.assertIsNone(regeneration_settings(made, '0.7.3'))
+            self.assertIsNone(regeneration_settings(made, '0.7.2'))   # older application
+            self.assertIsNone(regeneration_settings(made, '0.7.3-beta.1'))
+            self.assertIsNotNone(regeneration_settings(made, '0.7.4'))
+            self.assertIsNotNone(regeneration_settings(made, '0.9.0'))
+            self.assertIsNone(regeneration_settings(dict(made, app_version='not a version'), '0.9.0'))
             # A version the generator no longer accepts: refused by read_artifact, no button.
             refused = self.make_old_artifact(base / 'refused', Settings('refused'), version='0.0.1')
             with self.assertRaises(ValueError):
@@ -173,7 +223,7 @@ class ServiceTests(unittest.TestCase):
             old = self.make_old_artifact(
                 mods / ('OoT_Randomizer_' + settings_identity(settings, '0.10.0', ADAPTER_VERSION)[:16]), settings)
 
-            def fake_generate(nup, output, settings, progress):
+            def fake_generate(nup, output, settings, progress, **options):
                 self.make_artifact(output, settings.seed)
             archive = base / 'archive'
             new = generate_in_mods('game.nup', old.parent, installed_regeneration(old), archive=archive,

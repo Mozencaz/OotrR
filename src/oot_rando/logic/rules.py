@@ -9,6 +9,7 @@ import copy
 import re
 from collections import defaultdict
 
+from oot_rando.logic import rando_options
 from oot_rando.logic.world import (REMAKE_EXIT_RULES, REMAKE_LOCATION_REGIONS,  # noqa: F401
                                    REMAKE_LOCATION_RULES, World)
 
@@ -21,7 +22,8 @@ MEDALLIONS = ('Forest Medallion', 'Fire Medallion', 'Water Medallion', 'Shadow M
 # application does not patch must keep these values, both in game and in logic.
 AP_VANILLA_SETTINGS = {
     'logic_rules': 'glitchless', 'open_forest': 'closed', 'open_kakariko': 'closed',
-    'open_door_of_time': False, 'zora_fountain': 'closed', 'gerudo_fortress': 'normal',
+    'open_door_of_time': False, 'spiritual_stones': rando_options.UNRECORDED['spiritual_stones'], 'zora_fountain': 'closed', 'gerudo_fortress': 'normal',
+    'door_of_time_requirement': rando_options.UNRECORDED['door_of_time_requirement'],
     'open_gerudo_valley_bridge': False,
     'bridge': 'vanilla', 'bridge_stones': 3, 'bridge_medallions': 6, 'bridge_rewards': 9,
     'bridge_tokens': 100, 'bridge_hearts': 20, 'trials': 6,
@@ -38,6 +40,17 @@ AP_VANILLA_SETTINGS = {
     'hints': 'none', 'keysanity': False, 'shuffle_scrubs': 'off', 'shuffle_pots': 'off',
     'shuffle_child_trade': 'vanilla', 'blue_fire_arrows': False, 'had_night_start': False,
     'shuffle_master_sword': False, 'shuffle_gerudo_card': False, 'skip_child_zelda': False,
+}
+
+# Zelda's escape (the Ocarina of Time and the Song of Time), by value of ``spiritual_stones``.
+# The logic files keep upstream's rules ("all"), so the world fingerprint stays upstream's; both
+# values replace them when the rules compile. The Master Sword pedestal no longer waits for the
+# escape (story_fixes.door_song_before_escape), so it is the same under both.
+ESCAPE_RULES = {
+    'all': {'HF Ocarina of Time Item': 'is_child and has_all_stones',
+            'Song from Ocarina of Time': "is_child and has_all_stones and 'Met Zelda'"},
+    'vanilla': {'HF Ocarina of Time Item': "is_child and Goron_Ruby and Zora_Sapphire and 'Met Zelda'",
+                'Song from Ocarina of Time': "is_child and Goron_Ruby and Zora_Sapphire and 'Met Zelda'"},
 }
 
 
@@ -224,6 +237,10 @@ class Logic:
             compiled = {'exits': [], 'locations': [], 'events': []}
             for target, rule in region.get('exits', {}).items():
                 rule = REMAKE_EXIT_RULES.get(f'{name} -> {target}', rule)
+                if (name, target) == ('Temple of Time', 'Beyond Door of Time'):
+                    stones = {'all': 'has_all_stones', 'vanilla': 'Goron_Ruby and Zora_Sapphire',
+                              'song': 'True'}[self.settings['door_of_time_requirement']]
+                    rule = f'open_door_of_time or (can_play(Song_of_Time) and ({stones}))'
                 requirement = extra_exit_requirements.get((name, target))
                 compiled['exits'].append((target, self.compile(rule, requirement)))
             own = {l: r for l, r in region.get('locations', {}).items()
@@ -234,6 +251,7 @@ class Logic:
                 if location == 'ToT Master Sword':
                     rule = REMAKE_LOCATION_RULES.get('Master Sword Pedestal', rule)
                 rule = REMAKE_LOCATION_RULES.get(location, rule)
+                rule = self._escape_rule(location, rule)
                 extra_rule = shop_rule(data.vanilla_item(location))
                 if extra_rule:
                     rule = f'({rule}) and ({extra_rule})'
@@ -258,6 +276,10 @@ class Logic:
             raise ValueError('Unknown AP regions: ' + ', '.join(sorted(missing)))
 
     # ------------------------------------------------------------------ rules
+    def _escape_rule(self, location, rule):
+        """``rule`` of a location behind Zelda's escape, as the ``spiritual_stones`` setting asks."""
+        return ESCAPE_RULES[self.settings['spiritual_stones']].get(location, rule)
+
     @staticmethod
     def _parse(text):
         return ast.parse(' '.join(text.split()), mode='eval').body

@@ -65,11 +65,9 @@ class MasterSwordLogicTests(unittest.TestCase):
     def test_new_reward_has_same_effective_pedestal_requirement(self):
         logic = Logic(self.world, {'shuffle_master_sword': True})
         state = logic.new_state({'Ocarina': 1, 'Song of Time': 1})
+        # The Song of Time opens the door before Zelda's escape (story_fixes.
+        # door_song_before_escape): beyond it, the pull needs no stones.
         state.reached['child'].add('Beyond Door of Time')
-        for location in ('ToT Master Sword', 'Master Sword Pedestal'):
-            self.assertFalse(logic.accessible(state, location))
-        state.counts.update({'Kokiri Emerald': 1, 'Goron Ruby': 1, 'Zora Sapphire': 1,
-                             'Met Zelda': 1})
         for location in ('ToT Master Sword', 'Master Sword Pedestal'):
             self.assertTrue(logic.accessible(state, location))
         placements = vanilla_placements(self.world, logic)

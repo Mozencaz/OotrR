@@ -175,6 +175,17 @@ class WithGame(unittest.TestCase):
             self.assertTrue(any(g.startswith('song#') for g in world.names), songs)
             self.assertTrue(set(world.names) <= set(self.catalog['locations']), songs)
 
+    def test_both_stone_values_keep_the_world_fingerprint(self):
+        # The option varies the rules in Python: a patch made before it (or with either value) loads.
+        from oot_rando.logic.world import World
+        for value in rando_options.BY_NAME['spiritual_stones'].allowed():
+            with self.subTest(spiritual_stones=value):
+                world = bridge.PlayerWorld(self.catalog, dict(self.values, spiritual_stones=value), 'archipelago|test|4')
+                placements = {gid: {'item': 'Rupee (1)', 'own': True, 'sphere': None} for gid in world.c.shuffled}
+                patch = json.loads(json.dumps(world.patch(placements, [], '1', 'Moi', 1, self.build)))
+                self.assertEqual(patch['world'], World().fingerprint())
+                self.assertEqual(bridge.settings_from_patch(patch).full['spiritual_stones'], value)
+
     def test_rules_and_victory(self):
         world = self.player()
         nothing, beaten = world.reach(Counter())

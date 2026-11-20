@@ -14,7 +14,7 @@ from oot_rando.patching.story_fixes import _Chart, _params
 SWORD = 'Weapon_Sword_Master'
 PREFIX = 'Event/EventFlow/'
 STEMS = ('DoorOfTime', 'Dm_TimeTemple_0030', 'ReplaceEquipmentForEraChange',
-         'AllSage', 'Dm_SY_BancChangeArrive', 'Defeat_Ganon')
+         'AllSage', 'Dm_SY_BancChangeArrive', 'Defeat_Ganon', 'Dm_TimeTemple_0085')
 FLOWS = tuple(PREFIX + stem + '.bfevfl.zs' for stem in STEMS)
 
 
@@ -111,6 +111,26 @@ def patch_flow(path, raw):
         fallback = _action(chart, 'Event5', 'EventTriggerSetGameDataString64',
                            {'GameDataName': 'PlayerStatus.AnotherEraEquipWeapon', 'Value': SWORD}, 'Event13')
         report['guards'].append(_guard(chart, fallback, chart.events['Event13'], 'EraFallback'))
+        # Put back without owning it, the pedestal's forced sword is what Event1 stores
+        # as the adult weapon: the next pull then equips an unowned Master Sword (hand
+        # only, lost on reload, 20/11). Drop that stored sword before it is restored.
+        start = chart.event('Event4', 'SwitchEvent')
+        if _params(start) != {'GameDataName': 'PlayerStatus.AnotherEraEquipWeapon', 'Index': -1}:
+            raise ValueError('Unexpected era weapon check.')
+        links = _predecessors(chart.chart, start)
+        if [kind for _, kind, _ in links] != ['entry']:
+            raise ValueError('Unexpected era weapon entry.')
+        clear = chart.action('RandoMasterSwordClear_EraStored', 'GameDataActor',
+                             'EventTriggerSetGameDataString64',
+                             {'GameDataName': 'PlayerStatus.AnotherEraEquipWeapon', 'Value': '', 'Index': -1},
+                             start)
+        owned = chart.switch('RandoMasterSwordOwned_EraStored', 'EventQueryIsExistInPouch',
+                             {'Actor': SWORD, 'Num': 1}, start, clear, actor='PouchSystemActor')
+        stored = chart.switch('RandoMasterSwordStored_EraStored', 'EventQueryIsGameDataString64',
+                              {'GameDataName': 'PlayerStatus.AnotherEraEquipWeapon', 'Value': SWORD,
+                               'Index': -1}, owned, start)
+        _redirect(links, stored)
+        report['guards'].append(owned.name)
     elif normalized == FLOWS[3]:
         _action(chart, 'Event175', 'EventTriggerEquipmentUserRequestCreateStaticEquipment',
                 {'EquipmentActorName': SWORD, 'DynamicEquipmentState': 2, 'IsActive': True}, 'Event12')
@@ -120,6 +140,13 @@ def patch_flow(path, raw):
         equip = _action(chart, 'Event37', 'EventTriggerEquipmentUserRequestCreateStaticEquipment',
                         {'EquipmentActorName': SWORD, 'DynamicEquipmentState': 2, 'IsActive': True}, 'Event484')
         report['guards'].append(_guard(chart, equip, chart.events['Event484'], 'Arrival'))
+    elif normalized == FLOWS[6]:
+        # Later child-to-adult arrival: without a Biggoron/Giant sword equipped, the
+        # scene puts a Master Sword in hand with no pouch relation (unowned sword in
+        # hand, lost on reload, 20/11). Missing ownership ends that branch instead.
+        create = _action(chart, 'Event9', 'EventTriggerPlayerRequestCreateDynamicEquipmentNoRelationPouch',
+                         {'EquipmentActorName': SWORD, 'DynamicEquipmentState': 1}, 'Event14')
+        report['guards'].append(_guard(chart, create, None, 'LaterArrival'))
     else:
         # Dm_FinalBattle_0010 is intentionally untouched: Defeat_Ganon's native
         # Boss_GetMasterSword entry invokes it to recover the disarmed sword.
@@ -140,7 +167,8 @@ def patch_flow(path, raw):
     guards = {e.name: e for e in checked.flowchart.events if e.name in report['guards']}
     if set(guards) != set(report['guards']) or any(
             e.data.actor_query.v.v != 'EventQueryIsExistInPouch' or
-            _params(e) != {'Actor': SWORD, 'Num': 1} or set(e.data.cases) != {0, 1}
+            _params(e) != {'Actor': SWORD, 'Num': 1} or 0 not in e.data.cases
+            or not set(e.data.cases) <= {0, 1}
             for e in guards.values()):
         raise ValueError('Master Sword ownership guard failed serialization.')
     return result, report

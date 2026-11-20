@@ -9,6 +9,15 @@ from oot_rando.patching.randomize_kokiri import TITLE, BUILD
 from oot_rando.pc_port import is_port_folder
 
 
+# (generator_version, adapter_version) of the seeds this version still opens.
+ACCEPTED_GENERATORS = (
+    ('0.1.0', 'kokiri-qol-v1'), ('0.2.0', 'prudent-chests-v2'), ('0.3.0', 'native-environment-v1'),
+    ('0.4.0', 'ap-glitchless-v1'), ('0.5.0', 'ap-glitchless-v2'), ('0.6.0', 'ap-glitchless-v2'),
+    ('0.7.0', 'ap-glitchless-v3'), ('0.8.0', 'ap-glitchless-v4'), ('0.9.0', 'ap-glitchless-v5'),
+    ('0.10.0', 'ap-glitchless-v5'), ('0.11.0', 'ap-glitchless-v5'), ('0.11.1', 'ap-glitchless-v5'),
+    ('0.11.2', 'ap-glitchless-v5'), ('0.11.3', 'ap-glitchless-v5'), ('0.11.4', 'ap-glitchless-v5'),
+    ('0.10.1', 'ap-glitchless-v5'), ('0.12.0', 'ap-glitchless-v5'), ('0.12.1', 'ap-glitchless-v5'))
+
 QOL_FOLDER = 'OoT_QoL'
 QOL_KIND = 'qol'
 
@@ -22,17 +31,9 @@ def read_artifact(directory):
         raise ValueError('Unsupported manifest or build.')
     settings = Settings.from_dict(manifest['settings'])
     version = (manifest.get('generator_version'), manifest.get('adapter_version'))
-    if version not in {('0.1.0', 'kokiri-qol-v1'), ('0.2.0', 'prudent-chests-v2'),
-                       ('0.3.0', 'native-environment-v1'), ('0.4.0', 'ap-glitchless-v1'),
-                       ('0.5.0', 'ap-glitchless-v2'), ('0.6.0', 'ap-glitchless-v2'),
-                       ('0.7.0', 'ap-glitchless-v3'), ('0.8.0', 'ap-glitchless-v4'),
-                       ('0.9.0', 'ap-glitchless-v5'), ('0.10.0', 'ap-glitchless-v5'),
-                       ('0.11.0', 'ap-glitchless-v5'), ('0.11.1', 'ap-glitchless-v5'),
-                       ('0.11.2', 'ap-glitchless-v5'), ('0.11.3', 'ap-glitchless-v5'),
-                       ('0.11.4', 'ap-glitchless-v5'), ('0.10.1', 'ap-glitchless-v5'),
-                       ('0.12.0', 'ap-glitchless-v5')}:
+    if version not in ACCEPTED_GENERATORS:
         raise ValueError('Unsupported generator version.')
-    if version[0] in {'0.2.0', '0.3.0', '0.4.0', '0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0', '0.10.0', '0.11.0', '0.11.1', '0.11.2', '0.11.3', '0.11.4', '0.10.1', '0.12.0'}:
+    if version[0] in {'0.2.0', '0.3.0', '0.4.0', '0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0', '0.10.0', '0.11.0', '0.11.1', '0.11.2', '0.11.3', '0.11.4', '0.10.1', '0.12.0', '0.12.1'}:
         settings.validate_supported()
     if version[0] in ('0.1.0', '0.4.0', '0.9.0', '0.10.0', '0.11.0', '0.11.1', '0.11.2', '0.11.3', '0.11.4', '0.10.1'):
         # Early 0.1 manifests predate the categories field and 0.4 manifests the
@@ -82,16 +83,21 @@ def read_artifact(directory):
 
 
 def regeneration_settings(manifest, current_version=None):
-    """Settings to generate an accepted seed again with this version of the generator, or None.
+    """Settings to generate an accepted seed again with this version of the application, or None.
 
     ``manifest`` must come from :func:`read_artifact`, which refuses the seeds this version no
-    longer supports. A seed made by the current generator needs no regeneration. The settings
-    (seed name, full options, categories, Archipelago patch...) are read back unchanged, so
-    the regenerated seed keeps its name and settings; only its identity follows the new
-    generator version."""
+    longer supports. Offered when the seed was made by an older version of the application
+    (``app_version`` of its manifest; seeds made before 0.7.3 do not record it): a seed made
+    by this version, or by a newer one, needs no regeneration. The settings (seed name, full
+    options, categories, Archipelago patch...) are read back unchanged, so the regenerated
+    seed keeps its name and settings."""
+    from oot_rando.updater import is_newer, version_key
     if current_version is None:
-        from oot_rando.randomizer.randomizer_core import GENERATOR_VERSION as current_version
-    if not isinstance(manifest, dict) or manifest.get('generator_version') == current_version:
+        from oot_rando import __version__ as current_version
+    if not isinstance(manifest, dict):
+        return None
+    made_by = manifest.get('app_version')
+    if made_by is not None and (version_key(str(made_by)) is None or not is_newer(current_version, str(made_by))):
         return None
     try:
         return Settings.from_dict(manifest['settings']).validate_supported()
@@ -201,6 +207,40 @@ def continued_save(title_directory, settings):
     return None
 
 
+def saves_origin(title_directory, destination, settings):
+    """Oldest application version the saves of the seed about to be written at ``destination``
+    may come from, when older than this one, else None (``saves_from`` of its manifest).
+
+    The saves continued are those of the seed it replaces: the copy of the same settings in
+    ``destination``, or the seed of the same Archipelago slot (:func:`continued_save`). Their
+    own origin is kept, so a save is given again every fix it may lack even after several
+    regenerations whose save update the player declined (tracker/save_patch.py)."""
+    from oot_rando import __version__
+    from oot_rando.tracker.save_patch import BEFORE_RECORDED_VERSIONS, saves_from
+    from oot_rando.updater import is_newer, version_key
+    title_directory, destination = Path(title_directory), Path(destination)
+    replaced = [destination] if is_randomizer_seed(destination) else []
+    if settings.archipelago is not None and title_directory.is_dir():
+        patch = settings.to_dict()['archipelago']
+        replaced += [other for other in sorted(title_directory.iterdir())
+                     if other != destination and is_randomizer_seed(other)
+                     and _manifest(other).get('settings', {}).get('archipelago') == patch]
+    versions = [str(saves_from(_manifest(path)) or BEFORE_RECORDED_VERSIONS) for path in replaced]
+    versions = [v if version_key(v) else BEFORE_RECORDED_VERSIONS for v in versions]
+    if not versions:
+        return None
+    oldest = min(versions, key=version_key)
+    return oldest if is_newer(__version__, oldest) else None
+
+
+def _manifest(directory):
+    try:
+        manifest = json.loads((Path(directory) / 'manifest.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
+    return manifest if isinstance(manifest, dict) else {}
+
+
 def generate_in_mods(nup, title_directory, settings, progress=None, archive=None, generate=None):
     """Generate a seed straight into the mods folder (no separate output folder).
 
@@ -219,6 +259,8 @@ def generate_in_mods(nup, title_directory, settings, progress=None, archive=None
     name = 'OoT_Randomizer_' + settings_identity(settings)[:16]
     destination = title_directory / name
     save_seed_id = continued_save(title_directory, settings)
+    origin = saves_origin(title_directory, destination, settings)
+    options = {'saves_from': origin} if origin else {}
     if destination.exists():
         if archive is None or not is_randomizer_seed(destination):
             raise ValueError('Folder ' + name + ' already exists in the mods.')
@@ -227,9 +269,8 @@ def generate_in_mods(nup, title_directory, settings, progress=None, archive=None
     title_directory.mkdir(parents=True, exist_ok=True)
     if save_seed_id:
         report('Same Archipelago slot already installed: its saves carry over.')
-        generate(nup, destination, settings, report, save_seed_id=save_seed_id)
-    else:
-        generate(nup, destination, settings, report)
+        options['save_seed_id'] = save_seed_id
+    generate(nup, destination, settings, report, **options)
     manifest, _ = read_artifact(destination)
     conflicts = conflicting_mods(title_directory, manifest, name)
     if conflicts:

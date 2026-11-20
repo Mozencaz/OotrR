@@ -129,9 +129,17 @@ def pedestal_before_sages(raw):
     """``Market_Child_Prefab_e700``: the first sword pull no longer waits for ``Step06``.
 
     The child pulls the sword (event request, node 0) when he acts on the pedestal
-    and ``DoorOfTime`` is at ``Step06``; once ``AllSage`` has started a second request
-    (node 3) takes over. The first one now runs while ``AllSage`` is before ``Ready``
-    instead, so it works at any Door of Time step and both never run together."""
+    and ``DoorOfTime`` is at ``Step06``; a second request (node 3) takes over when
+    node 5 reports ``AllSage IsAfter Ready``. The first request now uses the exact
+    inverse of that same output. ``IsBefore Ready`` previously left a gap at Ready:
+    the prompt appeared, but neither event was requested on pressing the action.
+    Reusing node 2 as the native InvBool module makes both branches complementary,
+    including an inactive quest, without assuming strict/inclusive step semantics.
+    Physical in-game validation remains necessary."""
+    import copy
+    import ainb
+    from oot_rando.patching.ap_mailbox import ainb_to_binary
+    document = ainb.AINB.from_binary(raw).as_dict()
     def edit(nodes):
         gate = _node(nodes, 1, 'OperateAND')
         _node(nodes, 2, 'HoldChallengeCurrentStepCheckOrder')
@@ -141,29 +149,51 @@ def pedestal_before_sages(raw):
         sources = _bool_input(gate, 'BoolMulti')['Sources']
         if [(s['Node Index'], s['Output Index']) for s in sources] != [(2, 2), (6, 2)]:
             raise ValueError('Unexpected pedestal module wiring')
-        sources[0].update({'Node Index': 5, 'Output Index': 1})    # AllSage IsBefore Ready
-    return _ainb_edit(raw, edit)
+        outputs = sages['Parameters']['Outputs']['Bool']
+        if [o['Name'] for o in outputs] != ['IsAfter', 'IsBefore', 'IsEqual']:
+            raise ValueError('Unexpected pedestal module: AllSage outputs')
+        plugs = gate.get('Plugs', {}).get('Generic', [])
+        if [(p['Node Index'], p['Name']) for p in plugs] != [(2, 'BoolMulti')] or gate.get('Queries') != [2, 6]:
+            raise ValueError('Unexpected pedestal module: gate plugs')
+        repeat = _node(nodes, 4, 'OperateAND')
+        if [(s['Node Index'], s['Output Index']) for s in _bool_input(repeat, 'BoolMulti')['Sources']] != [
+                (5, 0), (6, 2)] or not outputs[0]['Is Output']:
+            raise ValueError('Unexpected repeat pedestal module wiring')
+        inverse = nodes[2]
+        inverse['Name'] = 'InvBool.module'
+        inverse['Flags'] = ['Is Query', 'Is Module']
+        inverse['Queries'] = [5]
+        inverse['Parameters'] = {
+            'Inputs': {'Bool': [
+                {'Name': 'BoolMulti', 'Default Value': False, 'Node Index': 5, 'Output Index': 0, 'Flags': []},
+                {'Name': 'UpdateOnce', 'Default Value': False, 'Node Index': -1, 'Output Index': 0,
+                 'Flags': ['Uses Default', 'Is Output']}]},
+            'Outputs': {'Bool': [{'Name': 'InvBool', 'Is Output': True}]}}
+        inverse['Plugs'] = {'Generic': [{'Node Index': 5, 'Name': 'BoolMulti'}]}
+        sources[0]['Output Index'] = 0
+    edit(document['Nodes'])
+    document['Modules'].append({'Path': 'InvBool.module.ainb', 'Category': 'Logic', 'Instance Count': 1})
+    result = ainb_to_binary(copy.deepcopy(document))
+    if ainb.AINB.from_binary(result).as_dict() != document:
+        raise ValueError('Child pedestal module wrongly rewritten.')
+    return result
 
 
 def door_of_time_open(read_flow, gamedata_raw, challenges_raw, read_module):
     """The Door of Time open from the start.
 
-    The door and the first sword pull are freed in their logic modules. Pulling the
-    sword before the quest reached the door (Rauru's scenes, ``DoorOfTime`` Event93)
-    would complete ``DoorOfTime`` and drop Zelda's escape (the Ocarina of Time and the
-    Song of Time): that request now only runs once the quest is past ``Step05``. The
-    quest itself is not moved. Returns (gamedata bytes, {path: bytes}, report)."""
-    steps = quest_guard.challenge_steps(challenges_raw)
-    flow, report = quest_guard.guard_requests(read_flow(DOOR_FLOW), DOOR_QUEST, steps, ['Complete'],
-                                              DOOR_COMPLETE_ONLY_AFTER, skip_when=False,
-                                              gamedata_raw=gamedata_raw, prefix=DOOR_PREFIX)
-    if len(report['guarded']) != 1:
-        raise ValueError('Door of Time: expected one completion request')
-    files = {DOOR_FLOW: flow,
-             DOOR_MODULE: door_always_open(read_module(DOOR_MODULE)),
-             PEDESTAL_MODULE: pedestal_before_sages(read_module(PEDESTAL_MODULE))}
-    return gamedata_raw, files, {'modules': [DOOR_MODULE, PEDESTAL_MODULE], 'expression': report['expression'],
-                                 'guarded': {DOOR_FLOW: report['guarded']}}
+    Every seed already lets the Song of Time open the door before Zelda's escape, frees
+    the first sword pull and keeps ``DoorOfTime`` from completing before ``Step05``
+    (:func:`oot_rando.patching.story_fixes.door_song_before_escape`, applied before the
+    openings). Here the door module is freed too and a new game starts with the door
+    saved as opened (``Market_Child_TimeTempleDoor_Opened``): the song scene is not
+    asked for, and ``Step06`` follows the escape at once. Returns (gamedata bytes,
+    {path: bytes}, report)."""
+    from oot_rando.patching.story_fixes import DOOR_OPENED
+    values = {DOOR_OPENED: True}
+    gamedata = game_defaults.set_new_game_defaults(gamedata_raw, values)
+    files = {DOOR_MODULE: door_always_open(read_module(DOOR_MODULE))}
+    return gamedata, files, {'modules': [DOOR_MODULE], 'defaults': values, 'guarded': {}}
 
 
 CARPENTERS_HELPED = 'GerudoFortress_Meet_FourCarpenter_NumOfCarpenterHelped'

@@ -34,8 +34,12 @@
    "why": "Zelda's escape (Challenge DoorOfTime) needs Goto_HyruleCastle and Impa's send-off first. The game now starts it on the three stones held (patching/story_fixes.py), not only at the end of Dodongo's Cavern and Jabu-Jabu's Belly (15/11, Discord report)."
   },
   "Master Sword Pedestal": {
-   "rule": "open_door_of_time or (has_all_stones and 'Met Zelda')",
-   "why": "The Door of Time opens in the same DoorOfTime challenge, after Zelda's escape: the Song of Time alone (songs shuffled) does not open it. With the door open from the start (patching/world_openings.py) the first pull needs neither."
+   "rule": "True",
+   "why": "Beyond the Door of Time (Song of Time, or the door open from the start). The song opens the door before Zelda's escape and the first pull no longer waits for it (story_fixes.door_song_before_escape, 21/11); the escape still plays later."
+  },
+  "DMT Freestanding PoH": {
+   "rule": "is_adult and here(can_plant_bean and (plant_beans or has_explosives or Progressive_Strength_Upgrade))",
+   "why": "The remake's heart piece sits on a ledge only the adult bean platform reaches (20/11): falling from the trail above (damage, Hover Boots) no longer gets it."
   },
   "Gerudo Training Ground Heavy Block First Chest": {
    "rule": "can_use(Bow) or can_use(Slingshot)",
@@ -115,9 +119,9 @@
    "rule": "at_night and 'Dodongos Cavern Clear'",
    "why": "The Bombchu Shop only opens once King Dodongo is beaten (prudence until checked in game)."
   },
-  "Lake Hylia -> Water Temple Lobby": {
-   "rule": "is_adult and Hookshot and (Iron_Boots or (Longshot and (Progressive_Scale, 2) and 'King Zora Thawed'))",
-   "why": "The gate switch of the lake (HyruleField_LakeHylia_Common_Prefab_6a9d) only reacts while the Iron Boots are worn. Without them the gate only opens by itself once SageOfWater reaches Step05 (King Zora thawed, or the Serenade in the Ice Cavern): diving with the Golden Scale is not enough before that."
+  "Ganons Castle Grounds -> Ganons Castle Lobby": {
+   "rule": "(can_build_rainbow_bridge or (bridge == 'vanilla' and Shadow_Medallion and Spirit_Medallion)) and at_dampe_time",
+   "why": "The rainbow bridge scene follows the Shadow and Spirit Medallions held (story_fixes.bridge_on_medallions, 21/11): Zelda's revelation (Light Arrows) is no longer needed first."
   },
   "SFM Entryway -> SFM Wolfos Grotto": {
    "rule": "can_open_storm_grotto",
@@ -195,6 +199,12 @@
    "GC Silver Rock Chest": {
     "rule": "can_use(Silver_Gauntlets)",
     "why": "Goron City chests of the remake (6 where AP has 3), checked in game by Robophill (Discord 16/11): GC_chest_6 sits behind the silver boulder (Necro 16/11: the Kokiri Emerald there was given with bombs only)."
+   }
+  },
+  "Lon Lon Ranch": {
+   "LLR Ruins Hookshot Chest": {
+    "rule": "can_use(Hookshot)",
+    "why": "LLR_chest_1 (-152, 162, 265), on top of the ruins by the ranch crawl hole, 11 m above the ground: only the Hookshot reaches it (20/11). Matched by item with the three Hyrule Field grotto chests, it was open to a child."
    }
   },
   "Market Mask Shop": {
