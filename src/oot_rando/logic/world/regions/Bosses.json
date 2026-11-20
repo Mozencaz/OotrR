@@ -83,8 +83,8 @@
   "scene": "Forest Temple Boss",
   "is_boss_room": "True",
   "locations": {
-   "Forest Temple Phantom Ganon Heart": "can_use(Hookshot) or can_use(Bow) or (can_use(Slingshot) and Kokiri_Sword)",
-   "Phantom Ganon": "can_use(Hookshot) or can_use(Bow) or (can_use(Slingshot) and Kokiri_Sword)"
+   "Forest Temple Phantom Ganon Heart": "(can_use(Hookshot) or can_use(Bow) or (can_use(Slingshot) and Kokiri_Sword)) and (not shuffle_master_sword or has_adult_sword or can_use(Kokiri_Sword))",
+   "Phantom Ganon": "(can_use(Hookshot) or can_use(Bow) or (can_use(Slingshot) and Kokiri_Sword)) and (not shuffle_master_sword or has_adult_sword or can_use(Kokiri_Sword))"
   },
   "exits": {
    "Forest Temple Boss Door": "False"
@@ -123,11 +123,11 @@
   "scene": "Water Temple Boss",
   "is_boss_room": "True",
   "events": {
-   "Water Temple Clear": "can_use(Hookshot)"
+   "Water Temple Clear": "(can_use(Hookshot)) and (not shuffle_master_sword or has_adult_sword or can_use(Kokiri_Sword))"
   },
   "locations": {
-   "Morpha": "can_use(Hookshot)",
-   "Water Temple Morpha Heart": "can_use(Hookshot)"
+   "Morpha": "(can_use(Hookshot)) and (not shuffle_master_sword or has_adult_sword or can_use(Kokiri_Sword))",
+   "Water Temple Morpha Heart": "(can_use(Hookshot)) and (not shuffle_master_sword or has_adult_sword or can_use(Kokiri_Sword))"
   },
   "exits": {
    "Water Temple Boss Door": "False"
@@ -146,8 +146,8 @@
   "scene": "Shadow Temple Boss",
   "is_boss_room": "True",
   "locations": {
-   "Shadow Temple Bongo Bongo Heart": "(Kokiri_Sword or is_adult) and (can_use(Hookshot) or can_use(Bow) or can_use(Slingshot) or logic_shadow_bongo) and (can_use(Lens_of_Truth) or logic_lens_bongo)",
-   "Bongo Bongo": "(Kokiri_Sword or is_adult) and (can_use(Hookshot) or can_use(Bow) or can_use(Slingshot) or logic_shadow_bongo) and (can_use(Lens_of_Truth) or logic_lens_bongo)"
+   "Shadow Temple Bongo Bongo Heart": "(can_use(Kokiri_Sword) or has_adult_sword) and (can_use(Hookshot) or can_use(Bow) or can_use(Slingshot) or logic_shadow_bongo) and (can_use(Lens_of_Truth) or logic_lens_bongo)",
+   "Bongo Bongo": "(can_use(Kokiri_Sword) or has_adult_sword) and (can_use(Hookshot) or can_use(Bow) or can_use(Slingshot) or logic_shadow_bongo) and (can_use(Lens_of_Truth) or logic_lens_bongo)"
   },
   "exits": {
    "Shadow Temple Boss Door": "False"
@@ -166,8 +166,8 @@
   "scene": "Spirit Temple Boss",
   "is_boss_room": "True",
   "locations": {
-   "Spirit Temple Twinrova Heart": "can_use(Mirror_Shield)",
-   "Twinrova": "can_use(Mirror_Shield)"
+   "Spirit Temple Twinrova Heart": "(can_use(Mirror_Shield)) and (not shuffle_master_sword or has_adult_sword or can_use(Kokiri_Sword))",
+   "Twinrova": "(can_use(Mirror_Shield)) and (not shuffle_master_sword or has_adult_sword or can_use(Kokiri_Sword))"
   },
   "exits": {
    "Spirit Temple Boss Door": "False"
@@ -177,10 +177,10 @@
   "region_name": "Ganons Castle Tower",
   "dungeon": "Ganons Castle",
   "locations": {
-   "Ganons Tower Boss Key Chest": "is_adult or Kokiri_Sword"
+   "Ganons Tower Boss Key Chest": "has_adult_sword or can_use(Kokiri_Sword)"
   },
   "exits": {
-   "Ganons Castle Tower Below Boss": "(is_adult or Kokiri_Sword) and (Boss_Key_Ganons_Castle or (shuffle_pots != 'off'))"
+   "Ganons Castle Tower Below Boss": "(has_adult_sword or can_use(Kokiri_Sword)) and (Boss_Key_Ganons_Castle or (shuffle_pots != 'off'))"
   }
  },
  {
@@ -215,7 +215,7 @@
   "alt_hint": "GANONDORFS_CHAMBER",
   "locations": {
    "Ganondorf Hint": "True",
-   "Ganon": "can_use(Light_Arrows)"
+   "Ganon": "(can_use(Light_Arrows)) and (not shuffle_master_sword or can_use(Master_Sword))"
   }
  }
 ]

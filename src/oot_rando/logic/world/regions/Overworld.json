@@ -127,8 +127,8 @@
    "Showed Mido Sword & Shield": "is_child and Kokiri_Sword and Deku_Shield"
   },
   "locations": {
-   "Deku Baba Sticks": "(is_adult and not entrance_shuffle) or can_use(Kokiri_Sword) or can_use(Boomerang)",
-   "Deku Baba Nuts": "is_adult and not entrance_shuffle",
+   "Deku Baba Sticks": "(has_adult_sword and not entrance_shuffle) or can_use(Kokiri_Sword) or can_use(Boomerang)",
+   "Deku Baba Nuts": "can_adult_attack and not entrance_shuffle",
    "KF Deku Tree Gossip Stone (Left)": "True",
    "KF Deku Tree Gossip Stone (Right)": "True"
   },
@@ -303,7 +303,7 @@
   "hint": "SACRED_FOREST_MEADOW",
   "exits": {
    "LW Beyond Mido": "True",
-   "Sacred Forest Meadow": "is_adult or Slingshot or Sticks or Kokiri_Sword or can_use(Dins_Fire)",
+   "Sacred Forest Meadow": "has_adult_sword or can_use(Slingshot) or can_use(Sticks) or can_use(Kokiri_Sword) or can_use(Dins_Fire)",
    "SFM Wolfos Grotto": "can_open_bomb_grotto"
   }
  },
@@ -482,7 +482,7 @@
    "GV Upper Stream": "True",
    "GV Crate Ledge": "is_child or Longshot",
    "GV Grotto Ledge": "True",
-   "GV Fortress Side": "is_adult and (can_ride_epona or Longshot or gerudo_fortress == 'open' or can_finish_GerudoFortress)"
+   "GV Fortress Side": "is_adult and (can_ride_epona or Longshot or gerudo_fortress == 'open' or open_gerudo_valley_bridge or can_finish_GerudoFortress)"
   }
  },
  {
@@ -553,7 +553,7 @@
    "Gerudo Fortress": "True",
    "GV Upper Stream": "True",
    "GV Crate Ledge": "logic_valley_crate_hovers and can_use(Hover_Boots) and (damage_multiplier != 'ohko' or can_use(Nayrus_Love) or (Fairy and (deadly_bonks != 'ohko' or can_blast_or_smash)))",
-   "Gerudo Valley": "is_child or can_ride_epona or Longshot or gerudo_fortress == 'open' or can_finish_GerudoFortress",
+   "Gerudo Valley": "is_child or can_ride_epona or Longshot or gerudo_fortress == 'open' or open_gerudo_valley_bridge or can_finish_GerudoFortress",
    "GV Carpenter Tent": "is_adult",
    "GV Storms Grotto": "is_adult and can_open_storm_grotto"
   }
@@ -570,12 +570,12 @@
   "scene": "Gerudo Fortress",
   "hint": "GERUDO_FORTRESS",
   "events": {
-   "GF Gate Open": "is_adult and Gerudo_Membership_Card"
+   "GF Gate Open": "is_adult and has_gerudo_membership"
   },
   "locations": {
-   "GF HBA 1000 Points": "Gerudo_Membership_Card and can_ride_epona and Bow and at_day",
-   "GF HBA 1500 Points": "Gerudo_Membership_Card and can_ride_epona and Bow and at_day",
-   "GF GS Archery Range": "can_use(Hookshot) and Gerudo_Membership_Card and at_night"
+   "GF HBA 1000 Points": "has_gerudo_membership and can_ride_epona and Bow and at_day",
+   "GF HBA 1500 Points": "has_gerudo_membership and can_ride_epona and Bow and at_day",
+   "GF GS Archery Range": "can_use(Hookshot) and has_gerudo_membership and at_night"
   },
   "exits": {
    "GV Fortress Side": "True",
@@ -585,10 +585,10 @@
    "Hideout Kitchen Hallway": "True",
    "GF Entrances Behind Crates": "True",
    "GF Roof Entrance Cluster": "can_use(Hover_Boots) or logic_gf_jump",
-   "GF Kitchen Roof Access": "Gerudo_Membership_Card and can_use(Longshot)",
+   "GF Kitchen Roof Access": "has_gerudo_membership and can_use(Longshot)",
    "GF Hall to Balcony Entrance": "can_use(Longshot)",
    "GF Outside Gate": "'GF Gate Open'",
-   "Gerudo Training Ground Lobby": "Gerudo_Membership_Card and is_adult"
+   "Gerudo Training Ground Lobby": "has_gerudo_membership and is_adult"
   }
  },
  {
@@ -653,7 +653,7 @@
   "scene": "Gerudo Fortress",
   "hint": "GERUDO_FORTRESS",
   "locations": {
-   "GF GS Top Floor": "is_adult and at_night"
+   "GF GS Top Floor": "can_adult_attack and at_night"
   }
  },
  {
@@ -693,7 +693,7 @@
   "scene": "Hideout 1 Torch Jail",
   "hint": "GERUDO_FORTRESS",
   "events": {
-   "Hideout 1 Torch Jail Gerudo": "is_adult or Kokiri_Sword",
+   "Hideout 1 Torch Jail Gerudo": "has_adult_sword or can_use(Kokiri_Sword)",
    "Hideout 1 Torch Jail Carpenter": "'Hideout 1 Torch Jail Gerudo' and ((gerudo_fortress == 'normal' and (Small_Key_Thieves_Hideout, 4)) or (gerudo_fortress == 'fast' and Small_Key_Thieves_Hideout))"
   },
   "locations": {
@@ -714,7 +714,7 @@
   "scene": "Hideout 2 Torches Jail",
   "hint": "GERUDO_FORTRESS",
   "events": {
-   "Hideout 2 Torches Jail Gerudo": "is_adult or Kokiri_Sword",
+   "Hideout 2 Torches Jail Gerudo": "has_adult_sword or can_use(Kokiri_Sword)",
    "Hideout 2 Torches Jail Carpenter": "'Hideout 2 Torches Jail Gerudo' and gerudo_fortress == 'normal' and (Small_Key_Thieves_Hideout, 4)"
   },
   "locations": {
@@ -739,7 +739,7 @@
   "scene": "Hideout 3 Torches Jail",
   "hint": "GERUDO_FORTRESS",
   "events": {
-   "Hideout 3 Torches Jail Gerudo": "is_adult or Kokiri_Sword",
+   "Hideout 3 Torches Jail Gerudo": "has_adult_sword or can_use(Kokiri_Sword)",
    "Hideout 3 Torches Jail Carpenter": "'Hideout 3 Torches Jail Gerudo' and gerudo_fortress == 'normal' and (Small_Key_Thieves_Hideout, 4)"
   },
   "locations": {
@@ -755,7 +755,7 @@
   "scene": "Hideout 4 Torches Jail",
   "hint": "GERUDO_FORTRESS",
   "events": {
-   "Hideout 4 Torches Jail Gerudo": "is_adult or Kokiri_Sword",
+   "Hideout 4 Torches Jail Gerudo": "has_adult_sword or can_use(Kokiri_Sword)",
    "Hideout 4 Torches Jail Carpenter": "'Hideout 4 Torches Jail Gerudo' and gerudo_fortress == 'normal' and (Small_Key_Thieves_Hideout, 4)"
   },
   "locations": {
@@ -773,7 +773,7 @@
   "scene": "Hideout Kitchen",
   "hint": "GERUDO_FORTRESS",
   "locations": {
-   "Hideout Near Kitchen Crate 1": "(Gerudo_Membership_Card or can_use(Bow) or can_use(Hookshot) or logic_gerudo_kitchen) and can_break_crate",
+   "Hideout Near Kitchen Crate 1": "(has_gerudo_membership or can_use(Bow) or can_use(Hookshot) or logic_gerudo_kitchen) and can_break_crate",
    "Hideout Near Kitchen Crate 2": "can_break_crate",
    "Hideout Near Kitchen Crate 3": "can_break_crate",
    "Hideout Near Kitchen Crate 4": "can_break_crate",
@@ -782,9 +782,9 @@
   "exits": {
    "GF Entrances Behind Crates": "True",
    "Gerudo Fortress": "True",
-   "Hideout Kitchen Front": "Gerudo_Membership_Card or can_use(Bow) or can_use(Hookshot) or logic_gerudo_kitchen",
-   "Hideout Kitchen Rear": "Gerudo_Membership_Card or can_use(Bow) or can_use(Hookshot) or logic_gerudo_kitchen",
-   "Hideout Kitchen Pots": "Gerudo_Membership_Card or can_use(Bow) or can_use(Hookshot) or logic_gerudo_kitchen"
+   "Hideout Kitchen Front": "has_gerudo_membership or can_use(Bow) or can_use(Hookshot) or logic_gerudo_kitchen",
+   "Hideout Kitchen Rear": "has_gerudo_membership or can_use(Bow) or can_use(Hookshot) or logic_gerudo_kitchen",
+   "Hideout Kitchen Pots": "has_gerudo_membership or can_use(Bow) or can_use(Hookshot) or logic_gerudo_kitchen"
   }
  },
  {
@@ -793,8 +793,8 @@
   "hint": "GERUDO_FORTRESS",
   "exits": {
    "GF Roof Entrance Cluster": "True",
-   "Hideout Kitchen Rear": "Gerudo_Membership_Card or can_use(Bow) or can_use(Hookshot) or can_use(Hover_Boots) or logic_gerudo_kitchen",
-   "Hideout Kitchen Hallway": "Gerudo_Membership_Card or can_use(Bow) or can_use(Hookshot) or logic_gerudo_kitchen",
+   "Hideout Kitchen Rear": "has_gerudo_membership or can_use(Bow) or can_use(Hookshot) or can_use(Hover_Boots) or logic_gerudo_kitchen",
+   "Hideout Kitchen Hallway": "has_gerudo_membership or can_use(Bow) or can_use(Hookshot) or logic_gerudo_kitchen",
    "Hideout Kitchen Pots": "can_use(Boomerang)"
   }
  },
@@ -804,8 +804,8 @@
   "hint": "GERUDO_FORTRESS",
   "exits": {
    "GF Kitchen Roof Access": "True",
-   "Hideout Kitchen Front": "Gerudo_Membership_Card or can_use(Bow) or can_use(Hookshot) or can_use(Hover_Boots) or logic_gerudo_kitchen",
-   "Hideout Kitchen Hallway": "Gerudo_Membership_Card or can_use(Bow) or can_use(Hookshot) or logic_gerudo_kitchen",
+   "Hideout Kitchen Front": "has_gerudo_membership or can_use(Bow) or can_use(Hookshot) or can_use(Hover_Boots) or logic_gerudo_kitchen",
+   "Hideout Kitchen Hallway": "has_gerudo_membership or can_use(Bow) or can_use(Hookshot) or logic_gerudo_kitchen",
    "Hideout Kitchen Pots": "can_use(Boomerang)"
   }
  },
@@ -827,12 +827,12 @@
    "Hideout Hall to Balcony Upper": "can_use(Hookshot)"
   },
   "locations": {
-   "Hideout Break Room Pot 1": "Gerudo_Membership_Card or can_use(Bow) or can_use(Hookshot)",
-   "Hideout Break Room Pot 2": "Gerudo_Membership_Card or can_use(Bow) or can_use(Hookshot)",
+   "Hideout Break Room Pot 1": "has_gerudo_membership or can_use(Bow) or can_use(Hookshot)",
+   "Hideout Break Room Pot 2": "has_gerudo_membership or can_use(Bow) or can_use(Hookshot)",
    "Hideout Break Room Hallway Crate 1": "can_break_crate",
    "Hideout Break Room Hallway Crate 2": "can_break_crate",
-   "Hideout Break Room Crate 1": "can_break_crate and (Gerudo_Membership_Card or can_use(Bow) or can_use(Hookshot) or can_use(Sticks) or can_use(Kokiri_Sword))",
-   "Hideout Break Room Crate 2": "can_break_crate and (Gerudo_Membership_Card or can_use(Bow) or can_use(Hookshot) or can_use(Sticks) or can_use(Kokiri_Sword))"
+   "Hideout Break Room Crate 1": "can_break_crate and (has_gerudo_membership or can_use(Bow) or can_use(Hookshot) or can_use(Sticks) or can_use(Kokiri_Sword))",
+   "Hideout Break Room Crate 2": "can_break_crate and (has_gerudo_membership or can_use(Bow) or can_use(Hookshot) or can_use(Sticks) or can_use(Kokiri_Sword))"
   }
  },
  {
@@ -1022,7 +1022,8 @@
   "hint": "TEMPLE_OF_TIME",
   "locations": {
    "Sheik at Temple": "Forest_Medallion and is_adult",
-   "Master Sword Pedestal": "True"
+   "Master Sword Pedestal": "True",
+   "ToT Master Sword": "True"
   },
   "exits": {
    "Temple of Time": "True"
@@ -1363,7 +1364,7 @@
   "scene": "Kakariko Village",
   "hint": "KAKARIKO_VILLAGE",
   "locations": {
-   "Kak GS Above Impas House": "is_adult and at_night"
+   "Kak GS Above Impas House": "can_adult_attack and at_night"
   },
   "exits": {
    "Kak Impas Ledge": "True",
@@ -1578,7 +1579,7 @@
   "scene": "Graveyard Royal Familys Tomb",
   "locations": {
    "Graveyard Royal Familys Tomb Chest": "has_fire_source",
-   "Song from Royal Familys Tomb": "is_adult or Slingshot or Boomerang or Sticks or has_explosives or Kokiri_Sword"
+   "Song from Royal Familys Tomb": "can_adult_attack or can_use(Slingshot) or can_use(Boomerang) or can_use(Sticks) or has_explosives or can_use(Kokiri_Sword)"
   },
   "exits": {
    "Graveyard": "True"
@@ -1724,7 +1725,7 @@
    "GC Medigoron Pot": "can_blast_or_smash or Progressive_Strength_Upgrade",
    "GC Boulder Maze Crate": "(can_blast_or_smash or can_use(Silver_Gauntlets)) and can_break_crate",
    "GC GS Boulder Maze": "is_child and has_explosives",
-   "GC GS Center Platform": "is_adult",
+   "GC GS Center Platform": "can_adult_attack",
    "GC Maze Gossip Stone": "can_blast_or_smash or can_use(Silver_Gauntlets)",
    "GC Medigoron Gossip Stone": "can_blast_or_smash or Progressive_Strength_Upgrade",
    "Gossip Stone Fairy": "can_summon_gossip_fairy_without_suns and has_bottle and (can_blast_or_smash or Progressive_Strength_Upgrade)",
@@ -2351,7 +2352,7 @@
   "region_name": "SFM Wolfos Grotto",
   "scene": "SFM Wolfos Grotto",
   "locations": {
-   "SFM Wolfos Grotto Chest": "is_adult or Slingshot or Sticks or Kokiri_Sword or can_use(Dins_Fire)"
+   "SFM Wolfos Grotto Chest": "has_adult_sword or can_use(Slingshot) or can_use(Sticks) or can_use(Kokiri_Sword) or can_use(Dins_Fire)"
   },
   "exits": {
    "SFM Entryway": "True"
@@ -2501,7 +2502,7 @@
   "region_name": "Kak Redead Grotto",
   "scene": "Kak Redead Grotto",
   "locations": {
-   "Kak Redead Grotto Chest": "is_adult or Sticks or Kokiri_Sword or can_use(Dins_Fire)"
+   "Kak Redead Grotto Chest": "has_adult_sword or can_use(Sticks) or can_use(Kokiri_Sword) or can_use(Dins_Fire)"
   },
   "exits": {
    "Kakariko Village": "True"

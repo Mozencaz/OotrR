@@ -152,10 +152,14 @@ class OracleTests(unittest.TestCase):
         self.assertEqual(self.with_fixes.ages(LW_CHEST), {'adult'})
 
     def test_here_bean_lets_the_child_plant_for_the_adult(self):
-        for location in ('DMC Volcano Freestanding PoH', 'Colossus Freestanding PoH', 'LW GS Above Theater'):
+        for location in ('Colossus Freestanding PoH', 'LW GS Above Theater'):
             with self.subTest(location=location):
                 self.assertEqual(self.with_fixes.ages(location), {'adult'})
                 self.assertEqual(self.with_fixes.ages(location, 'bean'), set())
+        # Child DMC is deliberately excluded, so planting its bean is out of logic.
+        self.assertEqual(self.with_fixes.ages('DMC Volcano Freestanding PoH'), set())
+        # Child crater visits, including planting its bean, are excluded.
+        self.assertEqual(self.with_fixes.ages('DMC Volcano Freestanding PoH'), set())
 
     def test_removed_items_also_blocked_as_events(self):
         state = self.with_fixes.state(('fire', 'blast_or_smash'))

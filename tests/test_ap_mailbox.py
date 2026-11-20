@@ -28,8 +28,10 @@ class Units(unittest.TestCase):
         self.assertEqual([r['actor'] for r in items],
                          ['Item_KeyRing_Ganon', 'Item_BossKey_ForestTemple', 'Item_Sword_Kokiri'])
         self.assertEqual(key_items(items), ['Boss Key (Forest Temple)', 'Small Key Ring (Ganons Castle)'])
-        for item in ('Small Key (Forest Temple)', 'Boss Key (Ganons Castle)', 'Map (Fire Temple)',
-                     'Small Key Ring (Thieves Hideout)'):
+        # Maps and compasses have their own actors too (credited anywhere).
+        self.assertEqual(records([{'item': 'Map (Fire Temple)', 'location': 'L4', 'player': 'Ami'}])[0]['actor'],
+                         'Item_Map_FireTemple')
+        for item in ('Small Key (Forest Temple)', 'Boss Key (Ganons Castle)', 'Small Key Ring (Thieves Hideout)'):
             with self.assertRaises(ValueError):
                 records([{'item': item, 'location': 'L', 'player': 'Ami'}])
 

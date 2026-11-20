@@ -34,16 +34,25 @@ def verify(nup_path):
             output = base / str(index)
             manifest = generate(nup_path, output, settings)
             read_artifact(output)
+            # Area presentations never play and their rows pause: always written.
             expected_files = {MAP, ADULT_MAP, RESTBL, 'GameData/GameDataList.Product.110.byml.zs',
-                              'Event/EventFlow/OpeningEvent.bfevfl.zs', SEED_FILE}
+                              'Event/EventFlow/OpeningEvent.bfevfl.zs', EVENT_SETTINGS, SEED_FILE} | {
+                flow_path(name) for name in AREA_PRESENTATIONS}
+            # Always on: the Save Warp button (pause menu, its text in every language, the
+            # bancs it starts from) and the title badge.
+            from oot_rando.patching import save_warp, title_badge
+            expected_files |= {save_warp.ON_LOAD_MODULE, save_warp.SAVE_MODULE, save_warp.PLUS_MENU_MODULE,
+                               save_warp.MENU_LOAD_MODULE, save_warp.LAYOUT_ARCHIVE,
+                               title_badge.TITLE_BNTX, title_badge.COMMON_BNTX}
+            warp_files = {name for name in manifest['files'] if name.startswith(('Banc/GameBancParam/', 'Mals/'))}
+            assert save_warp.banc_param(save_warp.CHILD_HOME) in warp_files and any(
+                name.startswith('Mals/') for name in warp_files), sorted(warp_files)[:5]
+            expected_files |= warp_files
             if values[0]:
                 expected_files |= {STATIC, PHYSICS}
             if values[1]:
-                expected_files |= {INTRO} | {list_path(name) for name in LOCKED_CUTSCENES} | {
-                    flow_path(name) for name in AREA_PRESENTATIONS}
+                expected_files |= {INTRO} | {list_path(name) for name in LOCKED_CUTSCENES}
                 expected_files |= {flow_path(name) for name in manifest['skips']['cutscene_windows']}
-            if values[1] or values[2]:
-                expected_files.add(EVENT_SETTINGS)
             assert set(manifest["files"]) == expected_files, (values, sorted(set(manifest["files"]) ^ expected_files)[:10])
             actual = Byml(decompress((output / 'romfs' / MAP).read_bytes(), dic)).root
             for actor in actual['Actors']:

@@ -13,14 +13,15 @@ from tkinter import ttk, filedialog, messagebox, simpledialog
 
 from oot_rando.randomizer.randomizer_core import Settings, CHECKS, GENERATOR_VERSION, generate
 from oot_rando.randomizer.randomizer_services import (read_artifact, generate_in_mods, qol_seed_warning,
-                                                      validate_mod_directory, has_ingame_tracker,
-                                                      update_ingame_tracker)
+                                                      regeneration_settings, validate_mod_directory,
+                                                      has_ingame_tracker, update_ingame_tracker)
 from oot_rando.randomizer.qol_install import install_qol
-from oot_rando.tracker.auto_tracker import TrackerSession, newest_save
+from oot_rando.tracker.auto_tracker import TrackerSession, find_save_slots, newest_save
 from oot_rando.tracker import game_overlay
 from oot_rando.tracker.check_labels import check_labels
 from oot_rando.tracker import live_memory
 from oot_rando.randomizer import spoiler_report
+from oot_rando.randomizer import settings_string
 from oot_rando.tracker import turbo_a
 from oot_rando.patching.randomize_kokiri import POOL, TITLE
 from oot_rando.game.randomizer_categories import CATEGORIES
@@ -38,7 +39,7 @@ GAME_OPTIONS = [('randomize_chests', 'Randomize the four Kokiri chests (child an
                 ('avoid_vanilla', 'Avoid vanilla rewards when the pool allows it'),
                 ('open_forest', 'Open the way from Kokiri Forest to Hyrule Field'),
                 ('skulltulas_always_present', 'Night-only gold skulltulas present day and night')]
-SKIP_OPTIONS = [('skip_locked_cutscenes', 'Skippable cutscenes: intro, title screen demo, end credits and area presentations'),
+SKIP_OPTIONS = [('skip_locked_cutscenes', 'Skippable cutscenes: intro, title screen demo and end credits'),
                 ('skip_auto_dialogues', 'Automatic dialogues skippable with + (minigames, Navi: 12 sequences)'),
                 ('skip_chest_cutscenes', 'Chests (big and small) without cutscene: the lid opens and the item is obtained')]
 OPTIONS = GAME_OPTIONS + SKIP_OPTIONS
@@ -46,7 +47,7 @@ ARCHIVE = data_dir() / 'seeds-uninstalled'
 TRACKER_KINDS = {
     'full_chests': 'Chest', 'full_skulltula': 'Gold Skulltula', 'full_freestanding': 'Freestanding item',
     'full_shop': 'Shop', 'full_pots': 'Pot', 'full_crates': 'Crate', 'full_beehives': 'Beehive',
-    'full_bushes': 'Bush', 'full_rocks': 'Rock', 'full_npc': 'NPC', 'full_scrub': 'Business scrub', 'kokiri_chests': 'Chest',
+    'full_bushes': 'Bush', 'full_rocks': 'Rock', 'full_trees': 'Tree', 'full_npc': 'NPC', 'full_scrub': 'Business scrub', 'kokiri_chests': 'Chest',
     'world_chests': 'Chest', 'vanilla_chest': 'Chest', 'vanilla_freestanding': 'Freestanding item',
     'vanilla_gs_token': 'Gold Skulltula', 'vanilla_shop': 'Shop', 'vanilla_npc': 'NPC',
     'vanilla_collectable': 'Item', 'vanilla_beehive': 'Beehive', 'vanilla_scrub': 'Deku Scrub',
@@ -55,6 +56,7 @@ TRACKER_KINDS = {
     'vanilla_boss': 'Boss', 'vanilla_bossheart': 'Heart Container', 'vanilla_cutscene': 'Cutscene',
     'vanilla_rupeetower': 'Rupee tower', 'full_boss': 'Dungeon reward', 'full_bossheart': 'Boss heart container',
     'full_fairy': 'Great fairy', 'full_quest': 'Quest reward',
+    'full_master_sword': 'Master Sword', 'full_gerudo_card': 'Gerudo Membership Card',
 }
 
 OPTION_COPY = {
@@ -70,21 +72,173 @@ OPTION_COPY = {
     'shuffle_npc_gifts': ('Character gifts and minigames', 'Shuffles the supported rewards of characters and minigames.'),
     'shuffle_boss_rewards': ('Boss and dungeon rewards', 'Shuffles spiritual stones, medallions and heart containers. The game scenes are kept.'),
     'shuffle_great_fairies': ('Great fairy rewards', 'Shuffles spells, magic and defense upgrades.'),
-    'shuffle_quest_rewards': ('Main quest rewards', 'Includes the ocarinas, Zelda\'s Letter, the Light Arrows and the Biggoron Sword. Songs stay in place.'),
+    'shuffle_quest_rewards': ('Main quest rewards', 'Includes the ocarinas, Zelda\'s Letter (with a shuffled child trade quest), the Light Arrows, the Biggoron Sword and Ruto\'s Letter. Songs follow the Songs setting.'),
     'shuffle_pots': ('Pots', 'The first reward is shuffled. Once picked up, the pot goes back to its vanilla loot.'),
     'shuffle_crates': ('Crates', 'The first reward is shuffled. Later pickups use the vanilla loot.'),
     'shuffle_beehives': ('Beehives', 'The first reward is shuffled. Later pickups use the vanilla loot.'),
     'shuffle_bushes': ('Bushes and grass', 'Shuffles the first reward of supported sources, then restores their vanilla loot.'),
     'shuffle_rocks': ('Rocks and stones', 'The first reward is shuffled. Then the rock goes back to its vanilla behaviour, even if it gave no item.'),
+    'shuffle_trees': ('Trees', 'Roll into a tree: the first reward is shuffled. Then the tree goes back to its vanilla loot.'),
     'shuffle_enemy_spawns': ('Enemy souls', 'Find souls to make the matching enemies appear. A new game is required.'),
     'start_inventory_from_pool': ('Starting inventory', 'Items held from the start, separated by commas, '
                                   'with a count if needed: "Hover Boots, Progressive Hookshot x2, Heart Container x3". '
-                                  'Songs and tunics are not available yet.'),
+                                  'Songs by name ("Sarias Song"). Tunics are not available yet.'),
     'item_pool_value': ('Item pool', 'Plentiful: an extra copy of the major items. Scarce: at most 3 bottles '
                         'and half the hearts. Minimal: one bottle and no extra hearts.'),
     'logic_no_night_tokens_without_suns_song': ("Night skulltulas need Sun's Song",
                                                  'Waiting for the night is not expected by the logic.'),
 }
+# Longer explanations, shown in the tooltip of each setting (hover the label or the ⓘ).
+# Missing entries use the short text above (OPTION_COPY) or the option's own help.
+OPTION_TIPS = {
+    'accessibility': 'Every location reachable: the logic guarantees that you can open every check of the seed. '
+                     'Only victory guaranteed: some useless locations may stay out of reach, which allows more '
+                     'varied placements.',
+    'logic_no_night_tokens_without_suns_song': "On: gold skulltulas that only come out at night are expected only "
+                                               "once you have Sun's Song. Off: the logic may ask you to wait for "
+                                               "the night (or use the day/night option below).",
+    'skulltulas_always_present': 'Night-only gold skulltulas are also there during the day. Purely a comfort '
+                                 'setting: the logic does not change.',
+    'open_forest': 'The Kokiri Forest exit to Hyrule Field is open from the start: its guard and invisible wall '
+                   'are gone.',
+    'open_kakariko': 'Closed: the guard opens the gate to Death Mountain once he has read Zelda\'s Letter, as in '
+                     'the vanilla game. Open: the gate is open from the start and the Death Mountain part of the '
+                     'Fire Stone quest starts at once. Zelda\'s Letter has no use left: with the quest rewards '
+                     'shuffled, Zelda gives a shuffled item instead. To be confirmed in game.',
+    'open_door_of_time': 'The Door of Time is open from the start and the Master Sword can be pulled without the '
+                         'Spiritual Stones or the Song of Time. Zelda\'s escape still gives the Ocarina of Time '
+                         'and the Song of Time. To be confirmed in game.',
+    'zora_fountain': 'Ruto\'s Letter required: King Zora blocks the way to Zora\'s Fountain until he reads the '
+                     'letter, as in the vanilla game. Always moved: he stands aside from the start and stays '
+                     'there; the letter can no longer be delivered, so it never becomes a bottle. '
+                     'To be confirmed in game.',
+    'gerudo_fortress': 'Four carpenters: free the four carpenters to get the Gerudo Membership Card, as in the '
+                       'vanilla game. One carpenter: the first one freed, in any cell, ends the fortress and '
+                       'gives the card. To be confirmed in game.',
+    'open_gerudo_valley_bridge': 'The broken bridge of Gerudo Valley is repaired from the start: the adult '
+                                 'crosses it on foot without Epona or the Longshot. The carpenters stay in their '
+                                 'cells; the last rescue still gives the Gerudo Membership Card. '
+                                 'To be confirmed in game.',
+    'shuffle_chests': 'On: every chest of the game (big and small, major items included) gets an item of the '
+                      'shuffle. Off: chests keep their vanilla content.',
+    'chest_matching': 'How chests are tied to the logic. Identified chests: only chests matched one to one with '
+                      'the logic hold progression items (safest). Access by zone: more chests are used, each '
+                      'with the most cautious access conditions of its zone.',
+    'shuffle_kokiri_sword': 'The Kokiri Sword leaves its chest and can be anywhere; its chest holds another item. '
+                            'Experimental: to be confirmed in game.',
+    'shuffle_remake_items': 'The remake adds a few items of its own (Deku seed and jar upgrades). On: they join '
+                            'the shuffle as filler, never required to finish.',
+    'tokensanity': 'Each gold skulltula gives a shuffled item instead of its token, and the tokens are placed '
+                   'elsewhere. Dungeons / Overworld: only the skulltulas of that part of the world.',
+    'shuffle_freestanding_items': 'Rupees, hearts and heart pieces lying on the ground give shuffled items. '
+                                  'Dungeons / Overworld: only those of that part of the world.',
+    'shuffle_scrubs': 'Business scrubs that sell one item (stick and nut upgrades, two heart pieces) sell a '
+                      'shuffled item. The scrub still announces its vanilla item; you get the placed one. '
+                      'Low price: 10 rupees. Remake price: 40 and 100 rupees (100 needs the Adult\'s Wallet). '
+                      'Refill scrubs and Dream World scrubs are not included. To be confirmed in game.',
+    'shopsanity': 'Up to 8 slots of each shop sell shuffled items for 10 rupees (the Market bazaar, potion '
+                  'shop and bombchu shop count as three shops). One copy of every purchase required by '
+                  'the logic stays on sale, except with "Whole shops": every slot is shuffled and refills '
+                  'come from the world. The mask shop is kept.',
+    'shuffle_npc_gifts': 'Rewards given by characters and minigames (the supported ones) are shuffled.',
+    'shuffle_quest_rewards': 'The big story rewards are shuffled: ocarinas, Zelda\'s Letter (the child trade '
+                             'quest is shuffled with it), the Light Arrows, the Biggoron Sword and Ruto\'s Letter (the bottle in Lake Hylia).',
+    'shuffle_boss_rewards': 'Spiritual stones, medallions and boss heart containers are shuffled. The scenes '
+                            'still play.',
+    'shuffle_great_fairies': 'The great fairies give shuffled items instead of spells, magic and defense.',
+    'shuffle_pots': 'The first item of each pot is shuffled. Once picked up, the pot gives its vanilla loot again.',
+    'shuffle_crates': 'The first item of each crate is shuffled, then its vanilla loot.',
+    'shuffle_beehives': 'The first item of each beehive is shuffled, then its vanilla loot.',
+    'shuffle_bushes': 'The first item of each supported bush and grass tuft is shuffled, then its vanilla loot.',
+    'shuffle_rocks': 'The first item of each rock is shuffled. Afterwards the rock behaves as in the vanilla game.',
+    'shuffle_trees': 'Roll into a tree: its first item is shuffled, then its vanilla loot.',
+    'item_pool_value': 'How many items are in the shuffle. Balanced: as in the vanilla game. Plentiful: one extra '
+                       'copy of the major items. Scarce: at most 3 bottles and half the hearts. Minimal: one '
+                       'bottle and no extra hearts.',
+    'start_inventory_from_pool': 'Items held from the start, separated by commas, with a count if needed: '
+                                 '"Hover Boots, Progressive Hookshot x2, Heart Container x3". Songs by name '
+                                 '("Sarias Song"). They are taken out of the shuffle. Tunics are not available yet.',
+    'key_rings_list': 'Only used when "Key rings" is "Chosen dungeons": the dungeons that get a key ring, '
+                      'separated by commas (for example "Forest Temple, Fire Temple").',
+    'shuffle_enemy_spawns': 'Enemies only appear once you have found their soul. Bosses only: one soul per boss. '
+                            'One soul per region: all enemies of a region at once. One soul per enemy type: '
+                            'every kind of enemy has its own soul. A new game is required.',
+    'big_poe_count': 'The Poe collector gives his reward after this many Big Poes (vanilla: 10). '
+                     'To be confirmed in game.',
+    'skip_child_zelda': 'Start as if Malon, Talon, Zelda and Impa had been met: Zelda\'s Letter and Lullaby '
+                        'are shuffled elsewhere. The child castle grounds become optional: their shuffled checks hold '
+                        'green rupees, except the Great Fairy. Later events keep their conditions (Kokiri '
+                        'Forest exit after the Deku Tree...). New save required. To be confirmed in game.',
+}
+# Settings page layout: (card title, card note, [option names]). "game:" names are the
+# general settings of the application (Settings fields), the others complete-mode options.
+# A visible option missing here is shown at the end, in a card named after its tab.
+SETTING_GROUPS = (
+    ('Open world', 'Zones and quests open from the start.',
+     ['game:open_forest', 'open_kakariko', 'open_door_of_time', 'zora_fountain', 'gerudo_fortress',
+      'open_gerudo_valley_bridge', 'skip_child_zelda']),
+    ('Logic and accessibility', '',
+     ['accessibility', 'logic_no_night_tokens_without_suns_song', 'game:skulltulas_always_present']),
+    ('Item pool', 'What is shuffled and what you start with.',
+     ['item_pool_value', 'start_inventory_from_pool', 'shuffle_kokiri_sword',
+      'shuffle_master_sword', 'shuffle_gerudo_card', 'shuffle_remake_items']),
+    ('Shuffled locations', 'Where items can be found.',
+     ['shuffle_chests', 'chest_matching', 'tokensanity', 'shuffle_freestanding_items', 'shuffle_npc_gifts',
+      'shuffle_quest_rewards', 'shuffle_boss_rewards', 'shuffle_great_fairies', 'shuffle_song_items',
+      'shopsanity', 'shuffle_scrubs']),
+    ('Pots, crates and scenery', 'The first item of each source is shuffled, then the vanilla loot.',
+     ['shuffle_pots', 'shuffle_crates', 'shuffle_beehives', 'shuffle_bushes', 'shuffle_rocks', 'shuffle_trees']),
+    ('Dungeon contents', '',
+     ['shuffle_mapcompass', 'shuffle_smallkeys', 'key_rings', 'key_rings_list', 'shuffle_bosskeys']),
+    ('Enemy souls', '', ['shuffle_enemy_spawns']),
+    ('Minigames', '', ['big_poe_count']),
+)
+# Kept in the settings files (older seeds, AP YAML) but never shown: no effect any more.
+HIDDEN_OPTIONS = ('progressive_order', 'progressive_strict', 'fast_chests')
+GAME_OPTION_COPY = {'open_forest': 'Open the way from Kokiri Forest to Hyrule Field',
+                    'skulltulas_always_present': 'Night-only gold skulltulas present day and night'}
+UNTESTED_WORDS = ('confirm', 'validated', 'pilot', 'experimental')
+
+
+def option_tip(option, label, help_text):
+    """Tooltip text of a complete-mode option: title line, then explanation and values."""
+    body = OPTION_TIPS.get(option.name) or help_text or ''
+    parts = [body] if body else []
+    if option.kind == 'choice':
+        supported = [(value, text) for value, text, reason in option.values if reason is None]
+        if len(supported) > 1:
+            lines = []
+            for value, text in supported:
+                mark = ' (experimental)' if value in option.experimental else ''
+                default = ' (default)' if value == option.default else ''
+                lines.append(f'• {text}{default}{mark}')
+            parts.append('Values:\n' + '\n'.join(lines))
+    elif option.experimental and not any(word in body.lower() for word in UNTESTED_WORDS):
+        parts.append('Experimental: to be confirmed in game.')
+    return label + '\n' + '\n\n'.join(parts)
+
+
+class ListVar:
+    """Text field holding a subset of an option's values (``"Forest Temple, Fire Temple"``)."""
+
+    def __init__(self, option):
+        self.option = option
+        self.text = tk.StringVar(value='')
+
+    def get(self):
+        chosen = []
+        for part in (p.strip() for p in self.text.get().split(',')):
+            if not part:
+                continue
+            match = next((v for v in self.option.allowed() if v.casefold() == part.casefold()), None)
+            if match is None:
+                raise ValueError(f'{self.option.label}: unknown value {part!r} '
+                                 f'(choose among {", ".join(self.option.allowed())}).')
+            chosen.append(match)
+        return tuple(v for v in self.option.allowed() if v in chosen)
+
+    def set(self, value):
+        self.text.set(', '.join(value or ()))
 
 
 class ItemsVar:
@@ -116,6 +270,8 @@ class Application:
         self.configure_theme()
         self.events, self.busy = queue.Queue(), False
         self.artifact, self.tracker, self.overlay, self.hud = None, None, None, None
+        self.regen_settings = None   # settings of an installed seed made by an older generator
+        self.artifact_manifest = None   # manifest of self.artifact (set by use_artifact)
         self.hud_status = tk.StringVar(value='')
         self.zone_open, self.tracker_scroll, self.tracker_trees = {}, {}, {}
         self.current_checks = []
@@ -136,6 +292,11 @@ class Application:
         self.tracker_search, self.save_path = tk.StringVar(), tk.StringVar()
         self.auto_save = tk.BooleanVar(value=True)
         self.app_state = self.read_app_state()
+        # Remembered between app starts (it was off again at every start: 15/11 report, issue #39).
+        self.options['skulltulas_always_present'].set(self.app_state.get('skulltulas_always_present') is True)
+        self.options['skulltulas_always_present'].trace_add(
+            'write', lambda *args: self.write_app_state(
+                skulltulas_always_present=self.options['skulltulas_always_present'].get()))
         # Game file and mods folder: chosen once by the player, then remembered.
         self.nup.set(self.app_state.get('game_file') or '')
         self.mods.set(self.app_state.get('mods_dir') or default_mods_dir())
@@ -170,7 +331,7 @@ class Application:
         self.connection_status = tk.StringVar(value='Tracker not connected')
         self.tracker_summary = tk.StringVar(value='Open a seed to show its locations.')
         self.seed_chip = tk.StringVar(value='No seed open')
-        self.sidebar = theme.Sidebar(root, self.fonts, self.show_page, footer=f'Version {GENERATOR_VERSION}')
+        self.sidebar = theme.Sidebar(root, self.fonts, self.show_page, footer=f'Version {APP_VERSION}')
         self.sidebar.pack(side='left', fill='y')
         outer = ttk.Frame(root, padding=(34, 26, 34, 18), style='Page.TFrame')
         outer.pack(side='left', fill='both', expand=True)
@@ -274,7 +435,7 @@ class Application:
             ('Track the exploration', 'The tracker follows the most recent save by itself. Locations are updated after the game saves. Rewards of completed checks appear next to their name.'),
             ('Understand the states', 'Available: the logic estimates you can get the reward with your inventory. Blocked: a known condition is missing. Unknown: the data does not allow a conclusion. These locations stay visible by default.'),
             ('Keep the right save', 'Generate a new seed, start a new game, then save after the intro. The tracker picks the newest save; choose another in Setup. An old save cannot be linked automatically. The tracker never changes its files.'),
-            ('Repeatable sources', 'In a new seed, the shuffled reward can only be picked up once. Then pots, bushes, crates, beehives and rocks go back to their vanilla loot. Old seeds keep their rules.'),
+            ('Repeatable sources', 'In a new seed, the shuffled reward can only be picked up once. Then pots, bushes, crates, beehives, rocks and trees go back to their vanilla loot. Old seeds keep their rules.'),
             ('Compatibility', 'The glitchless logic is built in (remake world, derived from the Archipelago OoT rules). Some remake matches are approximate. Small keys stay in place. Only settings supported by the generator are offered.')]
         grid = ttk.Frame(parent, style='Page.TFrame')
         grid.pack(fill='x')
@@ -358,13 +519,13 @@ class Application:
         ttk.Checkbutton(box, text='Use experimental versions (pre-releases)', variable=self.experimental_updates,
                         command=self.experimental_toggled).pack(anchor='w')
         ttk.Label(box, text='Experimental versions get new features first, but may contain bugs or break a seed in progress. '
-                  'Untick to go back to stable versions: you move to the next stable release once it is out.',
+                  'Untick to go back to the latest stable version: it is offered for download, then the application restarts.',
                   style='Small.TLabel', wraplength=780).pack(anchor='w', pady=(4, 0))
 
     def experimental_toggled(self):
         enabled = self.experimental_updates.get()
         self.write_app_state(experimental_updates=enabled)
-        if enabled:
+        if enabled or updater.leaving_prereleases(enabled, APP_VERSION):
             self.check_for_updates(silent=False)
 
     def build_qol_card(self, parent):
@@ -412,6 +573,7 @@ class Application:
         self.home_primary.pack(side='right')
         self.home_secondary = ttk.Button(row, style='Hero.TButton')
         self.home_secondary.pack(side='right', padx=(0, 10))
+        self.home_regen = ttk.Button(row, text='Regenerate', style='Hero.TButton', command=self.regenerate)
         links = ttk.Frame(parent, style='Page.TFrame')
         links.pack(fill='x', pady=(0, 12))
         for text, command in [('Open a seed…', self.open_artifact), ('Open the folder', self.open_folder),
@@ -471,8 +633,14 @@ class Application:
             self.home_primary.configure(text='Continue', command=lambda: self.show_page('tracker'))
             self.home_secondary.configure(text='New seed', command=lambda: self.show_page('newseed'))
         else:
+            self.regen_settings = None
             self.home_primary.configure(text='Create a seed', command=lambda: self.show_page('newseed'))
             self.home_secondary.configure(text='Open a seed…', command=self.open_artifact)
+        if self.regen_settings is not None:
+            if not self.home_regen.winfo_manager():
+                self.home_regen.pack(side='right', padx=(0, 10), after=self.home_secondary)
+        else:
+            self.home_regen.pack_forget()
         setup = lambda: self.show_page('setup')
         if self.nup.get() and Path(self.nup.get()).is_file():
             self.set_tile('game', 'ok', 'Found')
@@ -523,6 +691,11 @@ class Application:
         row = self.buttons(box)
         ttk.Entry(row, textvariable=self.seed).pack(side='left', fill='x', expand=True)
         ttk.Button(row, text='Random', command=lambda: self.seed.set(secrets.token_hex(8))).pack(side='left', padx=(8, 0))
+        row = self.buttons(box, pady=(8, 0))
+        ttk.Label(row, text='Seed string: the seed name and every setting in one text to share.',
+                  style='Muted.TLabel').pack(side='left')
+        ttk.Button(row, text='Paste a seed string…', command=self.import_seed_string).pack(side='right')
+        ttk.Button(row, text='Copy seed string', command=self.copy_seed_string).pack(side='right', padx=(0, 8))
 
     def build_generate_section(self, parent):
         box = self.card(parent)
@@ -568,9 +741,9 @@ class Application:
         self.details = ttk.Frame(parent, style='Page.TFrame')
         details = self.details
         ttk.Label(details, textvariable=self.full_reason, style='Page.TLabel', wraplength=780, justify='left').pack(anchor='w', padx=4, pady=(0, 10))
-        grouped = {}
+        visible = {}
         for option in rando_options.OPTIONS:
-            if option.kind == 'items':
+            if option.kind in ('items', 'list'):
                 supported = [None, None]  # free text: always shown
             elif option.kind == 'bool':
                 supported = [v for v in (False, True) if option.supported(v)]
@@ -578,29 +751,39 @@ class Application:
                 supported = list(option.supported_ints)
             else:
                 supported = [v for v, label, reason in option.values if reason is None]
-            if len(supported) > 1:
-                grouped.setdefault(option.tab, []).append(option)
+            if len(supported) > 1 and option.name not in HIDDEN_OPTIONS:
+                visible[option.name] = option
             else:
                 self.option_row(None, 0, option)
-        for group in rando_options.TABS:
-            options = grouped.get(group, [])
-            if not options:
+        placed = {name for _, _, names in SETTING_GROUPS for name in names}
+        groups = [(title, note, [n for n in names if n.startswith('game:') or n in visible])
+                  for title, note, names in SETTING_GROUPS]
+        leftovers = {}
+        for name, option in visible.items():   # options added later and not placed yet
+            if name not in placed:
+                leftovers.setdefault(option.tab, []).append(name)
+        groups += [(tab, '', names) for tab, names in leftovers.items()]
+        for title, note, names in groups:
+            if not names:
                 continue
-            title = {'Logic': 'Logic and accessibility', 'Items': 'Items and locations', 'Dungeons': 'Dungeon contents', 'Souls': 'Enemy souls'}.get(group, group)
-            frame = self.card(details, title)
+            frame = self.card(details, title, note or None)
             rows = ttk.Frame(frame)
             rows.pack(fill='x')
             rows.columnconfigure(0, weight=1)
-            for index, option in enumerate(options):
-                self.option_row(rows, index, option)
-        box = self.card(details, 'Quality of life', 'Always on: skippable cutscenes (hold X, or Plus), chests without cutscene, turbo A (hold A in a dialogue).')
+            for index, name in enumerate(names):
+                if name.startswith('game:'):
+                    key = name[len('game:'):]
+                    text = GAME_OPTION_COPY[key]
+                    self.switch_row(rows, index, text, self.options[key], tip=text + '\n' + OPTION_TIPS[key])
+                else:
+                    self.option_row(rows, index, visible[name])
+        self.card(details, 'Always on', 'Skippable cutscenes (hold X, or Plus), chests without cutscene, '
+                                       'turbo A (hold A in a dialogue).')
+        box = self.card(details, 'In-game tracker')
         rows = ttk.Frame(box)
         rows.pack(fill='x')
         rows.columnconfigure(0, weight=1)
-        self.switch_row(rows, 0, 'Open the way from Kokiri Forest to Hyrule Field', self.options['open_forest'])
-        self.switch_row(rows, 1, 'Night-only gold skulltulas present day and night (the logic does not change)',
-                        self.options['skulltulas_always_present'])
-        self.switch_row(rows, 2, 'In-game tracker: R + right stick up shows the items and checks found (GPL-3 module, '
+        self.switch_row(rows, 0, 'In-game tracker: R + right stick up shows the items and checks found (GPL-3 module, '
                         'runs only while this seed is enabled)', self.ingame_tracker)
         box = self.card(details, 'Share these settings')
         row = self.buttons(box)
@@ -636,10 +819,21 @@ class Application:
             art.configure(background=self.colors['gold_soft' if key == current else 'green_soft'])
         self.customize_hint.set('' if current else 'Custom settings')
 
-    def switch_row(self, parent, index, text, variable, command=None):
+    def label_cell(self, parent, index, text, tip=None, wraplength=520, cursor=''):
+        """Column 0 of a settings row: the label, then an ⓘ carrying ``tip`` as a tooltip."""
+        cell = ttk.Frame(parent)
+        cell.grid(row=index, column=0, sticky='w', padx=(0, 18), pady=7)
+        label = ttk.Label(cell, text=text, wraplength=wraplength, justify='left', cursor=cursor)
+        label.pack(side='left')
+        icon = None
+        if tip:
+            icon = theme.info_icon(cell, self.fonts, background=self.colors['surface'])
+            icon.pack(side='left', padx=(4, 0))
+        return label, icon
+
+    def switch_row(self, parent, index, text, variable, command=None, tip=None):
         """Label on the left, switch on the right; clicking the label toggles too."""
-        label = ttk.Label(parent, text=text, wraplength=560, justify='left', cursor='hand2')
-        label.grid(row=index, column=0, sticky='w', pady=7)
+        label, icon = self.label_cell(parent, index, text, tip, cursor='hand2')
         widget = ttk.Checkbutton(parent, variable=variable, command=command)
         widget.grid(row=index, column=1, sticky='e', pady=7)
         def click(event):
@@ -647,6 +841,8 @@ class Application:
                 widget.invoke()
                 widget.focus_set()
         label.bind('<Button-1>', click)
+        if tip:
+            theme.Tooltip((label, icon, widget), tip, self.fonts)
         if index:
             theme.rule(parent).grid(row=index, column=0, columnspan=2, sticky='new')
         return widget
@@ -1044,17 +1240,18 @@ class Application:
     # ------------------------------------------------------- complete mode
     def option_row(self, parent, index, option):
         label, help_text = OPTION_COPY.get(option.name, (option.label, option.help))
+        tip = option_tip(option, label, help_text)
         def describe():
             self.full_reason.set(label + ' — ' + (help_text or 'Choose the value that suits your game.'))
             self.update_presets()
-        if option.kind == 'items':
-            variable = ItemsVar()
+        if option.kind in ('items', 'list'):
+            variable = ItemsVar() if option.kind == 'items' else ListVar(option)
             widget = ttk.Entry(parent, textvariable=variable.text, width=40) if parent else None
             if widget:
                 widget.bind('<FocusOut>', lambda event: describe(), add='+')
         elif option.kind == 'bool':
             variable = tk.BooleanVar(value=option.default)
-            widget = self.switch_row(parent, index, label, variable, command=describe) if parent else None
+            widget = self.switch_row(parent, index, label, variable, command=describe, tip=tip) if parent else None
         elif option.kind == 'int':
             variable = tk.IntVar(value=option.default)
             widget = ttk.Spinbox(parent, from_=min(option.supported_ints), to=max(option.supported_ints), textvariable=variable, width=8, command=describe) if parent else None
@@ -1077,8 +1274,9 @@ class Application:
         self.full_vars[option.name] = variable
         if widget:
             if option.kind != 'bool':
-                ttk.Label(parent, text=label, wraplength=480).grid(row=index, column=0, sticky='w', padx=(0, 18), pady=7)
+                text_label, icon = self.label_cell(parent, index, label, tip, wraplength=460)
                 widget.grid(row=index, column=1, sticky='e', pady=7)
+                theme.Tooltip((text_label, icon), tip, self.fonts)
                 if index:
                     theme.rule(parent).grid(row=index, column=0, columnspan=2, sticky='new')
             widget.bind('<FocusIn>', lambda event: describe(), add='+')
@@ -1229,6 +1427,38 @@ class Application:
             self.full_enabled.set(False)
             self.update_category_states()
 
+    def copy_seed_string(self):
+        try:
+            text = settings_string.encode(self.get_settings())
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.status.set(f'Seed string copied ({len(text)} characters). Share it with the same version '
+                            f'of the randomizer ({APP_VERSION}).')
+        except Exception as error:
+            self.error(error)
+
+    def import_seed_string(self):
+        try:
+            clipboard = self.root.clipboard_get().strip()
+        except tk.TclError:
+            clipboard = ''
+        initial = clipboard if clipboard.upper().startswith(settings_string.PREFIX) else ''
+        text = simpledialog.askstring('Paste a seed string', 'Seed string (starts with '
+                                      + settings_string.PREFIX + '):', initialvalue=initial, parent=self.root)
+        if not text or not text.strip():
+            return
+        try:
+            settings, version = settings_string.decode(text)
+            if version != GENERATOR_VERSION and not messagebox.askyesno(
+                    'Other randomizer version',
+                    f'This seed string comes from generator {version}; this application uses '
+                    f'{GENERATOR_VERSION}. The same settings may give a different game. Import anyway?'):
+                return
+            self.apply_settings(settings)
+            self.status.set('Seed string imported: seed "' + settings.seed + '".')
+        except Exception as error:
+            self.error(error)
+
     def import_settings(self):
         name = filedialog.askopenfilename(filetypes=[('JSON settings', '*.json')])
         if name:
@@ -1285,8 +1515,34 @@ class Application:
         except Exception as error:
             self.error(error)
 
+    def regenerate(self):
+        """Generate the installed seed again with this version: same name, same settings."""
+        try:
+            settings = self.regen_settings
+            if settings is None or self.artifact is None:
+                raise ValueError('This seed is already up to date.')
+            nup = Path(self.nup.get())
+            if not nup.is_file():
+                raise ValueError('Select the local NUP file.')
+            mods = validate_mod_directory(self.artifact.parent)
+            if not messagebox.askyesno(
+                    'Regenerate the seed',
+                    f'Seed "{settings.seed}" was made by an older version of the randomizer. Generate it '
+                    f'again with version {GENERATOR_VERSION}, with the same name and settings?\n\n'
+                    'The current copy is moved to the archive (never deleted). The new version may '
+                    'place items differently: a new game may be needed.'):
+                return
+
+            def job(progress):
+                installed = generate_in_mods(nup, mods, settings, progress, archive=ARCHIVE, generate=generate)
+                return installed, installed
+            self.run_job(job, self.generated_and_installed)
+        except Exception as error:
+            self.error(error)
+
     def generated_and_installed(self, result):
         directory, installed = result
+        previous = self.artifact_manifest   # seed replaced by this one (same folder if regenerated)
         self.use_artifact(directory)
         self.show_page('tracker')
         self.status.set('Seed generated and installed: ' + str(installed))
@@ -1294,10 +1550,59 @@ class Application:
         messagebox.showinfo('Seed ready', 'Seed installed in:\n' + str(installed)
                             + '\n\nStart a new game to enable automatic tracking and first collections.'
                             + ('\n\n' + warning if warning else ''))
+        self.offer_save_migration(self.artifact_manifest, previous)
+
+    def offer_save_migration(self, manifest, previous=None):
+        """Offer to give the saves of this seed the start values they never received.
+
+        A fix written by the new-game opening only reaches games started after it. Saves
+        of this seed (or of the one it regenerates) are listed; nothing is written unless
+        the player agrees, and each save is backed up first (tracker/save_patch.py)."""
+        from oot_rando.tracker import save_patch
+        try:
+            paths = find_save_slots(self.hookshot_root(), TITLE, self.mods.get() or None)
+            candidates = save_patch.migration_candidates(paths, manifest, previous)
+        except Exception as error:   # never block the installation on a save scan
+            self.status.set('Saves not checked: ' + str(error))
+            return
+        if not candidates:
+            return
+        names = sorted({name for _, changed in candidates for name in changed})
+        listing = '\n'.join('• ' + str(path) for path, _ in candidates[:6])
+        if len(candidates) > 6:
+            listing += f'\n• … and {len(candidates) - 6} more'
+        if not messagebox.askyesno(
+                'Update the saves of this seed',
+                f'{len(candidates)} save(s) of this seed were started before some fixes of this version and '
+                f'miss {len(names)} start value(s) (' + ', '.join(names[:4]) + (', …' if len(names) > 4 else '')
+                + ').\n\n' + listing + '\n\nUpdate them now? Close the game first. Each save is backed up '
+                'next to it (progress.sav' + save_patch.BACKUP_SUFFIX + '<date>) and only flags it already '
+                'holds are changed.'):
+            return
+        markers = save_patch.migration_markers(manifest, previous)
+        done, failed = [], []
+        for path, _ in candidates:
+            try:
+                done.append(save_patch.patch_save(path, manifest.get('start_values') or {}, markers))
+            except save_patch.GameRunning as error:
+                failed.append(str(error))
+                break
+            except Exception as error:
+                failed.append(f'{path}: {error}')
+        text = f'{len(done)} save(s) updated.'
+        backups = [report['backup'] for report in done if report['backup']]
+        if backups:
+            text += '\nBackups:\n' + '\n'.join(backups)
+        if failed:
+            text += '\n\nNot updated:\n' + '\n'.join(failed)
+            messagebox.showwarning('Saves of this seed', text)
+        else:
+            messagebox.showinfo('Saves of this seed', text)
+        self.status.set(text.splitlines()[0])
 
     def use_artifact(self, directory):
         manifest, _ = read_artifact(directory)
-        self.artifact = Path(directory)
+        self.artifact, self.artifact_manifest = Path(directory), manifest
         self.result.set('Seed: ' + manifest['settings']['seed'] + '\nIdentity: ' + manifest['seed_id'][:16]
                         + f' • {len(manifest["files"])} resources checked\n' + str(directory))
         complete = manifest.get('full_randomizer')
@@ -1311,6 +1616,7 @@ class Application:
             self.result.set(self.result.get() + f'\n{coverage["changed_groups"]} ordinary chests changed, '
                             f'{coverage["changed_instances"]} physical variants; vanilla progression.')
         self.apply_settings(Settings.from_dict(manifest['settings']))
+        self.regen_settings = regeneration_settings(manifest)
         if manifest.get('tracking', {}).get('new_save_required'):
             self.result.set(self.result.get() + '\nA new game is needed for automatic tracking.')
         self.seed_name = (manifest['settings']['seed'] or manifest['seed_id'][:12])[:28]
@@ -1604,6 +1910,9 @@ class Application:
                 label = 'Done' if completed else {'available': 'Available', 'partial': 'Partial zone', 'blocked': 'Blocked', 'unknown': 'Unknown'}.get(access, 'Unknown')
                 if completed and state.get('source') == 'manual':
                     label += ' (manual)'
+                elif not completed and state.get('missing_souls'):
+                    from oot_rando.patching.soul_adapter import soul_name
+                    label += ' • soul: ' + ', '.join(soul_name(s, False) for s in state['missing_souls'])
                 tree.insert(zones[region], 'end', iid=check['id'], text=name, values=(label, reward, kind), tags=('done' if completed else access,))
                 visible += 1
             tree.bind('<<TreeviewOpen>>', lambda event, widget=tree: self.remember_zone(widget, True))
@@ -1770,7 +2079,7 @@ class Application:
             if not self.hud:
                 hookshot = self.hookshot_root()
                 romfs = hookshot / 'romfs' if hookshot else None
-                icons = game_overlay.IconCache(STATE / 'icons', romfs)
+                icons = game_overlay.IconCache(STATE / 'icons', romfs, self.nup.get() or None)
                 icons.ensure()
                 self.hud = game_overlay.GameHud(self.root, icons=icons)
                 self.update_hud()
@@ -1975,6 +2284,9 @@ class Application:
         notes = ('\n\n' + (notes[:600] + '…' if len(notes) > 600 else notes)) if notes else ''
         if updater.is_prerelease(release.version):
             notes = '\n\nExperimental version: it may contain bugs.' + notes
+        elif not updater.is_newer(release.version, APP_VERSION):
+            notes = ('\n\nThis is the latest stable version: it replaces the experimental version you have. '
+                     'A seed made with the experimental version may not work with it.') + notes
         if not updater.can_self_update():
             if messagebox.askyesno('Update available', f'Version {release.version} is available (you have '
                                    f'{APP_VERSION}).{notes}\n\nOpen the release page?'):

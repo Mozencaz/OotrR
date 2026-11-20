@@ -1,9 +1,11 @@
 """First-collection rewards for repeatable physical sources.
 
 Generated pickups retain the real item's PouchActor. Their private event AINB
-sets a saved check flag only after the native add-to-pouch action. Complementary
-Presence conditions select the randomized source before that flag and a clone
-of the untouched vanilla source afterwards. Gameplay validation remains required.
+sets a saved check flag only after the native add-to-pouch action. The source
+itself is left as in the game, but for its drop, so it breaks and respawns like
+the vanilla one (on a scene change). Once the check is collected, the pickup it
+drops deletes itself when it spawns: its own AI (a clone of the native
+``DropItem`` one) checks the flag. Gameplay validation remains required.
 
 Shop shelves holding a shuffled item (``Shop_Rando_*``) are bought once the same
 way: each gets its own actor whose shop AI writes the check flag when the item is
@@ -19,29 +21,30 @@ import uuid
 
 from oot_rando.formats import byml_codec
 from oot_rando.formats.inspect_resources import sarc
-from oot_rando.game.item_forms import (WORLD_CANONICAL, WORLD_PREFIX, SHOP_PREFIX, build_pack, canonical_of,
-                        is_derived, add_rsdb_rows)
+from oot_rando.game.item_forms import (WORLD_CANONICAL, DROP_PREFIX, SHOP_PREFIX, build_pack, canonical_of,
+                        is_derived, add_rsdb_rows, resolve_components, underwater_actor)
 from oot_rando.patching.soul_adapter import FLAG_PREFIX as SOUL_FLAG_PREFIX, murmur3
 
-REPEATABLE = frozenset(('pots', 'bushes', 'rocks', 'crates', 'beehives'))
+REPEATABLE = frozenset(('pots', 'bushes', 'rocks', 'crates', 'beehives', 'trees'))
 EVENT_PACK = 'Pack/AI.Global.Product.111.pack.zs'
 EVENT_MEMBER = 'AI/PouchContent.event.root.ainb'
+DROP_AI_MEMBER = 'AI/DropItem.root.ainb'
+DROP_AI_INFO = '?AI/AIInfo/DropItem.engine__actor__AIInfo.bgyml'
 LARGE_GET_TYPE = 1746592023
 # Short get (the game's own for gold tokens, heart pieces and the gold rupee on the
-# ground): the get event still runs, so the check flag is written, without the
-# long held-up pose. Used for the minor rewards of repeatable sources.
+# ground): no long held-up pose, but Link still shows the item.
 MEDIUM_GET_TYPE = 1027255402
+# Minor rewards keep their native pickup (no GetType: rupees, arrows, seeds, nuts,
+# sticks, bombs, magic jars, hearts all have none), as on the ground. Forcing Medium
+# on them still played a pose (Discord 15/11, 0.6.1). Only the bombchu packs are
+# Large natively (key-item style): they take Medium.
+MINOR_LARGE_PREFIXES = ('Item_BombchuBundle_',)
 MINOR_PREFIXES = ('TBox_Rupee_', 'TBox_ArrowBundle_', 'TBox_DekuNutBundle', 'TBox_DekuSeedBundle',
                   'Item_BombBundle_', 'Item_DekuStickBundle_', 'Item_BombchuBundle_', 'Tbox_MagicJar_',
                   'Item_ScrubBusinessSeed')
 MINOR_ACTORS = frozenset(('Obj_Heart',))   # recovery heart (not a piece nor a container)
 SHOP_ONCE_PREFIX = 'Shop_RandoOnce_'
 SHOP_AI_MEMBER = 'AI/Shop_Item_Base.root.ainb'
-# Presence of the shuffled source and of its vanilla copy, checked lazily (on area
-# load, as the game removes its Tektites once the Goron ruby is got): the vanilla
-# copy no longer appears the moment the check is collected (a pot respawned at
-# once), only when the area is loaded again.
-PRESENCE_LAZY = True
 
 
 def is_minor_reward(canonical):
@@ -50,7 +53,28 @@ def is_minor_reward(canonical):
 
 
 def get_type(canonical):
-    return MEDIUM_GET_TYPE if is_minor_reward(canonical) else LARGE_GET_TYPE
+    """GetType given to a first-collection pickup (None: the item's native one)."""
+    if is_minor_reward(canonical):
+        return MEDIUM_GET_TYPE if canonical.startswith(MINOR_LARGE_PREFIXES) else None
+    return LARGE_GET_TYPE
+
+
+def pickup_pouch_settings(canonical):
+    """PouchContentParam overrides of a first-collection pickup dropping ``canonical``.
+
+    A key reward plays its get event every time (the check's own message). A minor
+    one keeps the native pickup behaviour: the get window only the first time this
+    kind of item is ever got (a green rupee from every pot showed "You got a Green
+    Rupee!", Discord 17/11), the short pick-up display after. The derived drop
+    inherits PlayGetEventManyTimes from the world pickups (item_forms.WORLD_POUCH_FLAGS):
+    it is turned off explicitly. Whether the check flag is still written on the short
+    pick-up (its event AINB) is not validated in game: if not, the pot keeps dropping
+    that minor item.
+    """
+    settings = {'PlayGetEventManyTimes': not is_minor_reward(canonical), 'IsAutoSaveAfterPlayGet': True}
+    if get_type(canonical) is not None:
+        settings['GetType'] = byml_codec.U32(get_type(canonical))
+    return settings
 
 
 def _guid(text):
@@ -318,6 +342,83 @@ def instrument_shop_ai(raw, flag, filename):
     return binary
 
 
+def instrument_drop_ai(raw, flag, filename, event_raw):
+    """Clone the native drop AI so that a pickup spawned after its check deletes itself.
+
+    The start-up sequence of the root (one frame of nothing, then the rotation AS)
+    first asks the saved ``flag``: set, the pickup deletes itself, before it can be
+    touched; not set, nothing changes. The query only outputs on entering, and that
+    sequence runs once, at spawn: the first pickup is never deleted while its own
+    get event writes the flag. The query and deletion are copies of the native nodes
+    of the get event graph ``event_raw``.
+    """
+    try:
+        import ainb
+    except ImportError as error:
+        raise ValueError('Install ainb==0.2.17 for first-collection rewards.') from error
+    script = ainb.AINB.from_binary(raw)
+    original = script.as_dict()
+
+    def build(document):
+        # As for the shop AI, the blackboard must be restored after as_dict().
+        result = ainb.AINB.from_dict(document)
+        result.blackboard = script.blackboard
+        return result.to_binary()
+    if build(original) != script.to_binary():
+        raise ValueError('The drop AI cannot be rewritten faithfully.')
+    document = copy.deepcopy(original)
+    if document['Version'] != 0x408:
+        raise ValueError('Unexpected AINB version for the drop AI.')
+    nodes = document['Nodes']
+    roots = [c['Root Node Index'] for c in document['Commands'] if c['Name'] == 'Root']
+    if len(roots) != 1 or nodes[roots[0]]['Node Type'] != 'Element_Simultaneous':
+        raise ValueError('Drop AI: root not recognised.')
+    starts = [nodes[p['Node Index']] for p in nodes[roots[0]]['Plugs']['Child']
+              if nodes[p['Node Index']]['Node Type'] == 'Element_Sequential']
+    if len(starts) != 1 or any(prop['Name'] == 'IsLoop' and prop['Default Value']
+                               for prop in starts[0]['Properties'].get('Bool', [])):
+        raise ValueError('Drop AI: start-up sequence ambiguous or missing.')
+    templates = ainb.AINB.from_binary(event_raw).as_dict()['Nodes']
+
+    def native(source, name):
+        found = [n for n in source if n['Name'] == name]
+        if len(found) != 1:
+            raise ValueError(f'Drop AI: {name} ambiguous or missing.')
+        return copy.deepcopy(found[0])
+    query_index, delete_index, noop_index, selector_index = range(len(nodes), len(nodes) + 4)
+    query = native(templates, 'QueryGetNonStructGameDataBool')
+    query.update({'Node Index': query_index, 'GUID': _guid(flag + '/drop-collected'), 'Queries': [], 'Plugs': {}})
+    query['Parameters']['Inputs']['String'] = [_default('GameDataFullName', flag)]
+    for prop in query['Properties']['Bool']:
+        if prop['Name'] == 'OutputOnlyOnEnter':
+            prop['Default Value'] = True
+    delete = native(templates, 'OneShotGenericDeleteThisActor')
+    delete.update({'Node Index': delete_index, 'GUID': _guid(flag + '/drop-delete')})
+    for prop in delete['Properties']['Bool']:
+        if prop['Name'] == 'IsFade':
+            prop['Default Value'] = False
+    noop = copy.deepcopy(next(n for n in nodes if n['Name'] == 'OneshotDoNothing'))
+    noop.update({'Node Index': noop_index, 'GUID': _guid(flag + '/drop-keep')})
+    selector = copy.deepcopy(next(n for n in nodes if n['Node Type'] == 'Element_BoolSelector'))
+    selector.update({'Node Index': selector_index, 'GUID': _guid(flag + '/drop-once'), 'Queries': [query_index],
+                     'Attachments': [], 'Flags': [], 'XLink Actions': []})
+    selector['Parameters'] = {'Inputs': {'Bool': [{'Name': 'Input', 'Default Value': False, 'Node Index': query_index,
+                                                   'Output Index': 0, 'Flags': []}]}, 'Outputs': {}}
+    selector['Plugs'] = {'Generic': [{'Node Index': query_index, 'Name': 'Input', 'Unknown 1': 0, 'Unknown 2': 0}],
+                         'Child': [{'Node Index': delete_index, 'Name': 'True'},
+                                   {'Node Index': noop_index, 'Name': 'False'}]}
+    starts[0]['Plugs']['Child'].insert(0, {'Node Index': selector_index, 'Name': ''})
+    nodes.extend([query, delete, noop, selector])
+    document['Filename'] = filename
+    binary = build(document)
+    result = ainb.AINB.from_binary(binary).as_dict()
+    if result != document:
+        raise ValueError('The modified drop AI does not read back identically.')
+    if result['Commands'] != original['Commands']:
+        raise ValueError('Drop AI commands changed unexpectedly.')
+    return binary
+
+
 def prepare_repeatables(plan, maps):
     """Rename selected repeatable world rewards; return generation descriptors.
 
@@ -343,18 +444,16 @@ def prepare_repeatables(plan, maps):
                 raise ValueError('Repeatable source without a proven physical actor.')
             resource, index = patch['resource'], patch['path'][1]
             original = maps[resource]['root']['Actors'][index]
-            # An existing Presence cannot be overwritten by a new condition.
-            # The only currently supported special case is a native one-shot
-            # jar, already removed by its own persistent IsCrushed condition.
+            # Sources under a condition of their own stay vanilla, but for a native
+            # one-shot jar, removed by its own persistent IsCrushed condition.
             presence = original.get('Presence')
             native_once = bool(presence and presence.get('IsNegation') is True
                                and presence.get('FlagName', '').endswith('_IsCrushed'))
             if presence and not native_once:
                 raise ValueError('Conditional presence cannot be combined for ' + placement['id'])
-            fallback_hash = int.from_bytes(hashlib.sha256((placement['id'] + '/vanilla-source').encode()).digest()[:8], 'little')
-            variants.append({'resource': resource, 'index': index, 'native_once': native_once,
-                             'original_hash': int(original['Hash']), 'fallback_hash': fallback_hash})
+            variants.append({'resource': resource, 'index': index, 'native_once': native_once})
         record = {'id': placement['id'], 'actor': actor, 'canonical': canonical, 'kind': 'shop' if shop else 'pickup',
+                  'underwater': bool(placement.get('underwater')) and not shop,
                   'original_reward_actor': previous, 'flag': flag, 'flag_hash': murmur3(flag),
                   'event_filename': 'RandoOnce_' + key + '.event.root', 'variants': variants}
         if shop:
@@ -405,8 +504,13 @@ def build_repeatable_packs(records, read_pack, read_raw, tables):
             _alias_rows(tables, standard, record['actor'])
             continue
         if event is None:
-            event = sarc(read_raw(EVENT_PACK))[EVENT_MEMBER]
-        standard = WORLD_PREFIX + record['canonical']
+            global_ai = sarc(read_raw(EVENT_PACK))
+            event, drop_ai = global_ai[EVENT_MEMBER], global_ai[DROP_AI_MEMBER]
+        # Dropped by its source: a falling pickup, not the standing token; it glows
+        # under water (item_forms.GLOW_ACTOR).
+        standard = DROP_PREFIX + record['canonical']
+        if record.get('underwater'):
+            standard = underwater_actor(standard)
         raw, template = build_pack(standard, read_pack, byml_codec)
         files = sarc(raw)
         old_path = f'Actor/{standard}.engine__actor__ActorParam.bgyml'
@@ -414,8 +518,7 @@ def build_repeatable_packs(records, read_pack, read_raw, tables):
         components = document['root']['Components']
         pouch_path = components['PouchContentRef'][1:]
         pouch = byml_codec.load(files[pouch_path])
-        pouch['root'].update({'PlayGetEventManyTimes': True, 'GetType': byml_codec.U32(get_type(record['canonical'])),
-                              'IsAutoSaveAfterPlayGet': True})
+        pouch['root'].update(pickup_pouch_settings(record['canonical']))
         # The PouchActor remains the canonical reward: no unique inventory item
         # or duplicate bundle is introduced just to track a check.
         files[pouch_path] = byml_codec.dump(pouch)
@@ -429,6 +532,16 @@ def build_repeatable_packs(records, read_pack, read_raw, tables):
         components['EventPerformerRef'] = '?' + event_param
         also = (SOUL_FLAG_PREFIX + record['canonical'],) if record['canonical'].startswith('Item_Soul_') else ()
         files[event_member] = instrument_pickup_event(event, record['flag'], event_name, record['canonical'], also)
+        # A respawned source drops nothing more once the check is collected.
+        behaviour = resolve_components({**files, old_path: byml_codec.dump(document)}, standard, byml_codec)
+        if behaviour.get('AIInfoRef') != DROP_AI_INFO:
+            raise ValueError('First-collection pickup without the native drop AI: ' + record['actor'])
+        root = record['actor'] + '.root'
+        ai_info = f'AI/AIInfo/{record["actor"]}.engine__actor__AIInfo.bgyml'
+        files['AI/' + root + '.ainb'] = instrument_drop_ai(drop_ai, record['flag'], root, event)
+        files[ai_info] = byml_codec.dump({'endian': '<', 'version': 7,
+                                          'root': {'RootAIRef': 'Work/AI/Root/' + root + '.ain'}})
+        components['AIInfoRef'] = '?' + ai_info
         files[f'Actor/{record["actor"]}.engine__actor__ActorParam.bgyml'] = byml_codec.dump(document)
         new['Pack/Actor/' + record['actor'] + '.pack.zs'] = (byml_codec.build_sarc(files), template)
         _alias_rows(tables, standard, record['actor'])
@@ -546,44 +659,14 @@ def limit_shop_stock(pack_raw, slots):
 
 
 def patch_repeatable_sources(records, maps, raw_maps):
-    """Select first/randomized and subsequent/vanilla sources with saved flags.
+    """Add the sold out boards of shuffled shelves. Returns the changed maps.
 
-    Call AFTER normal map reward patches. The original actor and its links/hash
-    remain the first source. The fallback is a full copy of vanilla data,
-    including absence of an explicit drop and native drop-table settings.
+    Shuffled pots, rocks and other sources keep their map entry as it is, but for
+    their drop: no Presence and no vanilla copy. The game remembers a broken source
+    by its hash (its Bool64bitKey) until the scene changes; a copy under another
+    hash, or a source under a Presence condition, came back while the area stayed loaded.
     """
-    documents, originals, seen = {}, {}, set()
-    for record in records:
-        for variant in record['variants']:
-            resource, index = variant['resource'], variant['index']
-            if (resource, index) in seen:
-                continue
-            seen.add((resource, index))
-            if resource not in documents:
-                documents[resource] = byml_codec.load(raw_maps.get(resource, maps[resource]['raw']))
-                originals[resource] = byml_codec.load(maps[resource]['raw'])['root']['Actors']
-            actors = documents[resource]['root']['Actors']
-            first = actors[index]
-            original = originals[resource][index]
-            if variant['native_once']:
-                continue
-            if first.get('Presence') or original.get('Presence'):
-                raise ValueError('Presence already modified on a repeatable source.')
-            first['Presence'] = {'FlagName': record['flag'], 'IsNegation': True, 'IsCheckLazy': PRESENCE_LAZY}
-            fallback = copy.deepcopy(original)
-            used = {int(actor['Hash']) for actor in actors if 'Hash' in actor}
-            ident = variant['fallback_hash']
-            if ident in used:
-                raise ValueError('Source hash collision for the return to the original loot.')
-            fallback['Hash'] = byml_codec.U64(ident)
-            for link in fallback.get('Links', []):
-                for key in ('Src', 'Dst'):
-                    if link.get(key) == original['Hash']:
-                        link[key] = byml_codec.U64(ident)
-            if isinstance(fallback.get('Phive', {}).get('Placement'), dict):
-                fallback['Phive']['Placement']['ID'] = byml_codec.U64(ident)
-            fallback['Presence'] = {'FlagName': record['flag'], 'IsNegation': False, 'IsCheckLazy': PRESENCE_LAZY}
-            actors.append(fallback)
+    documents = {}
     for record in records:
         for shelf in record.get('shelves', []):
             resource = shelf['resource']
@@ -597,15 +680,12 @@ def patch_repeatable_sources(records, maps, raw_maps):
 
 
 def register_repeatable_flags(raw, records):
-    """Add saved collection flags and registered fallback actor keys.
+    """Add the saved collection flag of each record (an 8-byte typed Bool).
 
-    Bool64bitKey is one shared sparse set of true uint64 keys in progress.sav:
-    each additional possible key reserves 8 payload bytes, with no new typed
-    hash/value-table record. Ordinary Bool reserves an 8-byte typed record.
     Returns (raw_GameData, summary). No names or rewards are stored in saves.
     """
     if not records:
-        return raw, {'bools': [], 'bool64': [], 'saved_bytes_added': 0}
+        return raw, {'bools': [], 'saved_bytes_added': 0}
     document = byml_codec.load(raw)
     data, meta = document['root']['Data'], document['root']['MetaData']
     previous_saved_size = meta['AllDataSaveSize']
@@ -614,8 +694,7 @@ def register_repeatable_flags(raw, records):
                           and e.get('ResetTypeValue') == 8 and e.get('DefaultValue') is False), None)
     if bool_template is None:
         raise ValueError('Saved collection flag template missing.')
-    key_templates = {int(e['Hash']): e for e in data['Bool64bitKey']}
-    added_bool, added_key = [], []
+    added_bool = []
     for record in records:
         value = int(record['flag_hash'])
         if value != murmur3(record['flag']) or value in known:
@@ -630,25 +709,5 @@ def register_repeatable_flags(raw, records):
         meta['AllDataSaveSize'] += 8
         meta['AllDataSaveOffset'] += 8
         added_bool.append(value)
-        for variant in record['variants']:
-            if variant['native_once']:
-                continue
-            original = key_templates.get(variant['original_hash'])
-            if original is None:
-                continue
-            key = int(variant['fallback_hash'])
-            if key in added_key:
-                continue
-            if key in known:
-                raise ValueError('Source key collision for the return to the original loot.')
-            entry = copy.deepcopy(original)
-            entry['Hash'] = byml_codec.U64(key)
-            data['Bool64bitKey'].append(entry)
-            known.add(key)
-            index = entry.get('SaveFileIndex', -1)
-            if index >= 0:
-                meta['SaveDataSize'][index] += 8
-                meta['AllDataSaveSize'] += 8
-            added_key.append(key)
-    return byml_codec.dump(document), {'bools': added_bool, 'bool64': added_key,
+    return byml_codec.dump(document), {'bools': added_bool,
                                        'saved_bytes_added': meta['AllDataSaveSize'] - previous_saved_size}

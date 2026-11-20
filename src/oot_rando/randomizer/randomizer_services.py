@@ -42,14 +42,20 @@ def read_artifact(directory):
                        ('0.3.0', 'native-environment-v1'), ('0.4.0', 'ap-glitchless-v1'),
                        ('0.5.0', 'ap-glitchless-v2'), ('0.6.0', 'ap-glitchless-v2'),
                        ('0.7.0', 'ap-glitchless-v3'), ('0.8.0', 'ap-glitchless-v4'),
-                       ('0.9.0', 'ap-glitchless-v5')}:
+                       ('0.9.0', 'ap-glitchless-v5'), ('0.10.0', 'ap-glitchless-v5'),
+                       ('0.11.0', 'ap-glitchless-v5'), ('0.11.1', 'ap-glitchless-v5'),
+                       ('0.11.2', 'ap-glitchless-v5'), ('0.11.3', 'ap-glitchless-v5'),
+                       ('0.11.4', 'ap-glitchless-v5'), ('0.10.1', 'ap-glitchless-v5'),
+                       ('0.12.0', 'ap-glitchless-v5')}:
         raise ValueError('Unsupported generator version.')
-    if version[0] in {'0.2.0', '0.3.0', '0.4.0', '0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0'}:
+    if version[0] in {'0.2.0', '0.3.0', '0.4.0', '0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0', '0.10.0', '0.11.0', '0.11.1', '0.11.2', '0.11.3', '0.11.4', '0.10.1', '0.12.0'}:
         settings.validate_supported()
-    if version[0] in ('0.1.0', '0.4.0'):
+    if version[0] in ('0.1.0', '0.4.0', '0.9.0', '0.10.0', '0.11.0', '0.11.1', '0.11.2', '0.11.3', '0.11.4', '0.10.1'):
         # Early 0.1 manifests predate the categories field and 0.4 manifests the
         # non-chest options. Do not inject defaults into their historical seed
         # identity while validating their settings.
+        # Earlier full settings predate newer option defaults; inserting those
+        # defaults must not change an existing artifact's identity.
         identity = hashlib.sha256(json.dumps({'generator': version[0], 'adapter': version[1],
                                               'settings': manifest['settings']}, ensure_ascii=False,
                                              sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -90,6 +96,34 @@ def read_artifact(directory):
                 or tracking.get('seed_id') != manifest['seed_id'] or tracking.get('schema_version') != 1):
             raise ValueError('Tracking data modified or belonging to another seed.')
     return manifest, checks
+
+
+def regeneration_settings(manifest, current_version=None):
+    """Settings to generate an accepted seed again with this version of the generator, or None.
+
+    ``manifest`` must come from :func:`read_artifact`, which refuses the seeds this version no
+    longer supports. A seed made by the current generator needs no regeneration. The settings
+    (seed name, full options, categories, Archipelago patch...) are read back unchanged, so
+    the regenerated seed keeps its name and settings; only its identity follows the new
+    generator version."""
+    if current_version is None:
+        from oot_rando.randomizer.randomizer_core import GENERATOR_VERSION as current_version
+    if not isinstance(manifest, dict) or manifest.get('generator_version') == current_version:
+        return None
+    try:
+        return Settings.from_dict(manifest['settings']).validate_supported()
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def installed_regeneration(directory, current_version=None):
+    """Settings to regenerate the seed installed in ``directory``, or None when it is up to
+    date, missing, or no longer accepted by this version (see :func:`regeneration_settings`)."""
+    try:
+        manifest, _ = read_artifact(directory)
+    except (OSError, KeyError, TypeError, ValueError):
+        return None
+    return regeneration_settings(manifest, current_version)
 
 
 def is_randomizer_seed(directory):

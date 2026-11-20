@@ -11,18 +11,21 @@ and logic are checked statically (`python -m oot_rando verify`); items marked
 |---|---|---|
 | **Chests** (`shuffle_chests`) | every chest, major items included | `Dynamic.Drop__DropActor` of the chest |
 | **Gold Skulltulas** (`tokensanity`: dungeons / overworld / all) | 100 skulltulas = the 100 AP locations | `Drop__DropActor` added to the enemy (native instance parameter); every item but the token is dropped by a pickup built on the token (see below) |
-| **Shops** (`shopsanity`: 1 to 4 items per shop, or random) | 64 stalls, masks excluded | stall `Gyaml`; fixed price of 10 rupees; bought once |
+| **Shops** (`shopsanity`: 1 to 8 items per shop, random 1–4, or Whole shops) | 64 stalls across 8 shops, masks excluded | stall `Gyaml`; fixed price of 10 rupees; bought once |
 | **Freestanding items** (`shuffle_freestanding_items`) | non-respawning heart pieces, rupees and hearts | item `Gyaml` |
 | **NPC gifts and minigames** (`shuffle_npc_gifts`) | 29 gifts (`extra_sources.NPC_GIFTS`) | item parameter of the event (`ActorName`, `ReveiveItem`…) via `evfl` |
 | **Bosses and dungeon rewards** (`shuffle_boss_rewards`) | 3 stones, 6 medallions (Rauru's included), 8 boss heart containers | hand-over event (`GetPouchContentByActorName`); placed heart container `Gyaml` |
 | **Great Fairies** (`shuffle_great_fairies`) | Din, Farore, Nayru, magic, double magic, double defense | `ActorName` of the fairy cutscene |
-| **Quest rewards** (`shuffle_quest_rewards`) | Saria's ocarina, Ocarina of Time, Zelda's Letter, Light Arrows, Biggoron Sword | `ActorName` of the cutscene; ocarinas: also the silent pouch add |
+| **Quest rewards** (`shuffle_quest_rewards`) | Saria's ocarina, Ocarina of Time, Zelda's Letter (only with a shuffled child trade quest: it takes the Weird Egg's slot), Light Arrows, Biggoron Sword, Ruto's Letter (the bottle in Lake Hylia) | `ActorName` of the cutscene; ocarinas: also the silent pouch add; Ruto's Letter: `Gyaml` of the bottle pickup |
 | **Pots, crates, beehives, bushes, rocks** | explicit-drop objects (rupee, heart); empty rocks (≈ 195, no drop table) | existing `Drop__DropActor`, or added on rocks whose pack declares it as an instance parameter |
+| **Trees** (`shuffle_trees`) | 52 `Obj_Tree_*` (Hyrule Field 39, Kokiri Forest 8, castle, Kakariko, market); trees with an explicit `None` drop table and Colossus palms stay vanilla | `Drop__DropActor` added (instance parameter of the tree pack); falls when Link rolls into the tree |
 | **Business Scrubs** (`shuffle_scrubs`) | single-sale remake scrubs only: stick upgrade (`LW Deku Scrub Near Bridge`), nut upgrade (`LW Deku Scrub Grotto Front`), field and crater heart pieces | `ActorName` and `Price` of each `SimpleShopSub_Scrub_Business_OneTime` call in `Enemy_Scrub_Business_Common` |
 
-Never changed: the whole adult trade quest up to the Biggoron Sword, songs, the
+| **Songs** (`shuffle_song_items`) | the 12 song cutscenes (`Dm_MelodyGet_*`) | silent add of the cutscene (`GetPouchContentByActorName`); see *Songs* below |
+
+Never changed: the whole adult trade quest up to the Biggoron Sword, the
 child trade (egg, letter, masks), cows, the Gerudo card, beans, the lake Fire
-Arrows. Repeatable sources (pots, crates, beehives, bushes, rocks) give their
+Arrows. Repeatable sources (pots, crates, beehives, bushes, rocks, trees) give their
 shuffled reward only once (`repeatable_adapter.py`), then go back to their vanilla loot.
 
 ## Starting inventory, item pool, removed keys
@@ -30,8 +33,8 @@ shuffled reward only once (`repeatable_adapter.py`), then go back to their vanil
 * **Starting inventory** (`start_inventory_from_pool`, AP name): items held from the
   start, given silently at the end of the opening (`event_patch.add_pouch_items`). A
   copy found in the item pool is replaced by rupees; progressive copies take the
-  lowest levels of their family. Songs, tunics and trade items have no pouch actor
-  yet. In a multiworld, the apworld's own `start_inventory_from_pool` is used.
+  lowest levels of their family. Songs are given the same way (`Item_Melody_*`);
+  tunics and trade items have no pouch actor yet. In a multiworld, the apworld's own `start_inventory_from_pool` is used.
 * **Item pool** (`item_pool_value`): plentiful (one extra copy of each major
   non-progressive item, replacing filler), scarce (at most 3 bottles, half the
   hearts), minimal (one bottle, no hearts, double defense or capacity upgrades). The
@@ -41,6 +44,14 @@ shuffled reward only once (`repeatable_adapter.py`), then go back to their vanil
   (`event_patch.add_start_values`, `key_adapter.start_dungeon_values`):
   `IsGetMap`/`IsGetCompass`, `SmallKeyNum` = the AP key count, `IsGetBossKey` of the
   five temples. Their chests hold rupees; the logic holds the keys from the start.
+  **Not validated in game.**
+* **Day/night cycle from the start**: vanilla holds the clock until Kaepora's first
+  Hyrule Field arrival (`Goto_HyruleCastle_Kaepora_00`). Its saved effects
+  (`HyruleField_ArriveEntrance`, `HavePlayedEvent.Dm_HrlField_0000/0005/0010`, the
+  challenge menu) are written at the end of the opening, so the scene never plays
+  (no black screen) and the clock runs from the start, child castle skipped or not.
+  The amiibo menu it gave is a starting item, and its `Goto_HyruleCastle` `Step02`
+  follows the Deku Tree escape (`owl_advice.field_step_after_escape`).
   **Not validated in game.**
 * **Night skulltulas without Sun's Song** (AP logic option
   `logic_no_night_tokens_without_suns_song`): `at_night` of the GS Token locations
@@ -53,6 +64,54 @@ shuffled reward only once (`repeatable_adapter.py`), then go back to their vanil
   the night or Sun's Song), so the game is only more permissive. **Not validated in game.**
 * **Fast chests** (`fast_chests`): same patch as the "chests without cutscene" skip.
 
+## Songs (`song_adapter.py`)
+
+Songs are pouch actors (`Item_Melody_<song>`, a rupee model as placeholder). Each
+song cutscene teaches its melody through `Dm_SY_Ocarina/LearningOcarina*` (the NPC
+plays it, the player plays it back, then `LearningOcarinaPlayAuto`/`…ForSeek` adds
+the melody of the current `MelodyType`) and also adds it silently
+(`GetPouchContent/GetPouchContentByActorName`).
+
+* **Modes**: vanilla; shuffled among the song locations; song locations and
+  dungeon rewards; anywhere a cutscene can give them (song locations, dungeon
+  rewards, great fairies, story rewards; the matching options must be on); anywhere,
+  chests and pickups too (`everywhere`: also chests, freestanding spots, pots, crates,
+  gold skulltulas… when shuffled). Never in shops or NPC gifts. Never at Queen Gohma
+  either (her gift is given back after the cutscene with a pose).
+* **Harp in the song's colour** (`song_models.py`, `everywhere` only): a song in a
+  chest or as a pickup is held up or stands in the world, so it gets the model of
+  Sheik's harp. Each placed song has its own copy of the harp
+  (`Model/Item_Harp_<song>.Item_Harp_Sheik.bfres`) whose material `Mt_Harp_Sheik`
+  has its six colour parameters (`ns_param_color0`–`5`, white in the game) set to the
+  song's colour of the ocarina menu; its ModelInfo and ActorInfo row name that
+  project, and its pickups (`Obj_Rando_Item_Melody_*`) copy them. The pickup is
+  raised by the harp's depth below its origin (0.25 m).
+* **Text only**: a song is given by the silent add followed by
+  `GetPouchContent/DisplayGetByActorName`, the game's get window without pose
+  ("You learned Saria's Song!" and its caption; the same call Saria's ocarina gift
+  uses). A pose-based get (`Dm_SY_GetInEvent/*`, great fairies) becomes the silent
+  add. A source that already has its own display call (Ocarina of Time, Ruto's
+  sapphire) gets no second window. Received from another world: same hand-over.
+* **Every song cutscene** (songs shuffled or not): the NPC no longer plays the melody
+  to memorise (`LearningOcarinaPlayExample` only sets the melody, `RandoLearningPrepare`);
+  the player still plays it back, then Link's tune (Sheik's duet for the warp songs)
+  plays the notes just input: it stays silent without them (tested in game 19/11).
+* **Song location giving another item**: the end of the teaching plays Link's tune
+  without adding the melody (`Rando*` entries added to `Dm_SY_Ocarina`), the placed
+  item is added silently and its get window shown. Sheik in Crater's direct write of
+  `IsGet.Item_Melody_FireBolero` follows the placed song (or is removed). The NPC's
+  lines still speak of the vanilla song.
+* **Windmill**: the adult windmill man plays the Song of Storms cutscene only while
+  `IsGet.Item_Melody_StormSong` is false; his four checks read the check's own
+  collection flag instead. The other song cutscenes start from quest steps.
+* **Not validated in game.**
+
+## Big Poes to bring back (`big_poes.py`)
+
+`big_poe_count` (1 to 10): the collector (`Npc_Hylia_048_BottleShop`) compares the
+points held before a sale (100 per Big Poe): `Event70` against 100 × (N − 1)
+instead of 900, `Event265` lets those points through. **Not validated in game.**
+
 ## Item forms and derived actors (`item_forms.py`)
 
 The remake gives an item through three kinds of actors: `Item_*` (chest, event),
@@ -61,7 +120,8 @@ The remake gives an item through three kinds of actors: `Item_*` (chest, event),
 a shop…), the generator builds `Obj_Rando_<item>` (behaviour of the gold token,
 model and content of the item) or `Shop_Rando_<item>` (behaviour of an arrow
 stall), with their RSDB rows and RESTBL entry. AP "Buy …" purchases never leave
-the shops and keep at least one copy on sale.
+the shops. Modes 1–8 and random keep at least one copy of each purchase used by the
+logic on sale; Whole shops shuffles all 64 slots and relies on world refills instead.
 
 Gold skulltula drops: the skulltula hands its saved `Bool64bitKey` row to its drop
 (blackboard `GoldTokenGmdHash`), and only the token's AI writes it, when the get
@@ -71,6 +131,20 @@ token is therefore built on the token: `<native pickup>_GS` (e.g. `Obj_Rupee_Red
 names of REALAZK's token kits, at most 25 characters) or `Obj_Rando_<item>`. Their
 pouch sets `PlayGetEventManyTimes` and `IsPlayGetEventPouchMax`, so the get event
 plays on every pickup, even at full capacity. The tracker reads the same row.
+
+Pots, bushes, rocks, crates, beehives and trees: their first-collection pickup
+(`Obj_RandoOnce_*`) is built on a native falling drop (`Obj_DekuNut`), not
+on the token. The token's AI keeps it standing where it spawns
+(`ExecuteKeepStandingPosture`), so an item shaken from a tree or out of a pot thrown at
+a wall hung in the air. Native drops share `Obj_Item_Base`'s `DropItem` AI
+(`ExecuteDropBound`: fall, bounce, land), physics, blackboard and death.
+The source itself keeps its map entry, but for its drop: no `Presence` and no vanilla
+copy. The game remembers a broken pot, rock, crate, bush or beehive by its hash (a
+`Bool64bitKey`) until the scene changes; a copy under another hash, or a source under a
+`Presence` condition, came back while the area stayed loaded. Each pickup runs its own
+clone of the `DropItem` AI: when it spawns, it reads its check flag and deletes itself
+once the check is collected. A collected source therefore drops nothing afterwards
+(not its vanilla rupee or heart).
 
 ## Dungeon-specific keys (`key_adapter.py`)
 
@@ -140,7 +214,7 @@ the dialogue box stayed empty and blocked the game. A new save is required.
   locations are reachable.
 - Skulltulas, stalls: conservative group per zone. The remake puts Lake Hylia and
   Lon Lon Ranch in the Hyrule Field maps; the matching accounts for it.
-- Pots, bushes, rocks, crates, beehives, lying rupees: rule of the **whole zone**.
+- Pots, bushes, rocks, crates, beehives, trees, lying rupees: rule of the **whole zone**.
 - A source found only in the child maps (`*_Child_*`) or only in the adult maps
   (`*_Adult_*`) is collected at that age: each of its AP locations that this age can
   ever reach must be reachable **at that age** (`Child|`/`Adult|` members, the AP
@@ -229,6 +303,26 @@ outside the maps are not covered (except chest events).
 10. **Progressive items**: find the higher copy of a family first (e.g. a slingshot
     token after the bullet bag was expected): the first one found gives the slingshot,
     the next one the bag; a native chest found later never takes capacity away.
+11. **Songs**: a song cutscene giving another song shows only its text and adds the
+    right song (menu, playable); one giving an item does not add its melody; no NPC
+    plays the melody to memorise, the player plays it back, Link's tune plays; a song
+    at a great fairy or a dungeon reward shows its text, nothing held; the windmill
+    still plays its cutscene once Song of Storms was found elsewhere.
+12. **Big Poes**: with 3 to bring back, the collector rewards the third sale.
+13. **Skip child Hyrule Castle** (`skip_child_zelda`): new game without Zelda's Letter
+    and Lullaby (found elsewhere, the lullaby possibly as a harp in a chest); with the forest closed, the Kokiri guard and Mido still wait for the Deku
+    Tree; Saria teaches her song in the meadow; the Kakariko gate opens with the letter;
+    Talon and Malon are at Lon Lon Ranch (Epona's Song, the cucco game); Kaepora's first
+    field talk does not move the castle quest back; with the three stones, Zelda flees
+    and the Door of Time opens.
+14. **Pickup visuals**: progressive slingshot, bow and hookshot copies use their
+    native item poses. Gold Skulltula drops no longer use the skull-shaped aura.
+    Items without an effect borrow the moat ocarina glow; check visibility under
+    water and confirm it does not obscure the item. Resource tests pass; appearance
+    still needs an in-game check.
+15. **Child Death Mountain Crater**: child actors remain vanilla and are excluded
+    from both shuffle candidates and logic. Adult copies remain eligible. Child
+    bean planting is also out of logic, including for the adult volcano heart.
 
 Known limits: some NPCs decide "already given" from the vanilla item (e.g. silver
 scale for the diving game) and can give their new item again; shop texts of

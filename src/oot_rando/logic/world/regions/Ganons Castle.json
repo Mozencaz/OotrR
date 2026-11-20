@@ -18,7 +18,7 @@
   "region_name": "Ganons Castle Forest Trial",
   "dungeon": "Ganons Castle",
   "locations": {
-   "Ganons Castle Forest Trial Chest": "is_adult or Slingshot or Sticks or Kokiri_Sword or can_use(Dins_Fire)"
+   "Ganons Castle Forest Trial Chest": "has_adult_sword or can_use(Slingshot) or can_use(Sticks) or can_use(Kokiri_Sword) or can_use(Dins_Fire)"
   },
   "exits": {
    "Ganons Castle Forest Trial Ending": "can_use(Fire_Arrows) or (can_use(Dins_Fire) and (can_use(Bow) or can_use(Hookshot)))"
@@ -41,8 +41,8 @@
   "locations": {
    "Ganons Castle Water Trial Left Chest": "True",
    "Ganons Castle Water Trial Right Chest": "True",
-   "Blue Fire": "has_bottle and (is_adult or Sticks or Kokiri_Sword or has_explosives)",
-   "Fairy Pot": "Blue_Fire and (is_adult or has_explosives or can_use(Dins_Fire))"
+   "Blue Fire": "has_bottle and (has_adult_sword or can_use(Sticks) or can_use(Kokiri_Sword) or has_explosives)",
+   "Fairy Pot": "Blue_Fire and (has_adult_sword or has_explosives or can_use(Dins_Fire))"
   },
   "exits": {
    "Ganons Castle Water Trial Ending": "Blue_Fire and can_use(Megaton_Hammer)"

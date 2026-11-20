@@ -17,7 +17,9 @@ every cutscene and dialogue they apply to:
 * the area presentation cutscenes (flow-driven, ``AREA_PRESENTATIONS``) receive
   the native ``EventTriggerSkipAcceptStart`` … ``EventTriggerSkipEnd`` window
   used by the great fairy fountains, and their non-pausing rows use ``FlowchartEvent``;
-  their area name frame opens after the window, only when it was not skipped;
+  their area name frame opens after the window, only when it was not skipped.
+  :mod:`oot_rando.patching.area_presentations` (always on) then pre-marks or
+  auto-skips every one of them;
 * no skip window covers a flow that talks (``DIALOGUE_ACTIONS``);
 * optionally, chests skip their opening performance (``quick_chest`` for the big
   ones, ``quick_small_chest`` for the small ones) while Link still holds the item up.
@@ -279,6 +281,19 @@ DIALOGUE_ACTIONS = ('EventTalk', 'EventTalkWithInstanceNameLabel', 'EventPoeSpir
 # skipped it stayed on screen (11/11). It now opens once the presentation is over,
 # only when it was watched to the end.
 LOCATION_UI_ACTION = 'EventTriggerOpenLocationUI'
+# That frame also marks the area visited (``IsVisitLocation.<area>``): the map menu
+# shows "???" for an area never marked (Discord 16/11, every skipped presentation:
+# Hyrule Field, Deku Tree... while Kokiri Forest, never skipped, had its map). Saves
+# compared in game: vanilla sets IsVisitLocation.InsideTheDekuTree, the seed did not.
+LOCATION_PREFIX, LOCATION_SUFFIX = 'Work/Location/', '.game__location__Location.gyml'
+
+
+def location_visit_flag(location_name):
+    """``IsVisitLocation.<area>`` of a location UI parameter (``Work/Location/<area>....gyml``)."""
+    if not (isinstance(location_name, str) and location_name.startswith(LOCATION_PREFIX)
+            and location_name.endswith(LOCATION_SUFFIX)):
+        raise ValueError('Unexpected area name: ' + repr(location_name))
+    return 'IsVisitLocation.' + location_name[len(LOCATION_PREFIX):-len(LOCATION_SUFFIX)]
 
 
 def dialogue_actions(chart):
@@ -295,13 +310,26 @@ def flow_path(name):
     return FLOWS + name + '.bfevfl.zs'
 
 
-def add_skip_window(raw):
+# Screen after a skip: the game fades out when + is pressed and jumps to SkipEnd.
+# ``FadeInType 0`` (fairy fountains) leaves the fade-in to what comes next, a camera
+# cut of the rest of the scene. A presentation has nothing left after its window, so
+# the screen stayed black (19/11). As the Water Temple's skippable scenes do
+# (Dm_WaterTemple_0020/0021/0022: ``FadeInType 2``, then on the skipped case of
+# ``EventQueryIsEventSkipedMostRecent`` an ``EventEventFadeIn``), the window now
+# fades the screen back in itself when it was skipped.
+SKIP_END_FADE_IN_TYPE = 2
+SKIP_FADE_IN_PARAMS = {'IsNoPlayAnime': False, 'Color': 0, 'Length': 1, 'IsWaitEnd': False}
+
+
+def add_skip_window(raw, fade_in=True):
     """Wrap every root entry of a cutscene flow in a native skip window.
 
     ``EventSystemActor.EventTriggerSkipAcceptStart`` becomes the entry's first
     event; ``EventTriggerSkipEnd`` follows the last join of the entry's top-level
     chain (the cleanup after it — camera reset, ducking release — still runs),
-    or ends the chain when it has no join. Returns (bytes, report).
+    or ends the chain when it has no join. ``fade_in``: a skip fades the screen
+    back in (see :data:`SKIP_END_FADE_IN_TYPE`; False rebuilds seeds made before
+    19/11). Returns (bytes, report).
     """
     from evfl.actor import Actor
     from evfl.common import ActorIdentifier, StringHolder
@@ -338,8 +366,33 @@ def add_skip_window(raw):
                for name in ('EventTriggerSkipAcceptStart', 'EventTriggerSkipEnd', 'EventWait')}
     location_uis = [e for e in chart.events if isinstance(e.data, ActionEvent)
                     and e.data.actor_action.v.v == LOCATION_UI_ACTION]
-    skipped_query = holder(actor.queries, 'EventQueryIsEventSkipedMostRecent') if location_uis else None
+    skipped_query = (holder(actor.queries, 'EventQueryIsEventSkipedMostRecent')
+                     if location_uis or fade_in else None)
+    ui_owner = None
+    if fade_in:
+        ui_actor = next((a for a in chart.actors if a.identifier.name == 'UISystemActor'
+                         and a.identifier.sub_name == ''), None)
+        if ui_actor is None:
+            ui_actor = Actor()
+            ui_actor.identifier = ActorIdentifier('UISystemActor')
+            ui_actor.concurrent_clips = 1
+            ui_actor.params = Container()
+            ui_actor.params.data = dict(GAMEDATA_ACTOR_PARAMS)
+            chart.actors.append(ui_actor)
+        ui_owner = (ui_actor, holder(ui_actor.actions, 'EventEventFadeIn'))
     location_names = {}   # deferred frame event -> (LocationName, (actor, action))
+
+    def gamedata_owner():
+        found = next((a for a in chart.actors if a.identifier.name == 'GameDataActor'
+                      and a.identifier.sub_name == ''), None)
+        if found is None:
+            found = Actor()
+            found.identifier = ActorIdentifier('GameDataActor')
+            found.concurrent_clips = 1
+            found.params = Container()
+            found.params.data = dict(GAMEDATA_ACTOR_PARAMS)
+            chart.actors.append(found)
+        return found, holder(found.actions, 'EventTriggerSetGameDataBool')
 
     def new_event(name, action, params, owner=None):
         event = Event()
@@ -391,8 +444,15 @@ def add_skip_window(raw):
             ui.data.actor, ui.data.actor_action = make_rindex(actor), make_rindex(actions['EventWait'])
             ui.data.params.data = {'IsWaitEnd': True, 'Frames': 1}
             expected[ui.name] = dict(ui.data.params.data)
+        visit = location_visit_flag(name)
         for index, end in enumerate(ends):
             after = end.data.nxt.v if end.data.nxt is not None else None
+            # The frame is what marks the area visited for the map menu: a skipped
+            # presentation still marks it (else the map shows "???").
+            visited = new_event(f'RandoLocationVisit_{entry_name}_{index}', None,
+                                {'GameDataName': visit, 'Value': True, 'Index': -1}, gamedata_owner())
+            visited.data.nxt = make_index(after)
+            after = visited
             shown = new_event(f'RandoLocationUI_{entry_name}_{index}', None, {'LocationName': name}, owner)
             shown.data.nxt = make_index(after)
             check = Event()
@@ -405,7 +465,7 @@ def add_skip_window(raw):
             chart.events.append(check)
             expected[check.name] = None
             end.data.nxt = make_index(check)
-        return {'location': name, 'deferred': sorted(e.name for e in uis)}
+        return {'location': name, 'deferred': sorted(e.name for e in uis), 'visit': visit}
     def anchors(first, seen):
         """Where the window closes: after the last top-level join of the chain; a
         branch closes it in each of its cases. (Until 11/11 a branch after a join
@@ -450,7 +510,8 @@ def add_skip_window(raw):
         entry_ends, records = [], []
         for index, anchor in enumerate(ends):
             end = new_event(f'RandoSkipEnd_{entry.name}_{index}', 'EventTriggerSkipEnd',
-                            {'SpecialEventActionType': 4, 'FadeInType': 0})
+                            {'SpecialEventActionType': 4,
+                             'FadeInType': SKIP_END_FADE_IN_TYPE if fade_in else 0})
             end.data.nxt = anchor.data.nxt
             anchor.data.nxt = make_index(end)
             entry_ends.append(end)
@@ -459,6 +520,22 @@ def add_skip_window(raw):
         if deferred:
             for record in records:
                 record['location_ui'] = deferred
+        if fade_in:
+            for index, (end, record) in enumerate(zip(entry_ends, records)):
+                after = end.data.nxt.v if end.data.nxt is not None else None
+                fade = new_event(f'RandoSkipFadeIn_{entry.name}_{index}', None, dict(SKIP_FADE_IN_PARAMS), ui_owner)
+                fade.data.nxt = make_index(after)
+                check = Event()
+                check.name, check.data = f'RandoSkipFadeCheck_{entry.name}_{index}', SwitchEvent()
+                check.data.actor, check.data.actor_query = make_rindex(actor), make_rindex(skipped_query)
+                check.data.params = None
+                check.data.cases = {0: make_index(fade)}   # case 0 = skipped
+                if after is not None:
+                    check.data.cases[1] = make_index(after)
+                chart.events.append(check)
+                expected[check.name] = None
+                end.data.nxt = make_index(check)
+                record['fade_in'] = fade.name
         report += records
     if not report:
         raise ValueError('No cutscene entry to make skippable.')
@@ -475,6 +552,12 @@ def add_skip_window(raw):
             raise ValueError('Cutscene entry not attached to the skip window.')
         if events[record['after']].data.nxt.v.name != record['end']:
             raise ValueError('Misplaced skip window end.')
+        if fade_in:
+            check = events[record['end']].data.nxt.v
+            fade = check.data.cases[0].v
+            if (check.data.actor_query.v.v != 'EventQueryIsEventSkipedMostRecent'
+                    or fade.name != record['fade_in'] or fade.data.actor_action.v.v != 'EventEventFadeIn'):
+                raise ValueError('Skip window without its fade-in: ' + record['entry'])
     return result, report
 
 
@@ -1203,10 +1286,14 @@ def quick_small_chest(raw):
 # ``ActionGuide/ActionGuide``: it now first runs the vanilla ocarina sequence while
 # the Fairy Ocarina is in the pouch. ``OpenActionGuideSceen`` shows a guide once only
 # (``EventQueryHaveOpenedActionGuide``), so this happens on the get of the ocarina
-# itself — or, for a save that already holds it, on the next item get.
+# itself — or, for a save that already holds it, on the next item get. The Ocarina of
+# Time held alone runs it too.
 ACTION_GUIDE_FLOW = 'Event/EventFlow/ActionGuide.bfevfl.zs'
 OCARINA_GUIDE_ENTRY = 'OpenActionGuideSceenForOcarina'
 OCARINA_ACTOR = 'Item_Ocarina_Fairy'
+# The Ocarina of Time found first (no Fairy Ocarina) needs the same guide: it could
+# not be played before a reload (15/11, Discord report).
+OCARINA_OF_TIME_ACTOR = 'Item_Ocarina_Time'
 
 
 def ocarina_guide_on_get(raw):
@@ -1241,7 +1328,7 @@ def ocarina_guide_on_get(raw):
         query = StringHolder('EventQueryIsExistInPouch')
         actor.queries.append(query)
     names = {e.name for e in chart.events}
-    if {'RandoOcarinaHeld', 'RandoOcarinaGuide'} & names:
+    if {'RandoOcarinaHeld', 'RandoOcarinaTimeHeld', 'RandoOcarinaGuide'} & names:
         raise ValueError('ActionGuide flow already modified.')
     guide = Event()
     guide.name, guide.data = 'RandoOcarinaGuide', SubFlowEvent()
@@ -1254,10 +1341,17 @@ def ocarina_guide_on_get(raw):
     held.data.actor, held.data.actor_query = make_rindex(actor), make_rindex(query)
     held.data.params = Container()
     held.data.params.data = {'Actor': OCARINA_ACTOR, 'Num': 1}
-    held.data.cases = {0: make_index(guide), 1: make_index(first)}
-    chart.events.extend([held, guide])
+    time_held = Event()
+    time_held.name, time_held.data = 'RandoOcarinaTimeHeld', SwitchEvent()
+    time_held.data.actor, time_held.data.actor_query = make_rindex(actor), make_rindex(query)
+    time_held.data.params = Container()
+    time_held.data.params.data = {'Actor': OCARINA_OF_TIME_ACTOR, 'Num': 1}
+    time_held.data.cases = {0: make_index(guide), 1: make_index(first)}
+    held.data.cases = {0: make_index(guide), 1: make_index(time_held)}
+    chart.events.extend([held, time_held, guide])
     entry.main_event = make_index(held)
     expected[held.name] = dict(held.data.params.data)
+    expected[time_held.name] = dict(time_held.data.params.data)
     expected[guide.name] = None
     stream = io.BytesIO()
     flow.write(stream)
@@ -1268,12 +1362,15 @@ def ocarina_guide_on_get(raw):
     events = {e.name: e for e in checked.flowchart.events}
     start = {e.name: e for e in checked.flowchart.entry_points}['ActionGuide'].main_event.v
     switch = events['RandoOcarinaHeld'].data
+    time_switch = events['RandoOcarinaTimeHeld'].data
     if (start.name != 'RandoOcarinaHeld' or switch.cases[0].v.name != 'RandoOcarinaGuide'
-            or switch.cases[1].v.name != first.name
+            or switch.cases[1].v.name != 'RandoOcarinaTimeHeld'
+            or time_switch.cases[0].v.name != 'RandoOcarinaGuide' or time_switch.cases[1].v.name != first.name
             or events['RandoOcarinaGuide'].data.nxt.v.name != first.name
             or events['RandoOcarinaGuide'].data.entry_point_name != OCARINA_GUIDE_ENTRY):
         raise ValueError('Ocarina guide wrongly chained.')
-    return result, {'entry': 'ActionGuide', 'guide': OCARINA_GUIDE_ENTRY, 'actor': OCARINA_ACTOR}
+    return result, {'entry': 'ActionGuide', 'guide': OCARINA_GUIDE_ENTRY,
+                    'actor': OCARINA_ACTOR, 'actors': [OCARINA_ACTOR, OCARINA_OF_TIME_ACTOR]}
 
 
 # Gifts handed over in a cutscene. Some cutscenes add their item with
@@ -1292,6 +1389,48 @@ def ocarina_guide_on_get(raw):
 # Dm_SY_GetInEvent (and its own sub-flows) in RSDB GameAnalyzedEventInfo, or it never
 # starts (user test 11/11: white screen on arriving in Kokiri Forest after Gohma):
 # event_info.add_subflow_dependencies, applied to every changed flow.
+# Saria's gift (Dm_Kokiri_0155, entry C01): vanilla shows the get window first
+# (Event58 -> Event77 GetPouchContent/DisplayGetByActorName -> Event78 -> fork Event26)
+# and only adds the ocarina in a branch of that fork (Event68, after the window). The
+# get window runs ActionGuide (key rings, progressive tokens, ...) before the item is
+# in the pouch, so a shuffled item there only took effect at the next item get
+# (Discord 16/11, 0.6.3: received with the Kakariko rooftop man's gift). The add now
+# comes first: Event58 -> Event68 -> Event77, and leaves the fork.
+SARIA_GIFT_FLOW = 'Event/EventFlow/Dm_Kokiri_0155.bfevfl.zs'
+SARIA_ADD, SARIA_DISPLAY, SARIA_BEFORE, SARIA_FORK = 'Event68', 'Event77', 'Event58', 'Event26'
+
+
+def saria_add_before_display(raw):
+    """Saria's gift added to the pouch before its get window. Returns (bytes, report)."""
+    import io
+    from evfl.util import make_index
+    from oot_rando.patching.event_patch import _flow, _snapshot
+    flow = _flow(raw)
+    events = {e.name: e for e in flow.flowchart.events}
+    expected = _snapshot(flow)
+    add, display = events.get(SARIA_ADD), events.get(SARIA_DISPLAY)
+    before, fork = events.get(SARIA_BEFORE), events.get(SARIA_FORK)
+    if (add is None or display is None or before is None or fork is None
+            or getattr(add.data, 'actor_action', None) is None
+            or add.data.actor_action.v.v != 'EventTriggerAddOrRemovePouchContent'
+            or getattr(display.data, 'entry_point_name', None) != 'DisplayGetByActorName'
+            or before.data.nxt.v is not display or add.data.nxt.v is not None
+            or add not in [f.v for f in fork.data.forks]):
+        raise ValueError('Unexpected Saria gift flow (already patched?).')
+    fork.data.forks = [f for f in fork.data.forks if f.v is not add]
+    add.data.nxt = make_index(display)
+    before.data.nxt = make_index(add)
+    stream = io.BytesIO()
+    flow.write(stream)
+    result = stream.getvalue()
+    checked = {e.name: e for e in _flow(result).flowchart.events}
+    if (_snapshot(_flow(result)) != expected or checked[SARIA_BEFORE].data.nxt.v is not checked[SARIA_ADD]
+            or checked[SARIA_ADD].data.nxt.v is not checked[SARIA_DISPLAY]
+            or checked[SARIA_ADD] in [f.v for f in checked[SARIA_FORK].data.forks]):
+        raise ValueError('Saria gift reordering failed.')
+    return result, {'add': SARIA_ADD, 'display': SARIA_DISPLAY}
+
+
 GIFT_AFTER_CUTSCENE = {
     'Event/EventFlow/Dm_Kokiri_0130.bfevfl.zs': {
         'event': 'Event22',
@@ -1904,6 +2043,50 @@ NOCTURNAL_SKULLTULA_MAPS = tuple(f'Banc/{folder}/{folder}_{variant}_Static.bcett
     ('KakarikoVillage', 'Adult'), ('KakarikoVillage', 'Child'), ('KokiriForest', 'Adult'),
     ('KokiriForest', 'Child'), ('ZoraFountain', 'Adult'), ('ZoraFountain', 'Child'),
     ('ZoraRiver', 'Adult'), ('ZoraRiver', 'Child')))
+
+
+# The map flag alone is not enough: every night-only skulltula (and its spider web) sits
+# in an AI group running this logic module, which DELETES the skulltula during the day
+# (node 0 ``ActorLogicEnemySkulltulaGold``, input ``Logic_Delete`` = node 2, the OR of
+# "day at load" and "day since the last night"). The module is shared by the 18 maps.
+NIGHT_SKULLTULA_MODULE = 'Logic/Gimmick_Nighttime_Skulltula_Gold_Appear_05a9.logic.module.ainb'
+_USES_DEFAULT = 1 << 23
+
+
+def keep_night_skulltulas_by_day(raw):
+    """Night-only gold skulltulas are never deleted by day. Returns (bytes, report).
+
+    ``Logic_Delete`` of the skulltula node becomes the constant ``false`` (same encoding
+    as its ``Logic_Create`` neighbour: no source node, "uses default" flag)."""
+    import copy
+    import struct
+    import ainb
+    original = ainb.AINB.from_binary(raw).as_dict()
+    nodes = original['Nodes']
+    inputs = nodes[0]['Parameters']['Inputs']['Bool'] if nodes else []
+    if (nodes[0].get('Name') != 'ActorLogicEnemySkulltulaGold' or len(inputs) < 3
+            or inputs[2]['Name'] != 'Logic_Delete' or (inputs[2]['Node Index'], inputs[2]['Output Index']) != (2, 1)
+            or nodes[2].get('Name') != 'OperateOR'):
+        raise ValueError('Unexpected night skulltula logic.')
+    header = struct.unpack_from('<29I', raw, 0)
+    io_offset = header[13]
+    bool_inputs = struct.unpack_from('<I', raw, io_offset + 8)[0]
+    if struct.unpack_from('<h', raw, _AINB_NODE_TABLE + 2)[0] != 0:
+        raise ValueError('Night skulltula node table misread.')
+    params = struct.unpack_from('<I', raw, _AINB_NODE_TABLE + 0x14)[0]
+    first = struct.unpack_from('<I', raw, params + 0x30 + 16)[0]
+    entry = bool_inputs + (first + 2) * 0x10
+    if struct.unpack_from('<hhII', raw, entry + 4) != (2, 1, 0, 0):
+        raise ValueError('Night skulltula delete input misread.')
+    result = bytearray(raw)
+    struct.pack_into('<hhII', result, entry + 4, -1, 0, _USES_DEFAULT, 0)
+    result = bytes(result)
+    expected = copy.deepcopy(original)
+    changed = expected['Nodes'][0]['Parameters']['Inputs']['Bool'][2]
+    changed.update({'Node Index': -1, 'Output Index': 0, 'Flags': ['Uses Default'], 'Default Value': False})
+    if ainb.AINB.from_binary(result).as_dict() != expected or len(result) != len(raw):
+        raise ValueError('The night skulltula patch changed more than its delete input.')
+    return result, {'module': NIGHT_SKULLTULA_MODULE, 'node': 0, 'input': 'Logic_Delete'}
 
 
 def is_nocturnal_skulltula(actor):

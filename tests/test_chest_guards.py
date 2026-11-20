@@ -45,8 +45,10 @@ class RealGameGuardTests(unittest.TestCase):
         # Gerudo Training Ground like-like room: chest in the alcove of the cracked wall.
         self.assertEqual(bombs, ['GerudoTrainingGround#3750231902048775592'])
         lens = [gid for gid, g in guarded.items() if LENS_GUARD in g]
-        self.assertEqual(len(lens), 10)
-        self.assertEqual(sum(gid.startswith('GerudoValley#') for gid in lens), 2)
+        # The child copy of GerudoValley#6205043616869463865 sits on the unreachable
+        # fortress bank (remake_world.inaccessible_child_actor): no longer a candidate.
+        self.assertEqual(len(lens), 9)
+        self.assertEqual(sum(gid.startswith('GerudoValley#') for gid in lens), 1)
 
 
 if __name__ == '__main__':

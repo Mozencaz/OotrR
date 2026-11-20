@@ -1,6 +1,6 @@
 # OoT Randomizer — Hookshot and emulator
 
-[![Latest release](https://img.shields.io/github/v/release/Mozencaz/OotrR?label=download)](https://github.com/Mozencaz/OotrR/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/Mozencaz/OotrR?label=download)](https://github.com/Mozencaz/OotrR/releases/latest) [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/dnqs4eRZC)
 
 **[Download the latest release](https://github.com/Mozencaz/OotrR/releases/latest)**
 (Windows `.zip` or Linux `.tar.gz`, portable, no installation).
@@ -46,8 +46,12 @@ the sources, it only points to the release page (use `git pull`).
 
 **Experimental versions:** tick *Use experimental versions (pre-releases)* in
 Setup to also be offered the GitHub pre-releases (`vX.Y.Z-beta.N`): new features
-first, possibly buggy. Untick it to go back: the next stable release replaces the
-experimental build.
+first, possibly buggy. Untick it to be offered the latest stable release, even when
+its version is lower than the experimental build.
+
+**Save Warp:** in the game's pause menu, open **System → Save Warp**, then save.
+Link returns to the dungeon entrance, to his house as a child outside dungeons,
+or to the Temple of Time as an adult. Cancel or B leaves the game where it was.
 
 The game file must hold the base game **and** update v131072 in one `.nup`; the
 order of the packages inside it does not matter.
@@ -69,7 +73,7 @@ stay visible; a manual fallback mark is possible without revealing the reward.
 Old seeds still open, but must be regenerated to get the newer metadata. The
 tracker refuses a save that does not carry the new-game marker of the selected seed.
 
-For pots, crates, beehives, bushes and rocks shuffled by the full mode, the
+For pots, crates, beehives, bushes, rocks and trees shuffled by the full mode, the
 randomized reward is limited to the first pickup. A private get event sets a
 persistent flag, then the source goes back to its native loot (a rock without
 vanilla loot gives nothing again). A guard forbids a second randomized reward
@@ -128,15 +132,18 @@ Code: [qol_patches.py](src/oot_rando/patching/qol_patches.py).
 |---|---|---|
 | **Skippable cutscenes** — intro (`Dm_Kokiri_0000`) | `SkipSetting = DisableSkip` removed | validated in game |
 | … other locked cutscenes | same removal: title screen demo (`Dm_Title_0005` and its six follow-ups), end credits (`Dm_StaffCredit_0005`) | to test |
-| … area and dungeon presentations (31 flows `Dm_<Zone>_0000`, `Goto_<Dungeon>`: fly-over + area name) | flow-driven cutscenes are only skippable between `EventSystemActor.EventTriggerSkipAcceptStart` and `EventTriggerSkipEnd` (native mechanism of the great fairy fountains): a window is added at the start and after the last junction; their `NoPauseEvent` rows → `FlowchartEvent` | to test |
+| **Area and dungeon presentations never play** (30 flows `Dm_<Zone>_0000`, `Goto_<Dungeon>`: fly-over + area name; always on) | [area_presentations.py](src/oot_rando/patching/area_presentations.py). 11 gated by a saved `HavePlayedEvent` flag that only picks between them and the normal arrival: the flag and the area's `IsVisitLocation` (map) are set at the opening (full randomizer). The 19 others (first arrivals that move a quest — Death Mountain Trail, Zora's Domain, Colossus, Market, Deku Tree, Goron City, Forest Temple, Training Ground, Crater —, BoolExp gates, `EventRequestActor` or quest-flow calls): a native skip window (`EventTriggerSkipAcceptStart` … `EventTriggerSkipEnd`, as the great fairy fountains) is entered and left on the first frame, quest steps inside it (`SageOfForest Step05`) still run; their `NoPauseEvent` rows → `FlowchartEvent` | statically verified; to test in game |
 | … automatic dialogues (12 `NPCStepStart` rows) | rows moved to `FlowchartEvent` | to test |
 | **Flow-driven cutscenes, up to their events** | the native skip *jumps* to `EventTriggerSkipEnd`. Each entry is cut into units (action, sub-flow, fork, branch): cosmetic actions are skippable; idempotent writes (constant flag, "has talked", absolute warp of Link, sound mode) are skippable when run on every path, then **replayed** after `SkipEnd` when the skip was used (`EventQueryIsEventSkipedMostRecent`); anything else (transition, pouch, quest, choice, unknown action…) is a barrier. Flows that talk are never covered (skipping Saria at the ladder crashed the game) | to test |
 | **Chests without cutscene** | `Dm_SY_Treasurebox/Success_`: `Success_PlayerPerform` (camera, Link's kick, spinning item, ~9 s) and the 90-frame wait are replaced by `/Open` (lid) then the item get and its window. `Dm_SY_TreasureboxSmall/Success_`: `/Open` (Link's opening animation, event cameras, Navi) is replaced by the lid's actions (not awaited), Link's get pose and `/Pack_ItemDisplay` | to retest |
 | **Ocarina found before the Deku Tree** (full randomizer) | `ActionGuide/ActionGuide` first runs `OpenActionGuideSceenForOcarina` when the Fairy Ocarina is in the pouch (guide shown once) | to test |
+| **Owl advice removed** (full randomizer) | tutorial flags are set at the opening; the first field conversation keeps its quest work; Death Mountain and Lake Hylia keep a single ride choice. The Dream World introduction unlocks the service silently | statically verified; to test in game |
+| **Skip child Hyrule Castle** (full randomizer, `skip_child_zelda`) | the opening replays the native quest requests the castle makes (`Goto_HyruleCastle` complete, `DoorOfTime` at Impa's send-off, `Get_StoneOfFire` at Kakariko) and sets Talon's wake-up flags; Zelda's Letter and Lullaby are shuffled elsewhere (the lullaby anywhere a song can be given); the castle's shuffled checks hold green rupees (Great Fairy apart); castle requests of earlier steps are skipped once the quest is complete ([child_castle_skip.py](src/oot_rando/patching/child_castle_skip.py)) | statically verified; to test in game |
 | **Turbo A** | holding X during a dialogue taps A (keyboard key bound to A in `hookshot_options.ini`) | always on |
 
-NPC conversations are not skippable (an earlier attempt crashed the game); turbo
-A speeds up their text instead. Presentation flows that write data or change map
+Other NPC conversations are not skippable (an earlier attempt crashed the game); turbo
+A speeds up their text instead. The owl patch bypasses specific advice triggers and keeps
+transport cleanup and Dream World functionality. Presentation flows that write data or change map
 (`Dm_Kokiri_0045`, `Dm_LakeHrl_0003/0005`, `Dm_LonLon_0010`) are left alone. Each
 patch is read back and compared semantically; `python -m oot_rando verify` reapplies
 the quality-of-life patches on the original flows.

@@ -8,14 +8,14 @@
   },
   "exits": {
    "SFM Forest Temple Entrance Ledge": "True",
-   "Forest Temple Central Area": "is_adult or can_child_attack or Nuts"
+   "Forest Temple Central Area": "can_adult_attack or can_child_attack or Nuts"
   }
  },
  {
   "region_name": "Forest Temple Central Area",
   "dungeon": "Forest Temple",
   "locations": {
-   "Forest Temple First Stalfos Chest": "is_adult or Kokiri_Sword",
+   "Forest Temple First Stalfos Chest": "has_adult_sword or can_use(Kokiri_Sword)",
    "Forest Temple Center Room Right Pot 1": "True",
    "Forest Temple Center Room Right Pot 2": "True",
    "Forest Temple Center Room Right Pot 3": "True",
@@ -38,12 +38,12 @@
   "dungeon": "Forest Temple",
   "locations": {
    "Forest Temple GS Level Island Courtyard": "can_use(Longshot) or at('Forest Temple Outside Upper Ledge', can_use(Hookshot) or can_use(Boomerang))",
-   "Deku Baba Sticks": "is_adult or Kokiri_Sword or Boomerang",
-   "Deku Baba Nuts": "is_adult or Slingshot or Sticks or has_explosives or Kokiri_Sword or can_use(Dins_Fire)"
+   "Deku Baba Sticks": "has_adult_sword or can_use(Kokiri_Sword) or can_use(Boomerang)",
+   "Deku Baba Nuts": "can_adult_attack or can_use(Slingshot) or can_use(Sticks) or has_explosives or can_use(Kokiri_Sword) or can_use(Dins_Fire)"
   },
   "exits": {
    "Forest Temple NE Outdoors": "(Progressive_Scale, 2)",
-   "Forest Temple Outdoors High Balconies": "here(is_adult or has_explosives or ((Boomerang or Nuts or Deku_Shield) and (Sticks or Kokiri_Sword or Slingshot)))"
+   "Forest Temple Outdoors High Balconies": "here(can_adult_attack or has_explosives or ((can_use(Boomerang) or Nuts or Deku_Shield) and (can_use(Sticks) or can_use(Kokiri_Sword) or can_use(Slingshot))))"
   }
  },
  {
@@ -67,8 +67,8 @@
   "locations": {
    "Forest Temple Raised Island Courtyard Chest": "can_use(Hookshot) or at('Forest Temple Falling Room', True) or (logic_forest_outdoors_ledge and can_use(Hover_Boots) and at('Forest Temple Outdoors High Balconies', True))",
    "Forest Temple GS Raised Island Courtyard": "can_use(Hookshot) or (logic_forest_outdoor_east_gs and can_use(Boomerang)) or at('Forest Temple Falling Room', can_use(Bow) or can_use(Dins_Fire) or has_explosives)",
-   "Deku Baba Sticks": "is_adult or Kokiri_Sword or Boomerang",
-   "Deku Baba Nuts": "is_adult or Slingshot or Sticks or has_explosives or Kokiri_Sword or can_use(Dins_Fire)"
+   "Deku Baba Sticks": "has_adult_sword or can_use(Kokiri_Sword) or can_use(Boomerang)",
+   "Deku Baba Nuts": "can_adult_attack or can_use(Slingshot) or can_use(Sticks) or has_explosives or can_use(Kokiri_Sword) or can_use(Dins_Fire)"
   },
   "exits": {
    "Forest Temple Outdoors High Balconies": "can_use(Longshot) or (logic_forest_vines and can_use(Hookshot))",
@@ -83,7 +83,7 @@
   },
   "exits": {
    "Forest Temple Outside Upper Ledge": "can_use(Hover_Boots) or (logic_forest_outside_backdoor and Progressive_Strength_Upgrade and can_jumpslash)",
-   "Forest Temple Bow Region": "Progressive_Strength_Upgrade and (Small_Key_Forest_Temple, 3) and is_adult",
+   "Forest Temple Bow Region": "Progressive_Strength_Upgrade and (Small_Key_Forest_Temple, 3) and has_adult_sword",
    "Forest Temple Straightened Hall": "Progressive_Strength_Upgrade and (Small_Key_Forest_Temple, 2) and can_use(Bow)"
   }
  },

@@ -468,13 +468,58 @@ def token_texts(token, language):
             'GetCaption': 'It becomes the next level of this item.'}
 
 
-def token_specs(tokens):
-    specs = []
+# The token template (Forest Medallion) has no pose of its own (AS DemoDummy, no
+# animation): the lent model was drawn in its raw axes, the Bow and the Longshot
+# lying along their length, the Slingshot on its side (user report 18/11). A token
+# takes the animation states of its first level's item actor (Item_Common and the
+# item's Pose_Common, as in a vanilla chest), when that actor is made for the
+# item-get display (ASInfo Item_GetDemo; not the ocarina, an accessory).
+POSE_KEYS = ('ASRef', 'ASInfoRef', 'AnimationRef')
+POSE_ASINFO = 'Item_GetDemo'
+
+
+def pose_lender(family):
+    """Item actor whose animation states pose the family's model (same mesh)."""
+    from oot_rando.game.item_forms import SAME_MODEL
+    model = FAMILIES[family][3]
+    return SAME_MODEL.get(model, model)
+
+
+def pose_parts(read_raw, family):
+    """``(files, components, actor_info)`` posing a token like its first level, or None."""
+    from oot_rando.formats import byml_codec
+    from oot_rando.formats.inspect_resources import sarc
+    from oot_rando.game.item_forms import _copy_ref, _pack_path, resolve_components
+    lender = pose_lender(family)
+    pack = sarc(read_raw(f'Pack/Actor/{lender}.pack.zs'))
+    components = resolve_components(pack, lender, byml_codec)
+    refs = {key: components.get(key) for key in POSE_KEYS}
+    if not all(isinstance(ref, str) and ref for ref in refs.values()) or POSE_ASINFO not in refs['ASInfoRef']:
+        return None
+    files = {}
+    for ref in refs.values():
+        _copy_ref(pack, ref, files, byml_codec)
+    animation = _pack_path(refs['AnimationRef'])
+    if animation not in files:
+        raise ValueError('Token pose animation not found: ' + lender)
+    resources = byml_codec.load(files[animation])['root'].get('AnimationResources')
+    return files, refs, {'AnimationResources': resources}
+
+
+def token_specs(tokens, read_raw=None):
+    specs, poses = [], {}
     for token in sorted(tokens):
+        family = token_family(token)
         name = 'RandoProg_' + _stem(token) + '.event.root'
-        specs.append({'actor': token, 'model': FAMILIES[token_family(token)][3], 'event_name': name,
-                      'event_member': 'AI/' + name + '.ainb', 'event_ain': 'Work/AI/Root/Event/' + name + '.ain',
-                      'texts': (lambda language, token=token: token_texts(token, language))})
+        spec = {'actor': token, 'model': FAMILIES[family][3], 'event_name': name,
+                'event_member': 'AI/' + name + '.ainb', 'event_ain': 'Work/AI/Root/Event/' + name + '.ain',
+                'texts': (lambda language, token=token: token_texts(token, language))}
+        if read_raw is not None:
+            if family not in poses:
+                poses[family] = pose_parts(read_raw, family)
+            if poses[family] is not None:
+                spec['files'], spec['components'], spec['actor_info'] = poses[family]
+        specs.append(spec)
     return specs
 
 
@@ -485,7 +530,7 @@ def build_token_files(read_raw, tokens, message_archives=()):
     if not tokens:
         return {}, {}
     check_pouch_names(read_raw(RSDB_FILES['ActorInfo']), read_raw(GAMEDATA))
-    modified, new = build_item_files(read_raw, token_specs(tokens), message_archives)
+    modified, new = build_item_files(read_raw, token_specs(tokens, read_raw), message_archives)
     raw = modified.get(GAMEDATA)
     modified[GAMEDATA] = add_saved_flags(raw if raw is not None else read_raw(GAMEDATA),
                                          {applied_flag(t): False for t in tokens})

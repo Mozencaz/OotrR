@@ -12,9 +12,10 @@ from oot_rando.logic import rando_options
 from oot_rando.game.remake_world import (PROGRESSIVE, BASE_REQUIRED, STATIC_TIER_SOURCES, item_actor,
                           match_locations, coverage_summary, FOLDER_DUNGEON,
                           ZONE_LABELS, TRACKED_TYPES, location_zone, source_age, zone_label)
-from oot_rando.game.item_forms import can_take, form_actor
+from oot_rando.game.item_forms import can_take, form_actor, underwater_actor
 from oot_rando.game.extra_sources import match_sources, area_locations
 from oot_rando.patching.soul_adapter import plan_souls, chest_requirements, soul_label
+from oot_rando.patching.song_adapter import POSE_AFTER_CUTSCENE, is_song_actor, song_allowed
 
 FILLER_PRIORITY = ('Rupee (1)', 'Rupees (5)', 'Deku Nuts (5)', 'Deku Stick (1)', 'Arrows (5)', 'Bombs (5)',
                    'Rupees (20)', 'Arrows (10)', 'Deku Seeds (30)', 'Bombchus (5)', 'Arrows (30)',
@@ -73,9 +74,13 @@ def enabled_sources(options):
                                 ('shop', 'shopsanity', 'off'), ('pots', 'shuffle_pots', 'off'),
                                 ('crates', 'shuffle_crates', 'off'), ('beehives', 'shuffle_beehives', False),
                                 ('bushes', 'shuffle_bushes', False), ('rocks', 'shuffle_rocks', False),
+                                ('trees', 'shuffle_trees', False),
                                 ('npc', 'shuffle_npc_gifts', False), ('boss', 'shuffle_boss_rewards', False),
                                 ('bossheart', 'shuffle_boss_rewards', False), ('fairy', 'shuffle_great_fairies', False),
-                                ('quest', 'shuffle_quest_rewards', False), ('scrub', 'shuffle_scrubs', 'off')):
+                                ('quest', 'shuffle_quest_rewards', False), ('scrub', 'shuffle_scrubs', 'off'),
+                                ('master_sword', 'shuffle_master_sword', False),
+                                ('gerudo_card', 'shuffle_gerudo_card', False),
+                                ('song', 'shuffle_song_items', 'song')):
         value = options.get(option, off)
         if value != off:
             result[source] = value if value in ('dungeons', 'overworld') else 'all'
@@ -91,6 +96,39 @@ def source_in_scope(entry, sources):
     if scope == 'overworld':
         return entry['folder'] not in FOLDER_DUNGEON
     return True
+
+
+# Zelda's Letter takes the pouch slot of the Weird Egg and the Cucco: found before
+# Talon is woken, it replaces them and Zelda can never be reached. It stays
+# Zelda's gift while the child trade quest is vanilla.
+CHILD_TRADE_LOCKED = ('HC Zeldas Letter',)
+
+
+def letter_removed(options):
+    """With the Kakariko gate open the letter has no use left (only the gate guard
+    reads it): it leaves the item pool and Zelda's gift is shuffled like the others."""
+    return options.get('open_kakariko') == 'open'
+
+
+# Child Hyrule Castle skipped (``skip_child_zelda``, patching/child_castle_skip.py):
+# the castle's gifts never play, its shuffled checks hold this item (Great Fairy apart).
+CASTLE_FOLDER = 'HyruleCastle'
+CASTLE_GIFTS = ('HC Zeldas Letter', 'Song from Impa')
+CASTLE_JUNK = 'Rupee (1)'
+CASTLE_SONG = 'Zeldas Lullaby'
+
+
+def skipped_castle_check(entry):
+    """True for a check of the child castle grounds or one of the castle's gifts."""
+    ap = list(entry.get('ap') or ())
+    return entry.get('folder') == CASTLE_FOLDER or (
+        entry.get('source') in ('quest', 'song') and len(ap) == 1 and ap[0] in CASTLE_GIFTS)
+
+
+def kept_for_child_trade(entry, options):
+    return (options.get('shuffle_child_trade', 'vanilla') == 'vanilla' and not letter_removed(options)
+            and entry.get('source') == 'quest' and entry.get('kind') == 'exact'
+            and entry['ap'][0] in CHILD_TRADE_LOCKED)
 
 
 class DetRandom:
@@ -125,12 +163,20 @@ def vname(group_id):
 
 def ap_settings(options, open_forest):
     values = {name: options[name] for name in ('open_kakariko', 'open_door_of_time', 'zora_fountain',
-                                               'gerudo_fortress', 'starting_age', 'bridge', 'trials',
+                                               'gerudo_fortress', 'open_gerudo_valley_bridge', 'starting_age',
+                                               'bridge', 'trials',
                                                'shuffle_ganon_bosskey', 'big_poe_count', 'chicken_count',
                                                'free_scarecrow', 'shuffle_child_trade', 'logic_rules',
-                                               'logic_no_night_tokens_without_suns_song')}
+                                               'shuffle_master_sword', 'shuffle_gerudo_card',
+                                               'logic_no_night_tokens_without_suns_song',
+                                               'skip_child_zelda')}
     values['open_forest'] = 'closed_deku' if open_forest else 'closed'
-    values['keysanity'] = False
+    # AP rules' ``keysanity``: false lets one Fire Temple door open without its key
+    # ("Fire Temple Lower Locked Door": (Small Key, 8) or not keysanity), OoTR's
+    # "a vanilla key may sit behind its own door". Shuffled small keys are key rings
+    # here (one item, every key at once): the ring itself could go behind that door
+    # (Discord 16/11: Fire Temple ring on Volvagia, boss key chest past the door).
+    values['keysanity'] = options.get('shuffle_smallkeys', 'vanilla') != 'vanilla'
     return values
 
 
@@ -210,13 +256,14 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
 
     # --- key rings and dungeon-specific boss keys (key_adapter) ---------------
     from oot_rando.patching.key_adapter import RING_DUNGEONS, BOSS_KEY_DUNGEONS, ring_item, small_key_item
-    ring_folders = sorted(RING_DUNGEONS) if options['key_rings'] == 'all' else []
+    ring_folders = key_ring_folders(options, seed_key)
     ring_keys = {small_key_item(folder): ring_item(folder) for folder in ring_folders}
     specific_boss = options['shuffle_bosskeys'] in ('any_dungeon', 'keysanity')
     boss_keys = ({f'Boss Key ({FOLDER_DUNGEON[f]})' for f in BOSS_KEY_DUNGEONS} if specific_boss else set())
     # A ring counts as every small key of its dungeon (logic.bundles).
     logic.bundles.update({ring_item(f): (small_key_item(f), RING_DUNGEONS[f]) for f in ring_folders})
     relevant |= set(ring_keys.values())
+    ring_dungeon_keys = {small_key_item(folder) for folder in RING_DUNGEONS}
     # "Removed" keys: every key is held from the start (start_dungeon_values), the
     # key chests hold filler instead.
     from oot_rando.patching.key_adapter import start_logic_items
@@ -225,11 +272,15 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
     def in_scope(entry):
         item = entry['vanilla']
         if entry['source'] != 'chest':
+            if kept_for_child_trade(entry, options):
+                return False
             return entry['kind'] != 'junk' or entry['reason'] in SAFE_JUNK
         if not options['shuffle_chests']:
             return False
         if item in ring_keys:
             return True       # the ring replaces every small key of the dungeon
+        if item in ring_dungeon_keys:
+            return item in removed_keys   # no ring for this dungeon: generic keys stay in place
         if item.startswith('Small Key ('):
             return item in key_dungeons or item in removed_keys
         if item in boss_keys:
@@ -237,7 +288,8 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
         if item.startswith('Boss Key ('):
             return (item in key_dungeons or item in removed_keys) and 'Ganons Castle' not in item
         if is_mapcompass(item):
-            return options['shuffle_mapcompass'] in ('dungeon', 'remove', 'startwith')
+            return options['shuffle_mapcompass'] in ('dungeon', 'remove', 'startwith', 'any_dungeon',
+                                                     'overworld', 'keysanity')
         if item == 'Kokiri Sword':
             return options['shuffle_kokiri_sword']
         if item.startswith('Remake: '):
@@ -245,27 +297,33 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
         return True
 
     shuffled = {gid: e for gid, e in matches.items() if in_scope(e)}
-    # Shopsanity: N slots per shop; every purchase the logic uses keeps one vanilla copy.
-    shop_rng = DetRandom(hashlib.sha256((seed_key + '\0shops-v1').encode()).digest())
+    # Shopsanity: N slots per shop; every purchase the logic uses keeps one vanilla copy
+    # (a shuffled slot is sold once: refills such as Blue Fire must stay buyable), except
+    # in the "all" mode, where the logic loses them and relies on their world sources.
+    shop_rng = DetRandom(hashlib.sha256((seed_key + '\0shops-v2').encode()).digest())
     shop_slots = sorted(g for g in shuffled if shuffled[g]['source'] == 'shop')
     selected_shops = set()
     if shop_slots and forced is not None:
         selected_shops = {g for g in shop_slots if g in forced}  # replay: the spoiler decides
     elif shop_slots:
-        referenced = set(probe.referenced)
-        copies = Counter(shuffled[g]['vanilla'] for g in shop_slots)
-        by_folder = defaultdict(list)
+        keep_purchases = options['shopsanity'] != 'all'
+        referenced = {shop_purchase(i) for i in probe.referenced}
+        copies = Counter(shop_purchase(shuffled[g]['vanilla']) for g in shop_slots)
+        # Counted per shop, not per map folder (the Market has three shops).
+        from oot_rando.game.extra_sources import shop_groups
+        shop_of = shop_groups({gid: shuffled[gid] for gid in shop_slots})
+        by_shop = defaultdict(list)
         for gid in shop_slots:
-            by_folder[shuffled[gid]['folder']].append(gid)
-        for folder, slots in sorted(by_folder.items()):
-            wanted = (shop_rng.below(4) + 1 if options['shopsanity'] == 'random' else int(options['shopsanity']))
+            by_shop[shop_of[gid]].append(gid)
+        for shop, slots in sorted(by_shop.items()):
+            wanted = shop_count(options['shopsanity'], shop_rng)
             for gid in shop_rng.shuffle(slots):
                 if wanted <= 0:
                     break
-                item = shuffled[gid]['vanilla']
-                if item in referenced and copies[item] <= 1:
+                purchase = shop_purchase(shuffled[gid]['vanilla'])
+                if keep_purchases and purchase in referenced and copies[purchase] <= 1:
                     continue
-                copies[item] -= 1
+                copies[purchase] -= 1
                 selected_shops.add(gid)
                 wanted -= 1
     for gid in shop_slots:
@@ -286,7 +344,8 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
         if entry['kind'] in ('exact', 'group'):
             for location in entry['ap']:
                 base[location] = None
-        logic.virtual[vname(entry['id'])] = list(entry['ap']) + list(entry.get('guards', []))
+        from oot_rando.game.remake_world import rule_members
+        logic.virtual[vname(entry['id'])] = rule_members(entry) + list(entry.get('guards', []))
         if entry['id'] not in shuffled:
             base[vname(entry['id'])] = entry['vanilla']
     for location in unmatched_ap:
@@ -368,6 +427,8 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             item = SHOP_FILLER  # the displaced purchase stays sold in other slots
         if item in ring_keys:
             item = 'Rupees (5)'
+        if item == 'Zeldas Letter' and letter_removed(options):
+            item = POOL_FILLER
         pool.append(item)
     for ring in sorted(ring_keys.values()):
         fillers = [i for i in pool if i not in relevant and not is_mapcompass(i) and not is_key(i)]
@@ -394,7 +455,37 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             if item in pool:
                 pool[pool.index(item)] = POOL_FILLER
                 from_pool[item] += 1
-    logic_locations = sorted(g for g in shuffled if vname(g) in logic.virtual)
+    castle_junk = []
+    if options.get('skip_child_zelda'):
+        # The castle's gifts never play (patching/child_castle_skip.py): Zelda's Letter
+        # and Lullaby leave their vanilla locations and are shuffled elsewhere.
+        from oot_rando.patching.child_castle_skip import MOVED_ITEMS
+        reserved = Counter()
+
+        def take_filler(item, what):
+            fillers = [i for i in pool if i not in relevant and not is_mapcompass(i) and not is_key(i)
+                       and not (i == CASTLE_JUNK and reserved[i] >= pool.count(CASTLE_JUNK))]
+            if not fillers:
+                raise FillError(f'Not enough filler for {what}.')
+            victim = min(fillers, key=lambda i: FILLER_PRIORITY.index(i) if i in FILLER_PRIORITY else 99)
+            pool[pool.index(victim)] = item
+
+        for location in CASTLE_GIFTS:
+            base[location] = None
+        for gid, entry in matches.items():
+            if set(entry.get('ap', ())) & set(CASTLE_GIFTS):
+                # Native quest rewards also have a virtual location, even when
+                # child-trade protection keeps their source out of the shuffle.
+                base[vname(gid)] = None
+        for item in MOVED_ITEMS:
+            if item not in pool and item not in start_items:
+                take_filler(item, item + ' (skipped castle)')
+        # Every shuffled castle check holds a green rupee, reserved in the pool.
+        castle_junk = sorted(g for g in shuffled if skipped_castle_check(shuffled[g]))
+        for _ in castle_junk:
+            take_filler(CASTLE_JUNK, 'the skipped castle checks')
+            reserved[CASTLE_JUNK] += 1
+    logic_locations =sorted(g for g in shuffled if vname(g) in logic.virtual)
     restricted_dungeon = {}   # item -> (zone rule, dungeon)
     for item in set(pool):
         if item in ring_keys.values():
@@ -403,6 +494,8 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             rule = options['shuffle_bosskeys']
         elif is_key(item) or (is_mapcompass(item) and options['shuffle_mapcompass'] == 'dungeon'):
             rule = 'dungeon'
+        elif is_mapcompass(item) and options['shuffle_mapcompass'] in ('any_dungeon', 'overworld'):
+            rule = options['shuffle_mapcompass']
         else:
             continue
         if rule != 'keysanity':
@@ -422,7 +515,11 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             canonical_cache[key] = item_actor(item, shuffled[gid]['folder'])
         return canonical_cache[key]
 
+    castle_junk_set = set(castle_junk) if options.get('skip_child_zelda') else None
+
     def allowed(item, gid):
+        if castle_junk_set and gid in castle_junk_set:
+            return item == CASTLE_JUNK
         rule, dungeon = restricted_dungeon.get(item, (None, None))
         if rule == 'dungeon' and folder_dungeon[gid] != dungeon:
             return False
@@ -430,7 +527,18 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             return False
         if rule == 'overworld' and folder_dungeon[gid] is not None:
             return False
-        return can_take(canonical(item, gid), shuffled[gid]['form'], shuffled[gid].get('ap', ()))
+        actor = canonical(item, gid)
+        song_mode = options.get('shuffle_song_items', 'song')
+        if castle_junk_set is not None and item == CASTLE_SONG:
+            # The castle skipped, Impa's song has no song location left: it goes
+            # anywhere a song can be given, whatever the song mode.
+            song_mode = 'everywhere'
+        if not song_allowed(song_mode, shuffled[gid]['source'], actor, shuffled[gid]['form']):
+            return False
+        if is_song_actor(actor) and set(shuffled[gid].get('ap', ())) & set(POSE_AFTER_CUTSCENE):
+            return False   # given back in game with a pose (qol_patches.give_gift_after), not text-only
+        return can_take(actor, shuffled[gid]['form'], shuffled[gid].get('ap', ()),
+                        shuffled[gid].get('actor', ''))
 
     # OoTR/AP vanilla-key compensation: with vanilla Fire Temple keys the logic
     # starts with one extra key (the vanilla layout expects the hammer door order).
@@ -454,7 +562,7 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
         pool=pool, relevant=relevant, progression=progression, logic_locations=logic_locations,
         restricted_dungeon=restricted_dungeon, allowed=allowed, sweep=sweep, base=base, souls=souls,
         unmatched_ap=unmatched_ap, natives=natives, starting=starting, report=report,
-        start_items=start_items, start_actors=start_actors,
+        start_items=start_items, start_actors=start_actors, castle_junk=castle_junk,
         is_key=is_key, is_mapcompass=is_mapcompass)
 
 
@@ -480,10 +588,11 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
 
     last_error = 'no attempt'
     for attempt in range(MAX_ATTEMPTS):
-        placed = {}
+        placed = {gid: CASTLE_JUNK for gid in c.castle_junk}
         failed = False
         rest = [i for i in pool if i not in relevant]
         rest_counter = Counter(rest)
+        rest_counter[CASTLE_JUNK] -= len(c.castle_junk)
         # Dungeon-bound items outside the logic (maps, compasses) first, in
         # chests the logic cannot use whenever possible.
         for item in rng.shuffle([i for i in rest if i in restricted_dungeon]):
@@ -547,6 +656,24 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
 # Starting items that cannot be handed over silently at the end of the opening:
 # dungeon items (generic actors, or a key count only applied at the next item get).
 STARTING_UNSUPPORTED = ('Map (', 'Compass (', 'Small Key (', 'Boss Key (', 'Small Key Ring (', 'Remake: ')
+
+
+def key_ring_folders(options, seed_key):
+    """Dungeon folders whose small keys become a key ring."""
+    from oot_rando.patching.key_adapter import RING_DUNGEONS
+    from oot_rando.game.remake_world import FOLDER_DUNGEON
+    folders = sorted(RING_DUNGEONS)
+    mode = options['key_rings']
+    if mode == 'all':
+        return folders
+    if mode == 'choose':
+        return [f for f in folders if FOLDER_DUNGEON[f] in options['key_rings_list']]
+    if mode == 'random':
+        # Same draw in the Archipelago generation and in the application (same seed key).
+        rng = DetRandom(hashlib.sha256((seed_key + '\0key-rings-v1').encode()).digest())
+        chosen = [f for f in folders if rng.below(2)]
+        return chosen or [rng.choice(folders)]
+    return []
 
 
 def covered_by_start_values(item, options):
@@ -634,6 +761,29 @@ def _sweep_with_requirements(logic, placements, state):
 FIXED_LEVEL_SOURCES = ('chest', 'freestanding')
 
 
+# Purchases the logic accepts in any size (helpers.json: Nuts = Buy_Deku_Nut_5 or
+# Buy_Deku_Nut_10, has_bombchus = any Bombchu pack...): one kept copy of the group is enough.
+SHOP_EQUIVALENTS = (
+    ('Buy Deku Nut', ('Buy Deku Nut (5)', 'Buy Deku Nut (10)')),
+    ('Buy Bombchu', ('Buy Bombchu (5)', 'Buy Bombchu (10)', 'Buy Bombchu (20)')),
+    ('Buy Bombs', ('Buy Bombs (5)', 'Buy Bombs (10)', 'Buy Bombs (20)', 'Buy Bombs (30)')),
+    ('Buy Arrows', ('Buy Arrows (10)', 'Buy Arrows (30)', 'Buy Arrows (50)')),
+)
+SHOP_PURCHASE = {item: group for group, items in SHOP_EQUIVALENTS for item in items}
+
+
+def shop_purchase(item):
+    """What a shop slot's purchase counts as for the keep-one-copy rule."""
+    return SHOP_PURCHASE.get(item, item)
+
+
+def shop_count(value, rng):
+    """Slots to shuffle in one shop for the ``shopsanity`` value."""
+    if value == 'random':
+        return rng.below(4) + 1
+    return 8 if value == 'all' else int(value)
+
+
 def native_sources(matches, shuffled, extra=None):
     """{gid: entry} of the unshuffled sources giving a fixed level of a progressive family.
 
@@ -673,9 +823,18 @@ def progressive_plan(placed, natives):
         form = entry.get('form', 'chest')
         records.append({'id': gid, 'folder': entry['folder'], 'source': entry.get('source', 'chest'), 'form': form,
                         'item': entry['vanilla'], 'before': entry['before'], 'token': tokens[gid],
-                        'after': form_actor(tokens[gid], form), 'patches': _patches(entry),
+                        'after': _spot_actor(form_actor(tokens[gid], form), entry), 'patches': _patches(entry),
                         'resources': sorted({v['resource'] for v in entry['variants']})})
     return {'tokens': {gid: tokens[gid] for gid, _ in copies if gid in placed}, 'natives': records}
+
+
+def _underwater(entry):
+    return any(v.get('underwater') for v in entry['variants'])
+
+
+def _spot_actor(actor, entry):
+    """``actor``, in its glowing form when the spot lies under water (``game/underwater.py``)."""
+    return underwater_actor(actor) if _underwater(entry) else actor
 
 
 def _result(data, logic, options, matches, shuffled, placed, natives, sphere_of, spheres, souls,
@@ -692,17 +851,21 @@ def _result(data, logic, options, matches, shuffled, placed, natives, sphere_of,
                 and options['shuffle_bosskeys'] in ('any_dungeon', 'keysanity')):
             from oot_rando.patching.key_adapter import boss_actor, item_folder
             canonical = boss_actor(item_folder(item))   # opens its own dungeon's boss door anywhere
-        actor = form_actor(canonical, entry.get('form', 'chest'), skulltula_drop=source == 'skulltula')
-        label = SOURCE_LABELS.get(source, source)
-        name = entry['ap'][0] if entry['kind'] == 'exact' else (
-            f'{entry["folder"]} — {label} {str(entry["hash"])[-6:]}' if entry['hash'] else gid)
+        if (item.startswith(('Map (', 'Compass (')) and 'Ganons Castle' not in item
+                and options['shuffle_mapcompass'] in ('any_dungeon', 'overworld', 'keysanity')):
+            from oot_rando.patching.key_adapter import specific_actor
+            canonical = specific_actor(item)   # sets its own dungeon's map / compass anywhere
+        actor = _spot_actor(form_actor(canonical, entry.get('form', 'chest'), skulltula_drop=source == 'skulltula'),
+                            entry)
+        name = check_name(entry, gid)
         placements.append({'id': gid, 'folder': entry['folder'], 'hash': entry['hash'], 'kind': entry['kind'],
                            'source': source, 'form': entry.get('form', 'chest'),
                            'before': entry['before'], 'after': actor, 'item': item,
                            'resources': sorted({v['resource'] for v in entry['variants']}),
                            'variants': [(v['resource'], v['index']) for v in entry['variants'] if 'index' in v],
                            'patches': _patches(entry), 'ap_locations': entry['ap'],
-                           'sphere': sphere_of.get(vname(gid)), 'event': entry['event']})
+                           'sphere': sphere_of.get(vname(gid)), 'event': entry['event'],
+                           'underwater': _underwater(entry)})
         spoiler.append({'id': gid, 'location': name, 'item': soul_label(item) if item.startswith('Soul (') else item,
                         'ap_item': item, 'actor': actor, 'before': entry['before'], 'source': source,
                         'sphere': sphere_of.get(vname(gid)), 'ap_locations': entry['ap']})
@@ -736,7 +899,33 @@ def _result(data, logic, options, matches, shuffled, placed, natives, sphere_of,
                 'virtual': {name: list(members) for name, members in logic.virtual.items()}}}
 
 
-REPEATABLE = ('pots', 'bushes', 'rocks', 'crates', 'beehives')
+REPEATABLE = ('pots', 'bushes', 'rocks', 'crates', 'beehives', 'trees')
+
+
+def check_name(entry, gid, zone=None):
+    """Name of a check: its AP location when it has its own, else where it stands
+    (``game/check_names.py``: KF_sarias_house_heart_1), else its AP location (NPC gifts)."""
+    from oot_rando.game.check_names import entry_label
+    if entry['kind'] == 'exact' and entry['ap']:
+        return entry['ap'][0]
+    label = entry_label(entry)
+    if label:
+        return label
+    if gid.startswith('npc#'):
+        return gid[len('npc#'):]
+    if entry.get('hash'):
+        kind = SOURCE_LABELS.get(entry.get('source', 'chest'), entry.get('source', 'chest'))
+        return f'{zone or entry["folder"]} {kind} {str(entry["hash"])[-6:]}'
+    return gid
+
+
+def covered_locations(entry, gid):
+    """AP locations a remake source stands for: its matched or candidate locations, and
+    the AP location of an NPC gift (``npc#<location>``). They are not listed twice."""
+    covered = set(entry['ap'] if entry['kind'] in ('exact', 'group', 'area') else ())
+    if gid.startswith('npc#'):
+        covered.add(gid[len('npc#'):])
+    return covered
 
 
 def _entry_zone(data, entry, gid):
@@ -758,14 +947,12 @@ def tracker_checks(data, matches, shuffled):
     for gid in sorted(matches):
         entry = matches[gid]
         source = entry.get('source', 'chest')
-        if entry['kind'] in ('exact', 'group'):
-            covered.update(entry['ap'])
-        label = SOURCE_LABELS.get(source, source)
+        covered.update(covered_locations(entry, gid))
         zone = _entry_zone(data, entry, gid)
         if entry['kind'] == 'exact' and entry['ap']:
             name = entry['ap'][0]
         else:
-            name = f'{zone_label(zone)} {label} {str(entry["hash"])[-6:]}' if entry.get('hash') else gid
+            name = check_name(entry, gid, zone_label(zone))
             age = source_age(entry['variants'])
             if age:
                 name += f' ({age})'   # only on that age's maps
@@ -808,7 +995,7 @@ def _is_reward(item):
 SOURCE_LABELS = {'chest': 'chest', 'skulltula': 'skulltula', 'shop': 'shop', 'freestanding': 'freestanding',
                  'npc': 'NPC', 'boss': 'dungeon reward', 'bossheart': 'boss heart container',
                  'fairy': 'great fairy', 'quest': 'quest reward', 'scrub': 'business scrub', 'pots': 'pot', 'bushes': 'bush', 'rocks': 'rock', 'crates': 'crate',
-                 'beehives': 'beehive'}
+                 'beehives': 'beehive', 'song': 'song', 'trees': 'tree'}
 
 
 def _patches(entry):
@@ -831,6 +1018,9 @@ def _patches(entry):
     return result
 
 
-def replay(data, options, groups, enemies, placements, open_forest=True, extra=None):
-    """Independent re-check of finished placements (used by verify_full)."""
-    return plan(data, options, groups, enemies, 'replay', open_forest, forced=placements, extra=extra)
+def replay(data, options, groups, enemies, placements, open_forest=True, extra=None, seed_key='replay'):
+    """Independent re-check of finished placements (used by verify_full).
+
+    ``seed_key``: the generation's, when an option is drawn from it (random key rings).
+    """
+    return plan(data, options, groups, enemies, seed_key, open_forest, forced=placements, extra=extra)

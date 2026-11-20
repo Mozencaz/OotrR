@@ -16,7 +16,8 @@ from oot_rando.game.item_forms import can_take, form_actor, is_derived, is_world
 NUP = os.environ.get('OOT_NUP')
 NEW_SOURCES = {'tokensanity': 'all', 'shopsanity': '4', 'shuffle_freestanding_items': 'all',
                'shuffle_npc_gifts': True, 'shuffle_pots': 'all', 'shuffle_crates': 'all',
-               'shuffle_beehives': True, 'shuffle_bushes': True, 'shuffle_rocks': True}
+               'shuffle_beehives': True, 'shuffle_bushes': True, 'shuffle_rocks': True,
+               'shuffle_trees': True}
 
 
 class Units(unittest.TestCase):
@@ -36,6 +37,13 @@ class Units(unittest.TestCase):
         self.assertFalse(can_take('Item_Soul_Keese', 'shop'))   # purchase may skip the soul get event
         self.assertFalse(can_take('Item_Soul_Keese', 'event'))
         self.assertTrue(can_take('Item_Soul_Keese', 'chest'))
+        # The native boss key: only the big chest sequence credits it.
+        self.assertTrue(can_take('Item_Dungeon_BossKey', 'chest', actor='Obj_TBox_A_02_NoBake'))
+        self.assertTrue(can_take('Item_Dungeon_BossKey', 'chest', actor='Obj_TBox_A_03'))
+        self.assertFalse(can_take('Item_Dungeon_BossKey', 'chest', actor='Obj_TBox_A_01'))
+        self.assertFalse(can_take('Item_Dungeon_BossKey', 'world'))
+        self.assertTrue(can_take('Item_Dungeon_Map', 'chest', actor='Obj_TBox_A_01'))   # never needed
+        self.assertTrue(can_take('Item_Dungeon_SmallKey', 'chest', actor='Obj_TBox_A_01'))
         self.assertEqual(form_actor('Item_Soul_Keese', 'world'), 'Obj_Rando_Item_Soul_Keese')
         self.assertTrue(can_take('Item_Longshot', 'world'))
 
@@ -73,6 +81,23 @@ class Units(unittest.TestCase):
         self.assertEqual(entries['KokiriForest#free#8']['reason'], 'conditional_presence')
         self.assertEqual(entries['KokiriForest#free#2']['vanilla'], 'Piece of Heart')
 
+    def test_rutos_letter_is_a_quest_reward(self):
+        maps = {'Banc/HyruleField/HyruleField_Child_Static.bcett.byml.zs': {'root': {'Actors': [
+            {'Gyaml': 'Obj_Bottle_Letter', 'Hash': 9, 'Translate': [-151.6, 125.0, 461.0]}]}}}
+        entry = scan_map_sources(maps)['HyruleField#letter#9']
+        self.assertEqual((entry['source'], entry['form'], entry['kind'], entry['ap'], entry['vanilla']),
+                         ('quest', 'world', 'exact', ['LH Underwater Item'], 'Rutos Letter'))
+        self.assertEqual(entry['variants'][0]['field'], 'Gyaml')
+        self.assertIsNone(entry['reason'])
+        self.assertNotIn('LH Underwater Item', EXCLUDED_NPC_LOCATIONS)
+        self.assertTrue(source_in_scope(entry, enabled_sources(
+            rando_options.validate({'shuffle_quest_rewards': True}, supported_only=True))))
+        self.assertFalse(source_in_scope(entry, enabled_sources(
+            rando_options.validate({}, supported_only=True))))
+        from oot_rando.game.remake_world import item_actor
+        self.assertEqual(item_actor('Rutos Letter', ''), 'Item_Bottle_Letter')
+        self.assertEqual(form_actor('Item_Bottle_Letter', 'world'), 'Obj_Rando_Item_Bottle_Letter')
+
     def test_empty_rocks_receive_a_drop(self):
         maps = {'Banc/HyruleField/HyruleField_Child_Static.bcett.byml.zs': {'root': {'Actors': [
             {'Gyaml': 'Obj_LiftRock_A_01', 'Hash': 1},
@@ -88,6 +113,23 @@ class Units(unittest.TestCase):
         # actors without the instance parameter stay untouched.
         self.assertEqual(set(entries), {'HyruleField#rocks#1', 'HyruleField#pots#4'})
         self.assertEqual(entries['HyruleField#pots#4']['vanilla'], 'Rupee (1)')
+
+    def test_trees_receive_a_drop(self):
+        maps = {'Banc/HyruleField/HyruleField_Child_Static.bcett.byml.zs': {'root': {'Actors': [
+            {'Gyaml': 'Obj_Tree_A_01', 'Hash': 1},
+            {'Gyaml': 'Obj_Tree_A_01', 'Hash': 2, 'Dynamic': {'Drop__DropTable': 'None'}},
+            {'Gyaml': 'Obj_Tree_A_02', 'Hash': 3, 'Dynamic': {'Drop__DropActor': 'Obj_Rupee_Blue'}},
+            {'Gyaml': 'Obj_Tree_Tutorial_A_01', 'Hash': 4, 'Dynamic': {'DropDirRotateOffset': 65.0}},
+            {'Gyaml': 'Land_Tree_A_01', 'Hash': 5}]}}}
+        entries = scan_map_sources(maps, lambda actor, field: actor.startswith('Obj_'), lambda actor: False)
+        # Explicit "None" drop table stays vanilla; scenery trees have no drop parameter.
+        self.assertEqual(set(entries), {'HyruleField#trees#1', 'HyruleField#trees#3', 'HyruleField#trees#4'})
+        self.assertEqual((entries['HyruleField#trees#1']['vanilla'], entries['HyruleField#trees#1']['reason']),
+                         ('Rupee (1)', None))
+        self.assertEqual(entries['HyruleField#trees#3']['vanilla'], 'Rupees (5)')
+        self.assertEqual(enabled_sources({'shuffle_trees': True}).get('trees'), 'all')
+        from oot_rando.patching.repeatable_adapter import REPEATABLE
+        self.assertIn('trees', REPEATABLE)
 
     def test_category_options(self):
         values = rando_options.defaults()
@@ -116,13 +158,14 @@ class Units(unittest.TestCase):
         npc = {l for ap, _, _, _ in NPC_GIFTS for l in ap}
         seen = set()
         for source, ap, _, sites in EVENT_GIFTS:
-            self.assertIn(source, ('boss', 'fairy', 'quest'))
+            self.assertIn(source, ('boss', 'fairy', 'quest', 'song', 'master_sword', 'gerudo_card'))
             self.assertFalse(set(ap) & (npc | seen))
             seen.update(ap)
             # Every site of one reward gives the same AP item.
             self.assertEqual(len({actor_item(actor, '') for _, _, actor in sites}), 1, ap)
         self.assertEqual(sum(s == 'boss' for s, *_ in EVENT_GIFTS), 9)
         self.assertEqual(sum(s == 'fairy' for s, *_ in EVENT_GIFTS), 6)
+        self.assertEqual(sum(s == 'song' for s, *_ in EVENT_GIFTS), 12)
         self.assertEqual(len(BOSS_HEARTS), 8)
         for category, option in (('boss_rewards', 'shuffle_boss_rewards'), ('fairies', 'shuffle_great_fairies'),
                                  ('quest_rewards', 'shuffle_quest_rewards')):
@@ -182,7 +225,11 @@ class Integration(unittest.TestCase):
 
     def test_inventory(self):
         counts = Counter(e['source'] for e in self.extra.values() if not e['reason'])
-        self.assertEqual(counts['skulltula'], 100)
+        # 100 tokens minus the two child-only Death Mountain Crater ones
+        # (remake_world.inaccessible_child_actor).
+        self.assertEqual(counts['skulltula'], 98)
+        self.assertFalse([e['id'] for e in self.extra.values()
+                          if e['source'] == 'skulltula' and e['id'].startswith('DeathMountainCrater#')])
         self.assertEqual(counts['npc'], len(NPC_GIFTS))
         self.assertGreaterEqual(counts['shop'], 50)
         self.assertGreaterEqual(counts['freestanding'], 24)
@@ -249,10 +296,35 @@ class Integration(unittest.TestCase):
             for p in adult:
                 self.assertGreaterEqual(p['sphere'], adult_from, (seed, p['id'], p['item']))
 
+    def test_shops_counted_one_by_one(self):
+        # Discord 16/11: the Market's three shops shared the count of one shop.
+        from oot_rando.game.extra_sources import shop_groups
+        shops = shop_groups({g: e for g, e in self.extra.items() if e['source'] == 'shop' and not e['reason']})
+        per_folder = Counter(key.split('#', 1)[0] for key in set(shops.values()))
+        self.assertEqual(per_folder['Market'], 3)              # bazaar, potion shop, bombchu shop
+        self.assertEqual(per_folder['KakarikoVillage'], 2)     # bazaar, potion shop
+        for folder in ('KokiriForest', 'GoronCity', 'ZoraDomain'):
+            self.assertEqual(per_folder[folder], 1, folder)
+        self.assertTrue(all(n == 8 for n in Counter(shops.values()).values()), Counter(shops.values()))
+        options, result = self.plan({'shopsanity': '8'}, 'shops8')
+        placed = Counter(shops[p['id']] for p in result['placements'] if p['source'] == 'shop')
+        self.assertEqual(set(placed), set(shops.values()))      # every shop, the potion shops too
+        # One copy of each purchase the logic uses stays on sale (11 on 17/11: shields, tunics,
+        # bottle contents, one bombchu pack, nuts, sticks); every other slot is shuffled.
+        kept = sorted(self.extra[g]['vanilla'] for g in shops if g not in {p['id'] for p in result['placements']})
+        self.assertEqual(sum('Bombchu' in k for k in kept), 1, kept)      # any pack does (has_bombchus)
+        self.assertEqual(sum('Deku Nut' in k for k in kept), 1, kept)
+        self.assertLessEqual(len(kept), 11, kept)
+        options, result = self.plan({'shopsanity': 'all'}, 'shops8')
+        self.assertEqual(sum(p['source'] == 'shop' for p in result['placements']), len(shops))
+
     def test_shopsanity_keeps_logic_purchases(self):
         options, result = self.plan({'shopsanity': '4'}, 'shops')
-        per_shop = Counter(p['folder'] for p in result['placements'] if p['source'] == 'shop')
-        self.assertTrue(per_shop and all(count <= 4 for count in per_shop.values()), per_shop)
+        from oot_rando.game.extra_sources import shop_groups
+        shops = shop_groups({g: e for g, e in self.extra.items() if e['source'] == 'shop'})
+        per_shop = Counter(shops[p['id']] for p in result['placements'] if p['source'] == 'shop')
+        self.assertEqual(set(per_shop), set(shops.values()))
+        self.assertTrue(all(count <= 4 for count in per_shop.values()), per_shop)
         shuffled = {p['id'] for p in result['placements']}
         referenced_kept = Counter(e['vanilla'] for gid, e in self.extra.items()
                                   if e['source'] == 'shop' and gid not in shuffled and not e['reason'])

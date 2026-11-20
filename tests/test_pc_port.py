@@ -1,8 +1,9 @@
+import _src_path  # noqa: F401  (src on sys.path)
 import tempfile
 import unittest
 from pathlib import Path
 
-from oot_rando.pc_port import is_port_folder, is_port_process, options_ini, port_exe
+from oot_rando.pc_port import game_folder, is_port_folder, is_port_process, options_ini, port_exe
 
 
 class PcPortTest(unittest.TestCase):
@@ -39,6 +40,24 @@ class PcPortTest(unittest.TestCase):
             (long / 'longshot_options.ini').touch()
             self.assertEqual(options_ini(long), long / 'longshot_options.ini')
             self.assertEqual(options_ini(base / 'missing'), base / 'missing' / 'hookshot_options.ini')
+
+    def test_longshot_launcher_build_keeps_its_exe_in_bin(self):
+        # Games/Longshot/<version>/bin/longshot.exe next to <version>/image.bin and romfs.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'nightly-132'
+            root.mkdir()
+            (root / 'image.bin').touch()
+            (root / 'romfs').mkdir()
+            (root / 'bin').mkdir()
+            for exe in ('longshot.exe', 'futurefork.exe'):
+                with self.subTest(exe=exe):
+                    (root / 'bin' / exe).touch()
+                    self.assertTrue(is_port_process(str(root / 'bin' / exe)))
+                    self.assertEqual(game_folder(str(root / 'bin' / exe)), root)
+            self.assertEqual(port_exe(root), root / 'bin' / 'longshot.exe')
+            (root / 'longshot_options.ini').touch()
+            self.assertEqual(options_ini(root), root / 'longshot_options.ini')
+            self.assertIsNone(game_folder(str(Path(directory) / 'bin' / 'other.exe')))
 
 
 if __name__ == '__main__':

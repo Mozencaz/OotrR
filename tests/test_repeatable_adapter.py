@@ -8,27 +8,10 @@ from oot_rando.formats import byml_codec
 from oot_rando.patching.repeatable_adapter import (prepare_repeatables, patch_repeatable_sources,
                                 instrument_pickup_event, register_repeatable_flags,
                                 add_sold_out_board, limit_shop_stock, shop_stock_edits)
-from oot_rando.formats.inspect_resources import sarc, decompress, Byml
+from oot_rando.formats.inspect_resources import sarc, decompress
 
 
 class RepeatableSourceTests(unittest.TestCase):
-    def test_real_map_plain_reader_does_not_lose_uint64_types_or_self_links(self):
-        plan, maps = self.fixtures()
-        document = byml_codec.load(maps['map']['raw'])
-        actor = document['root']['Actors'][0]
-        actor['Links'] = [{'Name': 'Cut', 'Src': actor['Hash'], 'Dst': byml_codec.U64(2**63+3)}]
-        actor['Phive'] = {'Placement': {'ID': actor['Hash']}}
-        raw = byml_codec.dump(document)
-        # The world scanner uses the plain reader; the writer must recover typed scalars.
-        maps['map'] = {'raw': raw, 'root': Byml(raw).root}
-        records = prepare_repeatables(plan, maps)
-        output = {}
-        patch_repeatable_sources(records, maps, output)
-        fallback = byml_codec.load(output['map'])['root']['Actors'][1]
-        self.assertEqual(fallback['Links'][0]['Src'], fallback['Hash'])
-        self.assertEqual(fallback['Links'][0]['Dst'], 2**63+3)
-        self.assertEqual(fallback['Phive']['Placement']['ID'], fallback['Hash'])
-
     def fixtures(self, original_presence=None, explicit=True):
         actor = {'Hash': byml_codec.U64(98765432123456789), 'Gyaml': 'Obj_Pot_A_01',
                  'Translate': [1., 2., 3.], 'Dynamic': {'Drop__DropTable': 'original-table'}}
@@ -45,79 +28,82 @@ class RepeatableSourceTests(unittest.TestCase):
                 'matches': {}}
         return plan, maps
 
-    def test_first_and_later_sources_have_complementary_saved_conditions(self):
-        plan, maps = self.fixtures()
-        records = prepare_repeatables(plan, maps)
-        patched = copy.deepcopy(maps['map']['root'])
-        patched['Actors'][0]['Dynamic']['Drop__DropActor'] = records[0]['actor']
-        raw_maps = {'map': byml_codec.dump({'root': patched, 'endian': '<', 'version': 7})}
-        patch_repeatable_sources(records, maps, raw_maps)
-        result = byml_codec.load(raw_maps['map'])['root']['Actors']
-        self.assertEqual(len(result), 2)
-        first, fallback = result
-        self.assertEqual(first['Dynamic']['Drop__DropActor'], records[0]['actor'])
-        self.assertEqual(fallback['Dynamic'], maps['map']['root']['Actors'][0]['Dynamic'])
-        self.assertNotEqual(first['Hash'], fallback['Hash'])
-        self.assertEqual(first['Presence']['FlagName'], fallback['Presence']['FlagName'])
-        self.assertTrue(first['Presence']['IsNegation'])
-        self.assertFalse(fallback['Presence']['IsNegation'])
-        # Lazy: the vanilla source comes back on the next area load, not at once.
-        self.assertTrue(first['Presence']['IsCheckLazy'])
-        self.assertTrue(fallback['Presence']['IsCheckLazy'])
-        self.assertEqual(plan['placements'][0]['reward_actor'], 'Obj_Rando_Item_BombBag_Small')
-        self.assertNotIn('Presence', maps['map']['root']['Actors'][0])
-
-    def test_original_empty_drop_is_restored_without_inventing_rupee(self):
-        plan, maps = self.fixtures(explicit=False)
-        records = prepare_repeatables(plan, maps)
-        raw_maps = {}
-        patch_repeatable_sources(records, maps, raw_maps)
-        fallback = byml_codec.load(raw_maps['map'])['root']['Actors'][1]
-        self.assertNotIn('Drop__DropActor', fallback['Dynamic'])
-        self.assertEqual(fallback['Dynamic']['Drop__DropTable'], 'original-table')
+    def test_shuffled_source_keeps_its_map_entry_but_for_its_drop(self):
+        """No Presence and no vanilla copy: the game remembers a broken source by its
+        hash until the scene changes, as for the vanilla one."""
+        for explicit in (True, False):
+            with self.subTest(explicit=explicit):
+                plan, maps = self.fixtures(explicit=explicit)
+                actor = maps['map']['root']['Actors'][0]
+                actor['Links'] = [{'Name': 'Cut', 'Src': actor['Hash'], 'Dst': byml_codec.U64(2**63+3)}]
+                actor['Phive'] = {'Placement': {'ID': actor['Hash']}}
+                maps['map']['raw'] = byml_codec.dump({'root': maps['map']['root'], 'endian': '<', 'version': 7})
+                records = prepare_repeatables(plan, maps)
+                self.assertEqual(records[0]['variants'], [{'resource': 'map', 'index': 0, 'native_once': False}])
+                patched = copy.deepcopy(maps['map']['root'])
+                patched['Actors'][0]['Dynamic']['Drop__DropActor'] = records[0]['actor']
+                raw_maps = {'map': byml_codec.dump({'root': patched, 'endian': '<', 'version': 7})}
+                self.assertEqual(patch_repeatable_sources(records, maps, raw_maps), [])
+                result = byml_codec.load(raw_maps['map'])['root']['Actors']
+                self.assertEqual(len(result), 1)
+                self.assertNotIn('Presence', result[0])
+                self.assertEqual(result[0]['Dynamic']['Drop__DropActor'], records[0]['actor'])
+                expected = copy.deepcopy(maps['map']['root']['Actors'][0])
+                expected['Dynamic']['Drop__DropActor'] = records[0]['actor']
+                self.assertEqual(result[0], expected)
+                self.assertEqual(plan['placements'][0]['reward_actor'], 'Obj_Rando_Item_BombBag_Small')
 
     def test_minor_rewards_use_the_short_get(self):
         from oot_rando.patching.repeatable_adapter import LARGE_GET_TYPE, MEDIUM_GET_TYPE, get_type
         from oot_rando.patching.soul_adapter import murmur3
         self.assertEqual((LARGE_GET_TYPE, MEDIUM_GET_TYPE), (murmur3('Large'), murmur3('Medium')))
+        # Their native pickup (no GetType): Medium still posed (Discord 15/11, 0.6.1).
         for actor in ('TBox_Rupee_Green', 'TBox_Rupee_Gold', 'TBox_ArrowBundle_Large', 'TBox_DekuNutBundle',
-                      'Item_BombBundle_Small', 'Item_DekuStickBundle_Small', 'Item_BombchuBundle_Small', 'Obj_Heart'):
-            self.assertEqual(get_type(actor), MEDIUM_GET_TYPE, actor)
+                      'Item_BombBundle_Small', 'Item_DekuStickBundle_Small', 'Obj_Heart', 'Tbox_MagicJar_Large'):
+            self.assertIsNone(get_type(actor), actor)
+        self.assertEqual(get_type('Item_BombchuBundle_Small'), MEDIUM_GET_TYPE)   # Large natively
         for actor in ('Item_Hookshot', 'Obj_Heart_Piece', 'Obj_Heart_Container', 'Item_Token_Gold',
                       'Item_Soul_Keese', 'TBox_Shield_Deku'):
             self.assertEqual(get_type(actor), LARGE_GET_TYPE, actor)
+
+    def test_minor_rewards_keep_the_native_pickup_window(self):
+        # Discord 17/11: every pot rupee showed "You got a Green Rupee!".
+        from oot_rando.patching.repeatable_adapter import LARGE_GET_TYPE, MEDIUM_GET_TYPE, pickup_pouch_settings
+        for actor in ('TBox_Rupee_Green', 'Item_BombBundle_Small', 'Obj_Heart'):
+            self.assertEqual(pickup_pouch_settings(actor), {'PlayGetEventManyTimes': False,
+                                                            'IsAutoSaveAfterPlayGet': True}, actor)
+        self.assertEqual(pickup_pouch_settings('Item_BombchuBundle_Large')['GetType'], MEDIUM_GET_TYPE)
+        key = pickup_pouch_settings('Item_Hookshot')
+        self.assertEqual((key['PlayGetEventManyTimes'], key['GetType']), (True, LARGE_GET_TYPE))
 
     def test_native_once_pot_keeps_presence_without_a_second_source(self):
         presence = {'FlagName': 'IceCavern_Room07_RedRupeePot_IsCrushed', 'IsNegation': True, 'IsCheckLazy': True}
         plan, maps = self.fixtures(presence)
         records = prepare_repeatables(plan, maps)
+        self.assertTrue(records[0]['variants'][0]['native_once'])
         raw_maps = {}
-        patch_repeatable_sources(records, maps, raw_maps)
-        actors = byml_codec.load(raw_maps['map'])['root']['Actors']
-        self.assertEqual(len(actors), 1)
-        self.assertEqual(actors[0]['Presence'], presence)
+        self.assertEqual(patch_repeatable_sources(records, maps, raw_maps), [])
+        self.assertEqual(maps['map']['root']['Actors'][0]['Presence'], presence)
 
-    def test_saved_bool_and_sparse_fallback_key_have_distinct_allocation_costs(self):
+    def test_saved_bool_is_the_only_save_data_added(self):
         plan, maps = self.fixtures()
         records = prepare_repeatables(plan, maps)
-        original = records[0]['variants'][0]['original_hash']
-        records[0]['variants'].append(copy.deepcopy(records[0]['variants'][0]))
         schema = {'Data': {'Bool': [{'Hash': byml_codec.U32(123), 'DefaultValue': False,
                     'SaveFileIndex': 0, 'ResetTypeValue': 8}],
-                    'Bool64bitKey': [{'Hash': byml_codec.U64(original),
-                    'SaveFileIndex': 0, 'ResetTypeValue': 24}]},
+                    'Bool64bitKey': [{'Hash': byml_codec.U64(98765432123456789),
+                    'SaveFileIndex': 0, 'ResetTypeValue': 88}]},
                   'MetaData': {'SaveDataSize': [100], 'SaveDataOffsetPos': [80],
                                'AllDataSaveSize': 100, 'AllDataSaveOffset': 80}}
         raw = byml_codec.dump({'root': schema, 'endian': '<', 'version': 7})
         after, report = register_repeatable_flags(raw, records)
         result = byml_codec.load(after)['root']
-        self.assertEqual(result['MetaData']['SaveDataSize'], [116])
+        self.assertEqual(result['MetaData']['SaveDataSize'], [108])
         self.assertEqual(result['MetaData']['SaveDataOffsetPos'], [88])
         self.assertEqual(result['MetaData']['AllDataSaveOffset'], 88)
-        self.assertEqual(report['saved_bytes_added'], 16)
+        self.assertEqual(report['saved_bytes_added'], 8)
         self.assertEqual(len(result['Data']['Bool']), 2)
-        self.assertEqual(len(result['Data']['Bool64bitKey']), 2)
-        self.assertEqual(result['Data']['Bool64bitKey'][-1]['ResetTypeValue'], 24)
+        # The source's own broken-state key is the vanilla one, untouched.
+        self.assertEqual(result['Data']['Bool64bitKey'], schema['Data']['Bool64bitKey'])
         with self.assertRaisesRegex(ValueError, '(?i)collision'):
             register_repeatable_flags(after, records)
 
@@ -276,6 +262,103 @@ class LocalGraphTests(unittest.TestCase):
 
         finally:
             nup.stream.close()
+
+    def test_repeatable_pickups_fall_like_native_drops(self):
+        """Pots, trees, rocks...: the first-collection pickup is built on a falling drop."""
+        from oot_rando.formats.inspect_nup import Nup
+        from oot_rando.formats.inspect_resources import dictionaries
+        from oot_rando.game.item_forms import DROP_TEMPLATE, resolve_components
+        from oot_rando.game.world_maps import effective_members
+        from oot_rando.patching.repeatable_adapter import build_repeatable_packs
+        from oot_rando.patching.soul_adapter import RSDB_FILES
+        nup = Nup(os.environ['OOT_NUP'])
+        try:
+            dic, members = dictionaries(nup), effective_members(nup)
+
+            def read_raw(path):
+                return decompress(nup.read(members[path]), dic)
+
+            def read_pack(actor):
+                path = f'Pack/Actor/{actor}.pack.zs'
+                return sarc(read_raw(path)) if path in members else None
+
+            tables = {name: byml_codec.load(read_raw(path))['root'] for name, path in RSDB_FILES.items()}
+            records = [{'id': f'zone#{source}#{i}', 'actor': f'Obj_RandoOnce_{i:016x}', 'canonical': canonical,
+                        'kind': 'pickup', 'flag': f'Rando.Check.{i:016x}',
+                        'event_filename': f'RandoOnce_{i:016x}.event.root', 'variants': []}
+                       for i, (source, canonical) in enumerate((('trees', 'Item_Hookshot'), ('pots', 'TBox_Rupee_Red'),
+                                                                ('crates', 'Item_Dungeon_SmallKey')))]
+            new = build_repeatable_packs(records, read_pack, read_raw, tables)
+            rupee = resolve_components(read_pack('Obj_Rupee_Green'), 'Obj_Rupee_Green', byml_codec)
+            nut = resolve_components(read_pack(DROP_TEMPLATE), DROP_TEMPLATE, byml_codec)
+        finally:
+            nup.stream.close()
+        for record in records:
+            actor = record['actor']
+            with self.subTest(canonical=record['canonical']):
+                raw, template = new[f'Pack/Actor/{actor}.pack.zs']
+                self.assertEqual(template, f'Pack/Actor/{DROP_TEMPLATE}.pack.zs')
+                files = sarc(raw)
+                components = resolve_components(files, actor, byml_codec)
+                for key in ('BlackboardRef', 'DeathRef', 'AttentionSenderRef'):
+                    self.assertEqual(components[key], rupee[key], key)
+                self.assertEqual(components['PhysicsRef'], nut['PhysicsRef'])
+                self.assertNotIn('GameLifeConditionRef', components)
+                # The first-collection event and pouch settings stay the pickup's own.
+                event = byml_codec.load(files[components['EventPerformerRef'][1:]])['root']
+                self.assertEqual(event['EventUniqueAin'], f'Work/AI/Root/Event/{record["event_filename"]}.ain')
+                self.assertIn(f'AI/{record["event_filename"]}.ainb', files)
+                pouch = byml_codec.load(files[components['PouchContentRef'][1:]])['root']
+                from oot_rando.patching.repeatable_adapter import is_minor_reward
+                # Minor rewards: the get window only for the first item of its kind ever got.
+                self.assertIs(pouch['PlayGetEventManyTimes'], not is_minor_reward(record['canonical']))
+                self.assertEqual(pouch['PouchActor'], f'Work/Actor/{record["canonical"]}.engine__actor__ActorParam.gyml')
+                for rows in tables.values():
+                    self.assertEqual(sum(1 for row in rows if row['__RowId'] == actor), 1)
+                # Its own drop AI: deleted on spawn once the check is collected.
+                info = byml_codec.load(files[components['AIInfoRef'][1:]])['root']
+                self.assertEqual(info['RootAIRef'], f'Work/AI/Root/{actor}.root.ain')
+                self.assertIn(f'AI/{actor}.root.ainb', files)
+
+    def test_respawned_drop_deletes_itself_once_collected(self):
+        import ainb
+        from oot_rando.formats.inspect_nup import Nup
+        from oot_rando.formats.inspect_resources import dictionaries
+        from oot_rando.game.world_maps import effective_members
+        from oot_rando.patching.repeatable_adapter import (DROP_AI_MEMBER, EVENT_MEMBER, EVENT_PACK,
+                                                           instrument_drop_ai)
+        nup = Nup(os.environ['OOT_NUP'])
+        try:
+            dic, members = dictionaries(nup), effective_members(nup)
+            pack = sarc(decompress(nup.read(members[EVENT_PACK]), dic))
+        finally:
+            nup.stream.close()
+        raw = pack[DROP_AI_MEMBER]
+        before = ainb.AINB.from_binary(raw).as_dict()
+        after = ainb.AINB.from_binary(instrument_drop_ai(raw, 'Rando.Check.test', 'Obj_RandoOnce_test.root',
+                                                         pack[EVENT_MEMBER])).as_dict()
+        self.assertEqual(before['Commands'], after['Commands'])
+        self.assertEqual(after['Filename'], 'Obj_RandoOnce_test.root')
+        # Every native node is kept as it was, but for the start-up sequence's first step.
+        count = len(before['Nodes'])
+        query, delete, keep, selector = after['Nodes'][count:]
+        changed = [i for i in range(count) if before['Nodes'][i] != after['Nodes'][i]]
+        self.assertEqual(len(changed), 1)
+        start = after['Nodes'][changed[0]]
+        self.assertEqual(start['Node Type'], 'Element_Sequential')
+        self.assertEqual(start['Plugs']['Child'][0]['Node Index'], selector['Node Index'])
+        self.assertEqual(start['Plugs']['Child'][1:], before['Nodes'][changed[0]]['Plugs']['Child'])
+        root = after['Nodes'][after['Commands'][0]['Root Node Index']]
+        self.assertIn(start['Node Index'], [p['Node Index'] for p in root['Plugs']['Child']])
+        self.assertEqual(query['Name'], 'QueryGetNonStructGameDataBool')
+        self.assertEqual(query['Parameters']['Inputs']['String'][0]['Default Value'], 'Rando.Check.test')
+        self.assertIs({p['Name']: p['Default Value'] for p in query['Properties']['Bool']}['OutputOnlyOnEnter'], True)
+        self.assertEqual(selector['Queries'], [query['Node Index']])
+        branches = {p['Name']: p['Node Index'] for p in selector['Plugs']['Child']}
+        self.assertEqual(branches, {'True': delete['Node Index'], 'False': keep['Node Index']})
+        self.assertEqual(delete['Name'], 'OneShotGenericDeleteThisActor')
+        self.assertIs({p['Name']: p['Default Value'] for p in delete['Properties']['Bool']}['IsFade'], False)
+        self.assertEqual(keep['Name'], 'OneshotDoNothing')
 
 
 if __name__ == '__main__':

@@ -195,14 +195,16 @@ def decoder_pythons():
     base = Path(os.environ.get('LOCALAPPDATA', '')) / 'HookshotBuilder' / 'versions'
     if base.is_dir():
         found += sorted(base.glob('*/HookshotBuilder/tools/python/python.exe'), reverse=True)
-    found.append(Path(sys.executable))
+    if not getattr(sys, 'frozen', False):   # a portable build's executable is the application itself
+        found.append(Path(sys.executable))
     return found
 
 
 class IconCache:
     """Game icons as Tk images, extracted once from the player's RomFS into `folder`."""
-    def __init__(self, folder, romfs=None):
+    def __init__(self, folder, romfs=None, nup=None):
         self.folder, self.romfs = Path(folder), Path(romfs) if romfs else None
+        self.nup = Path(nup) if nup else None   # the game package: icons without an extracted RomFS
         self.images, self.version, self.status = {}, 0, ''
         self._thread = None
 
@@ -216,12 +218,55 @@ class IconCache:
         names = self.missing()
         if not names or (self._thread and self._thread.is_alive()):
             return
-        if not self.romfs or not (self.romfs / 'UI' / 'Tex' / 'Icon').is_dir():
+        has_romfs = bool(self.romfs and (self.romfs / 'UI' / 'Tex' / 'Icon').is_dir())
+        has_nup = bool(self.nup and self.nup.is_file())
+        if not has_romfs and not has_nup:
             self.status = 'icons: RomFS not found'
             return
         script = resource('tracker', 'icon_extract.py')
 
+        def in_process():
+            """Decode here when this interpreter has the decoder (the portable builds bundle it)."""
+            try:
+                import texture2ddecoder  # noqa: F401
+                from PIL import Image
+            except ImportError:
+                return False
+            from oot_rando.tracker.icon_extract import decode_icon_bytes
+            self.folder.mkdir(parents=True, exist_ok=True)
+            nup = None
+            count = 0
+            try:
+                for name in names:
+                    member = f'UI/Tex/Icon/{name}.bntx.zs'
+                    try:
+                        if has_romfs and (self.romfs / member).is_file():
+                            raw = (self.romfs / member).read_bytes()
+                        elif has_nup:
+                            if nup is None:
+                                from oot_rando.formats.inspect_nup import Nup
+                                nup = Nup(self.nup)
+                            raw = nup.read(nup.latest('romfs/' + member))
+                        else:
+                            continue
+                        image = decode_icon_bytes(raw)
+                        image.thumbnail((ICON_SIZE, ICON_SIZE), Image.LANCZOS)
+                        image.save(self.folder / f'{name}.png')
+                        count += 1
+                    except Exception:   # one bad icon must not stop the others
+                        continue
+            finally:
+                if nup is not None:
+                    nup.stream.close()
+            self.status = f'icons: {count} extracted' if count else 'icons: extraction failed'
+            return bool(count)
+
         def work():
+            if in_process() or not has_romfs:
+                self.version += 1
+                if done:
+                    done()
+                return
             for python in decoder_pythons():
                 if not python.is_file():
                     continue

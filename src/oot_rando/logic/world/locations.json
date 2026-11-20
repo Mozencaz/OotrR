@@ -16282,5 +16282,14 @@
   "scene": null,
   "vanilla": null,
   "categories": []
+ },
+ "ToT Master Sword": {
+  "type": "NPC",
+  "scene": 67,
+  "vanilla": "Master Sword",
+  "categories": [
+   "Temple of Time",
+   "Market"
+  ]
  }
 }

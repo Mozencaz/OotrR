@@ -200,6 +200,7 @@ class ProcessMemory:
                                             ctypes.c_size_t]
         self.k32.VirtualQueryEx.restype = ctypes.c_size_t
         self.handle, self.pid, self.next_scan = None, None, 0.0
+        self.image = ''   # full path of the attached game's exe
         self.base, self.slot = HOST_BASE, GAMEDATA_SLOT
 
     def _pids(self):
@@ -240,7 +241,7 @@ class ProcessMemory:
             elif name in emulators:
                 layout = emulator_layout(self._regions(handle), lambda host, size: self._read(handle, host, size))
             if layout:
-                self.handle, self.pid = handle, pid
+                self.handle, self.pid, self.image = handle, pid, image
                 self.base, self.slot = layout
                 return
             self.k32.CloseHandle(handle)
@@ -291,7 +292,7 @@ class ProcessMemory:
     def close(self):
         if self.handle:
             self.k32.CloseHandle(self.handle)
-        self.handle, self.pid = None, None
+        self.handle, self.pid, self.image = None, None, ''
 
 
 class LiveGameData:

@@ -17,6 +17,8 @@ HF_CHILD, HF_ADULT = 'HyruleField#rocks#4', 'HyruleField#rocks#5'
 # The Door of Time opens with the Song of Time, which (with the Ocarina of Time) the child
 # gets in Hyrule Field for the three spiritual stones: vanilla songs and ocarinas.
 STONES = {'Kokiri Emerald': 1, 'Goron Ruby': 1, 'Zora Sapphire': 1}
+# Remake: the Door of Time also waits for Zelda (DoorOfTime starts after her).
+DOOR_EVENTS = {'Met Zelda': 1}
 
 
 def rock(ident, position=VILLAGE):
@@ -74,10 +76,12 @@ class MapAgeTests(unittest.TestCase):
         self.assertTrue({KF_CHILD, KF_ADULT, KF_BOTH, HF_CHILD, HF_ADULT} <= self.collected(self.everything()))
 
     def test_adult_access_is_the_door_of_time(self):
-        self.assertIn(KF_ADULT, self.collected(STONES))
-        for missing in STONES:
+        door = dict(STONES, **DOOR_EVENTS)
+        self.assertIn(KF_ADULT, self.collected(door))
+        # (Zelda can be met with what the sweep finds: not a missing item here.)
+        for missing in [m for m in door if m != 'Met Zelda']:
             with self.subTest(missing=missing):
-                counts = {item: n for item, n in STONES.items() if item != missing}
+                counts = {item: n for item, n in door.items() if item != missing}
                 self.assertNotIn(KF_ADULT, self.collected(counts))
                 self.assertIn(KF_CHILD, self.collected(counts))
 

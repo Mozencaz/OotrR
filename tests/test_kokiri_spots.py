@@ -36,8 +36,9 @@ class KokiriSpotTests(unittest.TestCase):
         self.assertIsNone(kokiri_spot(entry('skulltula', (CHILD, [0, 110, 0]))))
 
     def test_mido_chests_are_the_four_ap_mido_chests(self):
-        self.assertEqual(len(KNOWN_CHEST_GROUPS), 4)
-        for locations in KNOWN_CHEST_GROUPS.values():
+        kokiri = {g: ls for g, ls in KNOWN_CHEST_GROUPS.items() if g.startswith('KokiriForest#')}
+        self.assertEqual(len(kokiri), 4)
+        for locations in kokiri.values():
             self.assertEqual(len(locations), 4)
             self.assertTrue(all(l.startswith('KF Midos ') for l in locations))
 

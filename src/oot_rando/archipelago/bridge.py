@@ -18,7 +18,7 @@ import hashlib
 import json
 
 GAME = 'OoT Remake'
-CATALOG_VERSION = 1
+CATALOG_VERSION = 2   # 2: readable location names (game/check_names.py)
 PATCH_FORMAT = 'oot-remake-archipelago'
 PATCH_VERSION = 1
 PATCH_SUFFIX = '.aprmk'
@@ -44,6 +44,9 @@ def scan_fingerprint(groups, enemies, extra):
     enemies = [dict(enemy, locks=[lock for lock in enemy['locks'] if not lock.get('direct')])
                if any(lock.get('direct') for lock in enemy.get('locks') or ()) else enemy
                for enemy in enemies]
+    # ``mechanics`` only loosens the dungeon entry souls (older catalogs, without
+    # it, keep every soul of the dungeon): earlier patches remain valid.
+    enemies = [{k: v for k, v in enemy.items() if k != 'mechanics'} for enemy in enemies]
     return hashlib.sha256(_canonical({'groups': groups, 'enemies': enemies, 'extra': extra})).hexdigest()
 
 
@@ -72,7 +75,7 @@ def ap_option_specs():
         if option.kind == 'items':
             continue  # starting items: the apworld's own start_inventory_from_pool
         values = [v for v in option.allowed() if option.supported(v)]
-        if option.name in AP_SKIPPED or len(values) < 2:
+        if option.name in AP_SKIPPED or (len(values) < 2 and option.kind != 'list'):
             continue
         specs.append({'name': option.name, 'kind': option.kind, 'label': option.label, 'default': option.default,
                       'values': values, 'help': option.help})
@@ -102,7 +105,11 @@ def player_yaml(values, open_forest, name='Player'):
     for spec in ap_option_specs():
         value = current[spec['name']]
         # Quoted: YAML would read ``off`` as false and ``4`` as an index.
-        text = ('true' if value else 'false') if spec['kind'] == 'bool' else f"'{ap_value_name(value)}'"
+        if spec['kind'] == 'list':
+            import json
+            text = json.dumps(list(value), ensure_ascii=False)
+        else:
+            text = ('true' if value else 'false') if spec['kind'] == 'bool' else f"'{ap_value_name(value)}'"
         lines.append(f'  {spec["name"]}: {text}')
     lines.append(f'  accessibility: {"full" if values["accessibility"] == "full" else "minimal"}')
     if values['start_inventory_from_pool']:
@@ -113,14 +120,10 @@ def player_yaml(values, open_forest, name='Player'):
 
 # ------------------------------------------------------------------ catalog
 def location_name(data, entry, gid):
-    from oot_rando.randomizer.full_randomizer import SOURCE_LABELS, _entry_zone
+    """Same name as the tracker and the spoiler (``full_randomizer.check_name``)."""
+    from oot_rando.randomizer.full_randomizer import _entry_zone, check_name
     from oot_rando.game.remake_world import zone_label
-    if entry['kind'] == 'exact' and entry['ap']:
-        return entry['ap'][0]
-    label = SOURCE_LABELS.get(entry.get('source', 'chest'), entry.get('source', 'chest'))
-    zone = zone_label(_entry_zone(data, entry, gid)) or entry['folder']
-    tail = str(entry['hash'])[-6:] if entry.get('hash') else gid.split('#')[-1][-6:]
-    return f'{zone} {label} {tail}'
+    return check_name(entry, gid, zone_label(_entry_zone(data, entry, gid)) or entry['folder'])
 
 
 def _catalog_variants():
@@ -131,8 +134,10 @@ def _catalog_variants():
                       shopsanity='4', tokensanity='all', shuffle_scrubs='low', shuffle_freestanding_items='all',
                       shuffle_npc_gifts=True, shuffle_boss_rewards=True, shuffle_great_fairies=True,
                       shuffle_quest_rewards=True, shuffle_pots='all', shuffle_crates='all', shuffle_beehives=True,
-                      shuffle_bushes=True, shuffle_rocks=True, shuffle_mapcompass='dungeon',
-                      shuffle_smallkeys='keysanity', shuffle_bosskeys='keysanity')
+                      shuffle_master_sword=True, shuffle_gerudo_card=True,
+                      shuffle_bushes=True, shuffle_rocks=True, shuffle_trees=True, shuffle_mapcompass='dungeon',
+                      shuffle_smallkeys='keysanity', shuffle_bosskeys='keysanity',
+                      shuffle_song_items='any')
     for matching in ('strict', 'scene'):
         for spawns in ('off', 'bosses', 'regional', 'all'):
             for rings in ('off', 'all'):

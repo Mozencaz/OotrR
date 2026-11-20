@@ -18,8 +18,8 @@ class WorldTests(unittest.TestCase):
         cls.world = World()
 
     def test_tables_and_regions(self):
-        self.assertEqual(len(self.world.location_table), 1706)
-        self.assertEqual(len(self.world.item_table), 224)
+        self.assertEqual(len(self.world.location_table), 1707)
+        self.assertEqual(len(self.world.item_table), 225)
         self.assertEqual(self.world.vanilla_item('GV Chest'), 'Rupees (50)')
         self.assertEqual(self.world.location_type('GV Chest'), 'Chest')
         self.assertEqual(self.world.location_areas('GV Chest'), ('Gerudo Valley', 'Gerudo'))

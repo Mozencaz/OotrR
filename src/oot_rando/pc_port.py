@@ -1,7 +1,8 @@
 """Native PC ports of the game (Hookshot, its successor Longshot, and any later fork).
 
 They all share one layout: ``<game>/<name>.exe`` next to ``image.bin`` and ``romfs/``, with the
-mods in ``<game>/mods`` and the options in ``<game>/<name>_options.ini``. Nothing here depends on
+mods in ``<game>/mods`` and the options in ``<game>/<name>_options.ini``. Longshot's launcher
+builds (one folder per version, ``Games/Longshot/<version>``) keep the exe in ``<game>/bin/``. Nothing here depends on
 the exe's name: a folder holding ``image.bin`` and ``romfs`` is a port, and a running process is
 the port when its exe sits in such a folder (or carries one of the known names).
 """
@@ -22,17 +23,36 @@ def is_port_folder(folder):
         return False
 
 
+EXE_FOLDERS = ('.', 'bin')   # where a port keeps its exe, relative to the game folder
+
+
 def port_exe(folder):
-    """The game exe of a port folder: a known name first, else the only/first other ``*.exe``."""
+    """The game exe of a port folder (or its ``bin/``): a known name first, else the first other ``*.exe``."""
     folder = Path(folder)
-    for name in KNOWN_EXES:
-        if (folder / name).is_file():
-            return folder / name
-    try:
-        exes = sorted(p for p in folder.glob('*.exe') if p.is_file())
-    except OSError:
+    places = [folder / sub for sub in EXE_FOLDERS]
+    for place in places:
+        for name in KNOWN_EXES:
+            if (place / name).is_file():
+                return place / name
+    for place in places:
+        try:
+            exes = sorted(p for p in place.glob('*.exe') if p.is_file())
+        except OSError:
+            continue
+        if exes:
+            return exes[0]
+    return None
+
+
+def game_folder(image_path):
+    """The port folder of a running exe: its own folder, or the one above ``bin/``; else None."""
+    if not image_path:
         return None
-    return exes[0] if exes else None
+    parent = Path(image_path).parent
+    for folder in (parent, parent.parent if parent.name.lower() == 'bin' else None):
+        if folder is not None and folder != Path('.') and is_port_folder(folder):
+            return folder
+    return None
 
 
 def is_port_process(image_path):
@@ -44,7 +64,7 @@ def is_port_process(image_path):
         return False
     if path.name.lower() in KNOWN_EXES:
         return True
-    return path.parent != Path('.') and is_port_folder(path.parent)
+    return path.parent != Path('.') and game_folder(path) is not None
 
 
 def options_ini(folder):

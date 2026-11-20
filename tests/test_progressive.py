@@ -308,6 +308,41 @@ class WithGame(unittest.TestCase):
             self.assertIn(murmur3(progressive.got_flag(token)), flags)
         self.assertEqual(progressive.build_token_files(lambda p: self.read(p), []), ({}, {}))
 
+    def test_tokens_take_the_pose_of_their_first_level(self):
+        # 18/11: Bow, Slingshot and Longshot drawn in their raw axes (medallion template
+        # without pose). A token plays its first level's animation states, in a chest
+        # and as a world pickup; the ocarina (no item-get display) keeps none.
+        from oot_rando.formats import byml_codec
+        from oot_rando.formats.inspect_resources import sarc
+        from oot_rando.game.item_forms import build_pack, form_actor, resolve_components
+        from oot_rando.patching.soul_adapter import RSDB_FILES
+        modified, new = progressive.build_token_files(lambda p: self.read(p), self.tokens)
+        rows = {r['__RowId']: r for r in byml_codec.load(modified[RSDB_FILES['ActorInfo']])['root']}
+        packs = {path[len('Pack/Actor/'):-len('.pack.zs')]: sarc(raw) for path, (raw, _) in new.items()}
+
+        def read_pack(actor):
+            if actor in packs:
+                return packs[actor]
+            return sarc(self.read(f'Pack/Actor/{actor}.pack.zs'))
+
+        for token in ('Item_Prog_Bow_1', 'Item_Prog_Slingshot_1', 'Item_Prog_Hookshot_2', 'Item_Prog_Wallet_1'):
+            with self.subTest(token=token):
+                lender = progressive.pose_lender(progressive.token_family(token))
+                native = resolve_components(read_pack(lender), lender, byml_codec)
+                components = resolve_components(packs[token], token, byml_codec)
+                for key in progressive.POSE_KEYS:
+                    self.assertEqual(components[key], native[key])
+                    path = components[key][1:]
+                    self.assertTrue(path.startswith('AS/') or path in packs[token], path)
+                self.assertEqual(rows[token]['AnimationResources'],
+                                 byml_codec.load(read_pack(lender)[native['AnimationRef'][1:]])['root']['AnimationResources'])
+                world = form_actor(token, 'world', skulltula_drop=True)
+                files = sarc(build_pack(world, read_pack, byml_codec)[0])
+                pickup = resolve_components(files, world, byml_codec)
+                self.assertEqual((pickup['ASRef'], pickup['AnimationRef']), (native['ASRef'], native['AnimationRef']))
+        ocarina = resolve_components(packs['Item_Prog_Ocarina_1'], 'Item_Prog_Ocarina_1', byml_codec)
+        self.assertEqual(ocarina['ASRef'], '?AS/DemoDummy.root.asb')
+
     def test_gifts_outside_item_gets_call_the_converter(self):
         from oot_rando.game.extra_sources import scan_npc_sources
         from oot_rando.patching.event_info import flow_name

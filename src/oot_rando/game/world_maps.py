@@ -11,6 +11,7 @@ from oot_rando.formats.byml_writer import patch_strings
 from oot_rando.formats.inspect_resources import Byml, decompress, sarc
 from oot_rando.patching.randomize_kokiri import CHESTS
 from oot_rando.game.randomizer_categories import candidate_category, CATEGORIES
+from oot_rando.game.remake_world import inaccessible_child_actor
 
 SUPPORTED_CATEGORIES = frozenset({'world_chests', 'pots', 'trees', 'bushes', 'crates',
                                   'rocks', 'beehives', 'enemies', 'loose_items', 'scrubs'})
@@ -119,6 +120,8 @@ def build_world(nup, dictionaries, categories, seed_key, avoid_vanilla=True, pro
         maps[path] = {'raw': raw, 'compressed_sha256': hashlib.sha256(compressed).hexdigest(), 'root': root}
         region = path.split('/')[1]
         for actor_index, actor in enumerate(root.get('Actors', [])):
+            if inaccessible_child_actor(path, actor):
+                continue
             name = actor.get('Gyaml', '')
             category = candidate_category(actor)
             if name in NATIVE_POOL:

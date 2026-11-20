@@ -132,6 +132,30 @@ class NupTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'wiring'):
             self.q.let_bombs_break_dc_boulder(patched)   # never applied twice
 
+    def test_saria_gift_is_added_before_its_get_window(self):
+        from oot_rando.formats.inspect_resources import decompress, dictionaries
+        from oot_rando.patching.event_patch import _flow
+        raw = decompress(self.read(self.q.SARIA_GIFT_FLOW), dictionaries(self.nup))
+        patched, _ = self.q.saria_add_before_display(raw)
+        events = {e.name: e for e in _flow(patched).flowchart.events}
+        self.assertIs(events['Event58'].data.nxt.v, events['Event68'])
+        self.assertIs(events['Event68'].data.nxt.v, events['Event77'])
+        self.assertNotIn(events['Event68'], [f.v for f in events['Event26'].data.forks])
+        with self.assertRaisesRegex(ValueError, 'already patched'):
+            self.q.saria_add_before_display(patched)
+
+    def test_night_skulltulas_are_not_deleted_by_day(self):
+        import ainb
+        raw = self.read(self.q.NIGHT_SKULLTULA_MODULE)
+        patched, report = self.q.keep_night_skulltulas_by_day(raw)
+        self.assertEqual(len(patched), len(raw))
+        delete = ainb.AINB.from_binary(patched).as_dict()['Nodes'][0]['Parameters']['Inputs']['Bool'][2]
+        self.assertEqual((delete['Name'], delete['Node Index'], delete['Default Value']), ('Logic_Delete', -1, False))
+        self.assertIn('Uses Default', delete['Flags'])
+        self.assertEqual(report['input'], 'Logic_Delete')
+        with self.assertRaisesRegex(ValueError, 'Unexpected'):
+            self.q.keep_night_skulltulas_by_day(patched)   # never applied twice
+
     def test_every_disable_skip_is_removed(self):
         from oot_rando.formats.inspect_resources import Byml
         files, report = self.q.cutscene_files(self.read)
@@ -191,7 +215,7 @@ class NupTests(unittest.TestCase):
             added = {e.name for e in after.events} - {e.name for e in before.events}
             deferred = [r for r in report[name] if 'location_ui' in r]
             self.assertEqual(len(added), len({r['entry'] for r in report[name]}) + len(report[name])
-                             + 2 * len(deferred), name)
+                             + 3 * len(deferred) + 2 * len(report[name]), name)
             entries = {e.name: e for e in after.entry_points}
             events = {e.name: e for e in after.events}
             for record in report[name]:
@@ -204,12 +228,26 @@ class NupTests(unittest.TestCase):
             opened = [e for e in after.events if getattr(e.data, 'actor_action', None) is not None
                       and e.data.actor_action.v.v == self.q.LOCATION_UI_ACTION]
             self.assertTrue(opened and all(e.name.startswith('RandoLocationUI_') for e in opened), name)
+            # Skipped: the window fades the screen back in itself (black screen, 19/11).
+            for record in report[name]:
+                end = events[record['end']]
+                self.assertEqual(end.data.params.data['FadeInType'], 2)
+                fade_check = end.data.nxt.v
+                self.assertEqual(fade_check.data.actor_query.v.v, 'EventQueryIsEventSkipedMostRecent')
+                fade = fade_check.data.cases[0].v
+                self.assertEqual(fade.data.actor.v.identifier.name, 'UISystemActor')
+                self.assertEqual(fade.data.actor_action.v.v, 'EventEventFadeIn')
+                self.assertIs(fade.data.nxt.v, fade_check.data.cases[1].v)
             for record in deferred:
-                check = events[record['end']].data.nxt.v
+                check = events[record['end']].data.nxt.v.data.cases[1].v
                 self.assertEqual(check.data.actor_query.v.v, 'EventQueryIsEventSkipedMostRecent')
                 self.assertEqual(check.data.cases[1].v.data.actor_action.v.v, self.q.LOCATION_UI_ACTION)
-                if 0 in check.data.cases:   # skipped: straight on, no frame
-                    self.assertIs(check.data.cases[0].v, check.data.cases[1].v.data.nxt.v)
+                # Skipped or not, the area is marked visited (the map menu needs it).
+                visit = check.data.cases[0].v
+                self.assertIs(visit, check.data.cases[1].v.data.nxt.v)
+                self.assertEqual(visit.data.actor_action.v.v, 'EventTriggerSetGameDataBool')
+                self.assertEqual(visit.data.params.data['GameDataName'], record['location_ui']['visit'])
+                self.assertTrue(record['location_ui']['visit'].startswith('IsVisitLocation.'))
             # Every other original parameter is unchanged; the frame events became 1-frame waits.
             original = _snapshot(_flow(self._flow(path)))
             patched = _snapshot(_flow(files[path]))
@@ -395,7 +433,11 @@ class NupTests(unittest.TestCase):
         held = entry.main_event.v
         self.assertEqual(held.data.actor_query.v.v, 'EventQueryIsExistInPouch')
         self.assertEqual(held.data.params.data, {'Actor': 'Item_Ocarina_Fairy', 'Num': 1})
-        guide, original = held.data.cases[0].v, held.data.cases[1].v
+        guide, time_held = held.data.cases[0].v, held.data.cases[1].v
+        # The Ocarina of Time held alone gets the same guide.
+        self.assertEqual(time_held.data.params.data, {'Actor': 'Item_Ocarina_Time', 'Num': 1})
+        self.assertIs(time_held.data.cases[0].v, guide)
+        original = time_held.data.cases[1].v
         self.assertEqual((guide.data.res_flowchart_name, guide.data.entry_point_name),
                          ('', 'OpenActionGuideSceenForOcarina'))
         self.assertIs(guide.data.nxt.v, original)

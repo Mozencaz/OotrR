@@ -894,5 +894,9 @@
  "Light Medallion": {
   "type": "DungeonReward",
   "progression": true
+ },
+ "Master Sword": {
+  "type": "Item",
+  "progression": true
  }
 }

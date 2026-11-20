@@ -2,10 +2,12 @@
 import _src_path  # noqa: F401  (src on sys.path)
 import hashlib
 import io
+import json
 import tarfile
 import tempfile
 import unittest
 import zipfile
+from unittest.mock import patch
 from pathlib import Path
 
 from oot_rando import updater
@@ -72,6 +74,7 @@ class UpdaterTest(unittest.TestCase):
         self.assertIsNone(updater.release_from_json(beta, '0.6.0', 'win32'))   # stable players: never
         unflagged = api('v0.7.0-beta.1', *names)   # suffixed tag published without the flag
         self.assertIsNone(updater.release_from_json(unflagged, '0.6.0', 'win32'))
+
         self.assertEqual(updater.release_from_json(beta, '0.6.0', 'win32', experimental=True).version, '0.7.0-beta.1')
         stable = api('v0.6.1', *names)
         listing = [api('v0.7.0-beta.2', *names, prerelease=True), stable, beta, {'draft': True}]
@@ -80,7 +83,21 @@ class UpdaterTest(unittest.TestCase):
         # Back on stable after a beta: the final release supersedes it, older stables do not.
         self.assertEqual(updater.release_from_json(api('v0.7.0', *names), '0.7.0-beta.2', 'win32').version, '0.7.0')
         self.assertIsNone(updater.release_from_json(stable, '0.7.0-beta.2', 'win32'))
+        # Pre-releases unticked on a beta (17/11): the latest stable is offered even when older.
+        self.assertTrue(updater.leaving_prereleases(False, '0.7.0-beta.2'))
+        self.assertFalse(updater.leaving_prereleases(True, '0.7.0-beta.2'))
+        self.assertFalse(updater.leaving_prereleases(False, '0.6.1'))
+        self.assertEqual(updater.release_from_json(stable, '0.7.0-beta.2', 'win32', downgrade=True).version, '0.6.1')
+        self.assertIsNone(updater.release_from_json(beta, '0.7.0-beta.2', 'win32', downgrade=True))   # stable only
         self.assertIsNone(updater.newest_release({'message': 'rate limited'}, '0.6.0', 'win32', experimental=True))
+
+    def test_latest_experimental_release_respects_the_current_version(self):
+        names = ('x-windows-x64.zip', 'x-linux-x64.tar.gz', updater.SUMS, updater.SIGNATURE)
+        answer = json.dumps([api('v0.7.0-beta.2', *names, prerelease=True)]).encode()
+        with patch.object(updater, '_get', return_value=answer):
+            self.assertIsNone(updater.latest_release(experimental=True, current='0.8.0'))
+            self.assertEqual(updater.latest_release(experimental=True, current='0.6.0').version,
+                             '0.7.0-beta.2')
 
     def test_signature(self):
         self.assertTrue(updater.verify_signature(GOOD_SUMS, GOOD_SIG, TEST_KEY))

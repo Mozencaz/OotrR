@@ -36,7 +36,10 @@ class Units(unittest.TestCase):
         self.assertNotIn('logic_rules', specs)          # a single supported value: not exposed
         for spec in specs.values():
             self.assertGreaterEqual(len(spec['values']), 2)
-            self.assertIn(spec['default'], spec['values'])
+            if spec['kind'] == 'list':
+                self.assertLessEqual(set(spec['default']), set(spec['values']))
+            else:
+                self.assertIn(spec['default'], spec['values'])
         self.assertIn('random', specs['shopsanity']['values'])
 
     def test_random_value_is_renamed(self):
@@ -165,6 +168,13 @@ class WithGame(unittest.TestCase):
         self.assertEqual(len(set(bridge.location_ids(self.catalog).values())), len(self.catalog['locations']))
         self.assertEqual(self.catalog['scan'], bridge.scan_fingerprint(self.groups, self.enemies, self.extra))
 
+    def test_catalog_covers_song_shuffle(self):
+        # The beta's song shuffle adds the song locations; an apworld without them refused to generate.
+        for songs in ('shuffled', 'dungeon'):
+            world = bridge.PlayerWorld(self.catalog, dict(self.values, shuffle_song_items=songs), 'archipelago|test|3')
+            self.assertTrue(any(g.startswith('song#') for g in world.names), songs)
+            self.assertTrue(set(world.names) <= set(self.catalog['locations']), songs)
+
     def test_rules_and_victory(self):
         world = self.player()
         nothing, beaten = world.reach(Counter())
@@ -292,6 +302,10 @@ class WithGame(unittest.TestCase):
                 "catalog = json.loads(zipfile.ZipFile(path).read('oot_remake/catalog.json'))\n"
                 f"world = bridge.PlayerWorld(catalog, {self.values!r}, 'k')\n"
                 "assert world.reach({})[0] is not None\n"
+                f"values = dict({self.values!r}, skip_child_zelda=True, shuffle_enemy_spawns='off')\n"
+                "skipped = bridge.PlayerWorld(catalog, values, 'castle-skip')\n"
+                "assert 'Zeldas Letter' in skipped.pool and 'Zeldas Lullaby' in skipped.pool\n"
+                "assert skipped.reach({})[0] is not None\n"
                 "assert 'zstandard' not in sys.modules and 'evfl' not in sys.modules\n"
                 "print(len(world.names))\n")
             done = subprocess.run([sys.executable, '-I', '-c', script], capture_output=True, text=True,
@@ -313,7 +327,7 @@ class WithGame(unittest.TestCase):
             'Options.py': (
                 'class Toggle: pass\nclass DefaultOnToggle(Toggle): pass\nclass Choice: pass\n'
                 'class OptionError(Exception): pass\nclass StartInventoryPool: pass\n'
-                'class PerGameCommonOptions: pass\n'),
+                'class PerGameCommonOptions: pass\nclass OptionSet: pass\n'),
             'worlds/__init__.py': '',
             'worlds/AutoWorld.py': 'class World: pass\n',
         }

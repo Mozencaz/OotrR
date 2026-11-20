@@ -286,13 +286,16 @@ def _without_remake_fixes(enabled):
         yield
         return
     rules, regions = dict(world.REMAKE_LOCATION_RULES), dict(world.REMAKE_LOCATION_REGIONS)
+    exits = dict(world.REMAKE_EXIT_RULES)
     world.REMAKE_LOCATION_RULES.clear()
     world.REMAKE_LOCATION_REGIONS.clear()
+    world.REMAKE_EXIT_RULES.clear()
     try:
         yield
     finally:
         world.REMAKE_LOCATION_RULES.update(rules)
         world.REMAKE_LOCATION_REGIONS.update(regions)
+        world.REMAKE_EXIT_RULES.update(exits)
 
 
 def matched_entries(data, logic, groups, extra, options):

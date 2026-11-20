@@ -45,6 +45,33 @@ class SaveDiscoveryTests(unittest.TestCase):
                     self.assertNotIn(other, find_save_slots(title='0400486024DEC000', mods=mods))
             self.assertNotIn(ours, find_save_slots(title='0400486024DEC000', mods=Path(temporary) / 'elsewhere'))
 
+    def test_longshot_saves_moved_to_appdata(self):
+        # Longshot's save import renames <game>/user/save to save.moved-<date> and
+        # writes the saves to %APPDATA%/Longshot/save/<account>/slot_*.
+        with tempfile.TemporaryDirectory() as temporary:
+            game = Path(temporary) / 'Games' / 'Longshot' / 'rc5'
+            (game / 'mods').mkdir(parents=True)
+            (game / 'longshot.exe').write_bytes(b'')
+            old = game / 'user' / 'save.moved-20261116-112431' / 'acct' / 'slot_00' / 'progress.sav'
+            appdata = Path(temporary) / 'AppData' / 'Roaming'
+            moved = appdata / 'Longshot' / 'save' / '5a3c9e1f0b7d2468' / 'slot_02' / 'progress.sav'
+            for path in (old, moved):
+                path.parent.mkdir(parents=True)
+                path.write_bytes(b'x')
+            previous = os.environ.get('APPDATA')
+            os.environ['APPDATA'] = str(appdata)
+            try:
+                self.assertIn(moved, find_save_slots(game / 'mods'))
+                self.assertNotIn(old, find_save_slots(game / 'mods'))
+                self.assertEqual(newest_save(game / 'mods'), moved)
+                # An emulator setup (no PC port) never picks the port's saves.
+                self.assertNotIn(moved, find_save_slots(title='0400486024DEC000', mods=Path(temporary) / 'emu'))
+            finally:
+                if previous is None:
+                    os.environ.pop('APPDATA', None)
+                else:
+                    os.environ['APPDATA'] = previous
+
     def test_files_outside_slots_are_ignored(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / 'Hookshot'

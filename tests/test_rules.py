@@ -19,6 +19,40 @@ class ShopRuleTests(unittest.TestCase):
         self.assertIsNone(shop_rule('Buy Deku Shield'))
 
 
+class ClosedForestShortcutTests(unittest.TestCase):
+    """A closed Kokiri Forest only blocks its bridge: the Lost Woods shortcuts stay open."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.logic = Logic(World(), {'open_forest': 'closed'})
+
+    def child_regions(self, counts):
+        state, _, _ = self.logic.sweep({}, self.logic.new_state(Counter(counts)))
+        return state.reached['child']
+
+    def test_nothing_leaves_the_forest(self):
+        reached = self.child_regions({})
+        self.assertNotIn('Zora River', reached)
+        self.assertNotIn('Goron City', reached)
+        self.assertNotIn('Hyrule Field', reached)
+
+    def test_scale_reaches_zora_river_and_hyrule_field(self):
+        reached = self.child_regions({'Progressive Scale': 1})
+        self.assertIn('Zora River', reached)
+        self.assertIn('Hyrule Field', reached)
+
+    def test_bombs_reach_goron_city_and_kakariko_only_by_the_owl(self):
+        reached = self.child_regions({'Bomb Bag': 1})
+        self.assertIn('Goron City', reached)
+        self.assertIn('Kak Behind Gate', reached)
+        # The gate stays closed for child Link: Kakariko only through the summit owl.
+        gate = dict(self.logic.regions['Kak Behind Gate']['exits'])['Kakariko Village']
+        state = self.logic.new_state(Counter({'Bomb Bag': 1}))
+        self.assertFalse(gate(state, state.counts, 'child'))
+        self.assertIn('DMT Owl Flight', reached)
+        self.assertIn('Kakariko Village', reached)
+
+
 class LogicTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -28,6 +62,43 @@ class LogicTests(unittest.TestCase):
     def reachable(self, placements, counts=()):
         _, collected, _ = self.logic.sweep(placements, self.logic.new_state(Counter(counts)))
         return collected
+
+    def test_goron_city_chests_follow_their_own_gimmick(self):
+        # 16/11: GC_chest_6 (silver boulder) was in logic with bombs only.
+        from oot_rando.game.remake_world import CHEST_RULE_EVENTS, rule_members
+        self.assertEqual(sorted(set(CHEST_RULE_EVENTS.values())),
+                         ['GC Hammer Rock Chest', 'GC Lower Ledge Chests', 'GC Maze Rocks', 'GC Silver Rock Chest',
+                          'Kak Impas House Heart Piece', 'Kak Windmill Heart Piece'])
+        self.logic.virtual = {'chest_6': rule_members({'id': 'GoronCity#3870071239709713434',
+                                                       'ap': ['GC Maze Center Chest']}),
+                              'chest_4': rule_members({'id': 'GoronCity#14647422914070455120', 'ap': []})}
+        try:
+            # Necro's inventory: bombs and one strength upgrade, child and adult.
+            necro = {'Bomb Bag': 1, 'Progressive Strength Upgrade': 1, 'Ocarina': 1, 'Time Travel': 1}
+            got = self.reachable({'chest_6': None, 'chest_4': None}, necro)
+            self.assertIn('chest_4', got)
+            self.assertNotIn('chest_6', got)
+            silver = dict(necro, **{'Progressive Strength Upgrade': 2})
+            self.assertIn('chest_6', self.reachable({'chest_6': None}, silver))
+        finally:
+            self.logic.virtual = {}
+        self.assertEqual(rule_members({'id': 'Other#1', 'ap': ['KF Kokiri Sword Chest']}), ['KF Kokiri Sword Chest'])
+
+    def test_kakariko_windmill_heart_piece_needs_adult_hookshot(self):
+        # 17/11: Kak_heart_piece_2 (windmill) is reached as adult with the Hookshot.
+        from oot_rando.game.remake_world import rule_members
+        ap = ['Kak Impas House Freestanding PoH', 'Kak Windmill Freestanding PoH']
+        self.logic.virtual = {
+            'windmill': rule_members({'id': 'KakarikoVillage#free#13389209437182306002', 'ap': ap}),
+            'impa': rule_members({'id': 'KakarikoVillage#free#17926402522258180222', 'ap': ap})}
+        try:
+            boomerang = {'Boomerang': 1, 'Ocarina': 1, 'Time Travel': 1}
+            self.assertNotIn('windmill', self.reachable({'windmill': None}, boomerang))
+            hookshot = dict(boomerang, **{'Progressive Hookshot': 1})
+            self.assertIn('windmill', self.reachable({'windmill': None}, hookshot))
+            self.assertIn('impa', self.reachable({'impa': None}, hookshot))
+        finally:
+            self.logic.virtual = {}
 
     def test_links_pocket_needs_time_travel(self):
         # Rauru gives this reward after the first Master Sword pull: an ocarina
@@ -51,6 +122,43 @@ class LogicTests(unittest.TestCase):
         self.assertIs(dict(strict.location_rules)['Kak Anju as Adult'][0][1](Night, {}, 'adult'),
                       dict(self.logic.location_rules)['Kak Anju as Adult'][0][1](Night, {}, 'adult'))
 
+    def test_fire_temple_locked_door_needs_the_ring_once_keys_are_shuffled(self):
+        # AP's "not keysanity" exception opens one Fire Temple door without its key
+        # (a vanilla key may sit behind it). A key ring there locks itself in
+        # (Discord 16/11: Fire Temple ring on Volvagia, boss key past that door).
+        from oot_rando.logic.rando_options import defaults
+        from oot_rando.randomizer.full_randomizer import ap_settings
+        inventory = Counter({'Time Travel': 1, 'Megaton Hammer': 1, 'Goron Tunic': 1, 'Hover Boots': 1,
+                             'Progressive Hookshot': 2, 'Bow': 1, 'Bomb Bag': 1,
+                             'Progressive Strength Upgrade': 3, 'Ocarina': 1, 'Song of Time': 1,
+                             'Bolero of Fire': 1, 'Kokiri Sword': 1, 'Hylian Shield': 1})
+        chest = {'Fire Temple Boss Key Chest': None}
+        for mode, locked in (('vanilla', False), ('dungeon', True)):
+            options = defaults()
+            options['shuffle_smallkeys'] = mode
+            settings = ap_settings(options, True)
+            self.assertIs(settings['keysanity'], locked)
+            logic = Logic(self.data, settings)
+            _, without, _ = logic.sweep(chest, logic.new_state(Counter(inventory)))
+            self.assertEqual('Fire Temple Boss Key Chest' not in without, locked, mode)
+            _, ring, _ = logic.sweep(chest, logic.new_state(inventory + Counter({'Small Key (Fire Temple)': 8})))
+            self.assertIn('Fire Temple Boss Key Chest', ring, mode)
+
+    def test_song_of_time_and_door_wait_for_zelda_and_stones(self):
+        # Zelda's escape and the Door of Time (DoorOfTime) follow Zelda and the
+        # three stones (the game checks the stones held: patching/story_fixes.py).
+        for location in ('Song from Ocarina of Time', 'Master Sword Pedestal'):
+            rule = self.data.remake['location_rules'][location]
+            self.assertIn("'Met Zelda'", rule, location)
+            self.assertIn('has_all_stones', rule, location)
+            self.assertNotIn('Clear', rule, location)
+        self.assertNotIn('Master Sword Pedestal', self.reachable(
+            {'Master Sword Pedestal': None}, {'Ocarina': 1, 'Song of Time': 1}))
+
+    def test_remake_events_compiled(self):
+        events = {e for r in self.logic.regions.values() for e, _ in r['events']}
+        self.assertIn('Met Zelda', events)
+
     def test_saria_gift_waits_for_deku_tree(self):
         self.assertNotIn('LW Gift from Saria', self.reachable({'LW Gift from Saria': None}))
         self.assertIn('LW Gift from Saria', self.reachable({'LW Gift from Saria': None}, {'Deku Tree Clear': 1}))
@@ -73,6 +181,81 @@ class LogicTests(unittest.TestCase):
         without = dict(everything, **{'Zeldas Letter': 0, 'Kakariko Village Gate Open': 0})
         self.assertNotIn(dog, self.reachable(no_letter, without))
         self.assertIn(dog, self.reachable(no_letter, everything))
+
+    def exit_rule(self, region, target):
+        return dict(self.logic.regions[region]['exits'])[target]
+
+    def test_remake_exit_rules_replace_base_exits(self):
+        class Day:
+            tod = {'adult': True, 'child': True}
+        river = self.exit_rule('ZR Front', 'Zora River')
+        self.assertFalse(river(Day, {}, 'adult'))
+        self.assertTrue(river(Day, {'Megaton Hammer': 1}, 'adult'))
+        self.assertTrue(river(Day, {'Bomb Bag': 1}, 'child'))
+        shop = self.exit_rule('Market Back Alley', 'Market Bombchu Shop')
+        self.assertFalse(shop(Day, {}, 'child'))
+
+    def test_water_temple_gate_needs_iron_boots_or_thawed_king(self):
+        class Day:
+            tod = {'adult': True, 'child': True}
+        gate = self.exit_rule('Lake Hylia', 'Water Temple Lobby')
+        dive = {'Progressive Hookshot': 2, 'Progressive Scale': 2}
+        self.assertFalse(gate(Day, dive, 'adult'))
+        self.assertTrue(gate(Day, dict(dive, **{'King Zora Thawed': 1}), 'adult'))
+        self.assertTrue(gate(Day, {'Progressive Hookshot': 1, 'Iron Boots': 1}, 'adult'))
+
+    def test_unknown_remake_exit_is_refused(self):
+        from oot_rando.logic import world
+        world.REMAKE_EXIT_RULES['Nowhere -> Elsewhere'] = 'True'
+        try:
+            with self.assertRaises(ValueError):
+                Logic(self.data, {'open_forest': 'closed_deku'})
+        finally:
+            del world.REMAKE_EXIT_RULES['Nowhere -> Elsewhere']
+
+    def test_temple_of_time_scenes_follow_medallions(self):
+        # Starting or shuffled medallions suffice without their original bosses.
+        class Day:
+            tod = {'adult': True, 'child': True}
+        rules = dict(self.logic.location_rules)
+        sheik = rules['Sheik at Temple'][0][1]
+        self.assertTrue(sheik(Day, {'Forest Medallion': 1}, 'adult'))
+        self.assertFalse(sheik(Day, {'Forest Medallion': 1}, 'child'))
+        self.assertFalse(sheik(Day, {'Forest Temple Clear': 1}, 'adult'))
+        kakariko = rules['Sheik in Kakariko'][0][1]
+        three = {'Forest Medallion': 1, 'Fire Medallion': 1, 'Water Medallion': 1}
+        self.assertTrue(kakariko(Day, three, 'adult'))
+        self.assertFalse(kakariko(Day, three, 'child'))
+        for missing in three:
+            self.assertFalse(kakariko(Day, {m: 1 for m in three if m != missing}, 'adult'))
+        self.assertFalse(kakariko(Day, {'Forest Temple Clear': 1, 'Fire Temple Clear': 1,
+                                        'Water Temple Clear': 1}, 'adult'))
+        lacs = rules['ToT Light Arrows Cutscene'][0][1]
+        medals = {'Shadow Medallion': 1, 'Spirit Medallion': 1}
+        self.assertTrue(lacs(Day, medals, 'adult'))
+        self.assertFalse(lacs(Day, medals, 'child'))
+        self.assertFalse(lacs(Day, {'Shadow Medallion': 1}, 'adult'))
+        self.assertFalse(lacs(Day, {'Spirit Medallion': 1}, 'adult'))
+        self.assertFalse(lacs(Day, {'Shadow Temple Clear': 1, 'Spirit Temple Clear': 1}, 'adult'))
+        self.assertTrue(lacs(Day, dict(medals, **{'Shadow Temple Clear': 1, 'Spirit Temple Clear': 1}), 'adult'))
+
+    def test_stricter_rules_stay_reachable_with_open_zones(self):
+        # The stricter remake rules must not cut a check off once a zone starts
+        # open; the boss events come from the boss rooms, never from the pouch.
+        checks = ['Gerudo Training Ground Heavy Block First Chest', 'GC Maze Center Chest', 'GC Maze Right Chest',
+                  'LH Sun', 'Big Poe Kill', 'Colossus Great Fairy Reward', 'OGC Great Fairy Reward',
+                  'Sheik at Temple', 'Sheik in Kakariko', 'ToT Light Arrows Cutscene']
+        events = {'Dodongos Cavern Clear', 'Forest Temple Clear', 'Fire Temple Clear', 'Water Temple Clear',
+                  'Shadow Temple Clear', 'Spirit Temple Clear'}
+        for options in ({'open_forest': 'closed_deku'}, {'open_forest': 'open'},
+                        {'open_forest': 'open', 'open_kakariko': 'open'},
+                        {'open_forest': 'open', 'open_door_of_time': True},
+                        {'open_forest': 'open', 'zora_fountain': 'open', 'gerudo_fortress': 'open'}):
+            logic = Logic(self.data, options)
+            items = Counter({item: 9 for item in logic.referenced if item not in events})
+            _, collected, _ = logic.sweep({check: None for check in checks}, logic.new_state(items))
+            for check in checks:
+                self.assertIn(check, collected, f'{check} with {options}')
 
     def test_lost_woods_chest_needs_adult_bean_ride(self):
         # The remake's only Lost Woods chest stands on a ledge served by the

@@ -11,6 +11,7 @@ from oot_rando.logic.rules import split_age_member
 from oot_rando.randomizer.randomizer_services import ManualTracker, read_artifact
 from oot_rando.tracker.save_reader import load_snapshot
 from oot_rando.paths import state_dir
+from oot_rando.pc_port import KNOWN_EXES, port_exe
 
 
 NAND_SAVE = ('nand', 'user', 'save')
@@ -27,19 +28,36 @@ def emulator_save_root(path):
     return None
 
 
+def port_appdata_names(root):
+    """Names of the %APPDATA% folders a PC port may keep its saves in: its exe's, then the known ports'.
+
+    Both spellings are kept (``longshot`` from the exe, ``Longshot`` as the port writes it): they
+    are one folder on Windows (find_save_slots merges them) but two on case-sensitive systems."""
+    exe = port_exe(root) if root.is_dir() else None
+    names = [exe.stem] if exe else []
+    for known in KNOWN_EXES:
+        name = Path(known).stem.capitalize()
+        if name not in names:
+            names.append(name)
+    return names
+
+
 def save_roots(hookshot_root=None, mods=None):
-    """Save folders of Hookshot, of a portable emulator holding ``mods`` (its mods folder or
-    a seed in it), and of the Eden emulator in %APPDATA% (NAND user saves)."""
+    """Save folders of a PC port (``<game>/user/save``, or ``%APPDATA%/<Port>/save`` where Longshot
+    moves them on import, renaming the old folder ``save.moved-<date>``), of a portable emulator
+    holding ``mods`` (its mods folder or a seed in it), and of Eden in %APPDATA% (NAND user saves)."""
     roots = []
+    appdata = os.environ.get('APPDATA')
     if hookshot_root:
         root = Path(hookshot_root)
         if root.name.lower() == 'mods':
             root = root.parent
         roots.append(root / 'user' / 'save')
+        if appdata:
+            roots.extend(Path(appdata) / name / 'save' for name in port_appdata_names(root))
     portable = emulator_save_root(mods) if mods else None
     if portable:
         roots.append(portable)
-    appdata = os.environ.get('APPDATA')
     if appdata:
         roots.append(Path(appdata) / 'eden' / 'nand' / 'user' / 'save')
     unique = []
@@ -119,6 +137,7 @@ class TrackerSession:
             self.metadata['_known64'] = set(self.metadata.get('known_bool64', []))
         self._lock = threading.RLock()
         self._automatic, self._access = set(), {}
+        self._soul_reasons = {}
         self._inventory = (Counter(), set())
         from oot_rando.patching.key_adapter import dungeon_keys
         self._keys = dungeon_keys((self.metadata or {}).get('keys'), None)   # 0 found until a save is read
@@ -155,7 +174,8 @@ class TrackerSession:
             reward = row.get('reward', '') if automatic else ''
             return {'completed': completed, 'access': self._access.get(ident, 'unknown'),
                     'reward': reward, 'source': 'save' if automatic else (
-                        'manual' if completed else ''), 'observed': automatic}
+                        'manual' if completed else ''), 'observed': automatic,
+                    'missing_souls': tuple(self._soul_reasons.get(ident, ()))}
 
     def _get_logic(self):
         if self._logic is not None or self._logic_error:
@@ -206,6 +226,7 @@ class TrackerSession:
         return counts, known
 
     def _availability(self, snapshot, metadata):
+        self._soul_reasons = {}
         logic = self._get_logic()
         if logic is None:
             return {}
@@ -250,7 +271,43 @@ class TrackerSession:
                 result[gid] = 'blocked'
             else:
                 result[gid] = 'unknown'
+        self._soul_reasons = self._missing_souls(logic, placements, counts, known, metadata, result)
         return result
+
+    def _missing_souls(self, logic, placements, counts, known, metadata, access):
+        """Check id → souls (items) still missing for a check the souls alone would open.
+
+        Only checks reachable with the current inventory plus every missing soul are
+        explained; a soul is named when that check stays closed without it. Cached by
+        inventory: the result only depends on the counts.
+        """
+        souls = sorted({s['item'] for s in metadata.get('souls') or []}
+                       | {i for i in logic.referenced if i.startswith('Soul (')})
+        missing = [s for s in souls if not counts.get(s) and (s in known or not known)]
+        if not missing:
+            return {}
+        key = (tuple(sorted(counts.items())), tuple(missing))
+        cached = getattr(self, '_soul_cache', None)
+        if cached and cached[0] == key:
+            return cached[1]
+        candidates = {gid: self.logic_location(gid, metadata['checks'][gid])
+                      for gid, value in access.items() if value != 'available'}
+        candidates = {gid: loc for gid, loc in candidates.items() if loc in placements}
+        reasons = {}
+        if candidates:
+            def reachable(extra):
+                with_souls = Counter(counts)
+                with_souls.update({s: 1 for s in extra})
+                return logic.sweep(placements, logic.new_state(dict(with_souls)))[1]
+            opened = reachable(missing)
+            candidates = {gid: loc for gid, loc in candidates.items() if loc in opened}
+            for soul in missing if candidates else ():
+                still = reachable([s for s in missing if s != soul])
+                for gid, loc in candidates.items():
+                    if loc not in still:
+                        reasons.setdefault(gid, []).append(soul)
+        self._soul_cache = (key, reasons)
+        return reasons
 
     @staticmethod
     def _partly_reachable(logic, state, location):
@@ -366,7 +423,7 @@ class TrackerSession:
         with self._lock:
             # A different slot must never inherit collection from the previous one.
             if reset or (self._source_path and str(self.save_path).strip() != self._source_path):
-                self._automatic, self._access = set(), {}
+                self._automatic, self._access, self._soul_reasons = set(), {}, {}
                 self._inventory = (Counter(), set())
                 self._goal = False
                 self._fingerprint, self._observed, self._source_path = None, False, ''

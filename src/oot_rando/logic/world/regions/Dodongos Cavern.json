@@ -39,8 +39,8 @@
    "Dodongos Cavern Lower Lizalfos Pot 2": "True",
    "Dodongos Cavern Lower Lizalfos Pot 3": "True",
    "Dodongos Cavern Lower Lizalfos Pot 4": "True",
-   "Dodongos Cavern GS Side Room Near Lower Lizalfos": "is_adult or has_explosives or Sticks or Slingshot or Boomerang or Kokiri_Sword",
-   "Dodongos Cavern GS Scarecrow": "can_use(Scarecrow) or can_use(Longshot) or (logic_dc_scarecrow_gs and (is_adult or can_child_attack))"
+   "Dodongos Cavern GS Side Room Near Lower Lizalfos": "can_adult_attack or has_explosives or can_use(Sticks) or can_use(Slingshot) or can_use(Boomerang) or can_use(Kokiri_Sword)",
+   "Dodongos Cavern GS Scarecrow": "can_use(Scarecrow) or can_use(Longshot) or (logic_dc_scarecrow_gs and (can_adult_attack or can_child_attack))"
   },
   "exits": {
    "Dodongos Cavern Torch Room": "Sticks or Slingshot or Bombs or Kokiri_Sword"
@@ -111,7 +111,7 @@
   },
   "exits": {
    "Dodongos Cavern Before Upper Lizalfos": "True",
-   "Dodongos Cavern Far Bridge": "is_adult or Sticks or Slingshot or Bombs or Kokiri_Sword"
+   "Dodongos Cavern Far Bridge": "has_adult_sword or can_use(Sticks) or can_use(Slingshot) or Bombs or can_use(Kokiri_Sword)"
   }
  },
  {

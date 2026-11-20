@@ -58,10 +58,15 @@ def deblock_linear(raw, width_blocks, height_blocks, block_height_log2):
 
 
 def decode_icon(path):
+    return decode_icon_bytes(Path(path).read_bytes())
+
+
+def decode_icon_bytes(compressed):
+    """PIL image of a ``.bntx.zs`` icon given as bytes (from a RomFS file or the game package)."""
     import zstandard
     import texture2ddecoder
     from PIL import Image
-    data = zstandard.ZstdDecompressor().decompress(Path(path).read_bytes(), max_output_size=1 << 28)
+    data = zstandard.ZstdDecompressor().decompress(compressed, max_output_size=1 << 28)
     width, height, fmt, bh_log2, raw = parse_bntx(data)
     if fmt not in ASTC_FORMATS:
         raise ValueError(f'format {fmt:#x} not supported')

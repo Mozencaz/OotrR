@@ -6,8 +6,9 @@ import unittest
 from pathlib import Path
 
 from oot_rando.randomizer.randomizer_core import Settings, CHECKS, settings_identity, GENERATOR_VERSION, ADAPTER_VERSION
-from oot_rando.randomizer.randomizer_services import (ManualTracker, _connection_file, continued_save,
-                                                        generate_in_mods, read_artifact, validate_mod_directory)
+from oot_rando.randomizer.randomizer_services import (ManualTracker, _connection_file, continued_save, generate_in_mods,
+                                                        installed_regeneration, read_artifact,
+                                                        regeneration_settings, validate_mod_directory)
 from oot_rando.patching.randomize_kokiri import TITLE, BUILD
 
 
@@ -33,6 +34,41 @@ class ServiceTests(unittest.TestCase):
         (root / 'image.bin').touch()
         (root / 'romfs').mkdir()
         return root / 'mods'
+
+    def test_previous_generator_seed_still_opens_without_changing_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for version in ('0.9.0', '0.10.0', '0.11.0', '0.11.1', '0.11.2', '0.11.3', '0.11.4', '0.10.1'):
+                with self.subTest(version=version):
+                    root = self.make_artifact(Path(directory) / version, 'same-settings')
+                    path = root / 'manifest.json'
+                    manifest = json.loads(path.read_text(encoding='utf-8'))
+                    old_identity = settings_identity(Settings('same-settings'), version, ADAPTER_VERSION)
+                    self.assertNotEqual(old_identity, manifest['seed_id'])
+                    manifest.update(generator_version=version, seed_id=old_identity)
+                    path.write_text(json.dumps(manifest), encoding='utf-8')
+                    (root / 'checks.json').write_text(json.dumps({'seed_id': old_identity, 'checks': []}), encoding='utf-8')
+                    self.assertEqual(read_artifact(root)[0]['seed_id'], old_identity)
+
+    def test_stable_full_seed_identity_uses_its_historical_option_defaults(self):
+        from oot_rando.logic import rando_options
+        with tempfile.TemporaryDirectory() as directory:
+            for version in ('0.9.0', '0.10.0'):
+                with self.subTest(version=version):
+                    root = self.make_artifact(Path(directory) / version, 'historical-full')
+                    path = root / 'manifest.json'
+                    manifest = json.loads(path.read_text(encoding='utf-8'))
+                    historical = rando_options.defaults()
+                    for name in ('key_rings_list', 'open_gerudo_valley_bridge', 'shuffle_trees',
+                                 'shuffle_master_sword'):
+                        historical.pop(name)
+                    manifest['settings'].update(randomize_chests=False, full=historical)
+                    identity = hashlib.sha256(json.dumps(
+                        {'generator': version, 'adapter': ADAPTER_VERSION, 'settings': manifest['settings']},
+                        ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+                    manifest.update(generator_version=version, seed_id=identity)
+                    path.write_text(json.dumps(manifest), encoding='utf-8')
+                    (root / 'checks.json').write_text(json.dumps({'seed_id': identity, 'checks': []}), encoding='utf-8')
+                    self.assertEqual(read_artifact(root)[0]['seed_id'], identity)
 
     def test_mod_target_accepts_hookshot_and_emulator_but_rejects_original_romfs(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -78,6 +114,76 @@ class ServiceTests(unittest.TestCase):
             read_artifact(archive / (second.name + '-replaced'))
             self.assertEqual(sorted(p.name for p in mods.iterdir()), [second.name])
             self.assertEqual(original.read_bytes(), b'original')
+
+    def make_old_artifact(self, root, settings, version='0.10.0'):
+        """Seed folder as an older generator wrote it (identity bound to that version)."""
+        self.make_artifact(root, settings.seed)
+        identity = settings_identity(settings, version, ADAPTER_VERSION)
+        path = root / 'manifest.json'
+        manifest = json.loads(path.read_text(encoding='utf-8'))
+        manifest.update(generator_version=version, seed_id=identity, settings=settings.to_dict())
+        path.write_text(json.dumps(manifest), encoding='utf-8')
+        (root / 'checks.json').write_text(json.dumps({'seed_id': identity, 'checks': []}), encoding='utf-8')
+        return root
+
+    def test_regeneration_offered_only_for_an_accepted_seed_of_an_older_generator(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            current = self.make_artifact(base / 'current', 'up-to-date')
+            self.assertIsNone(installed_regeneration(current))
+            old = self.make_old_artifact(base / 'old', Settings('old-seed'))
+            self.assertEqual(installed_regeneration(old).seed, 'old-seed')
+            # Same seed seen from a later generator: offered as long as it is accepted.
+            manifest = read_artifact(old)[0]
+            self.assertIsNone(regeneration_settings(manifest, '0.10.0'))
+            self.assertIsNotNone(regeneration_settings(manifest, '9.9.9'))
+            # A version the generator no longer accepts: refused by read_artifact, no button.
+            refused = self.make_old_artifact(base / 'refused', Settings('refused'), version='0.0.1')
+            with self.assertRaises(ValueError):
+                read_artifact(refused)
+            self.assertIsNone(installed_regeneration(refused))
+            # Tampered or missing seeds are not offered either.
+            (old / 'romfs' / 'resource').write_bytes(b'modified')
+            self.assertIsNone(installed_regeneration(old))
+            self.assertIsNone(installed_regeneration(base / 'missing'))
+            self.assertIsNone(regeneration_settings(None))
+            self.assertIsNone(regeneration_settings({'generator_version': '0.10.0', 'settings': {'bad': 1}}))
+
+    def test_regeneration_rebuilds_the_same_settings_from_the_manifest(self):
+        from oot_rando.logic import rando_options
+        full = rando_options.defaults()
+        settings = Settings('My adventure', randomize_chests=False, open_forest=False,
+                            skip_locked_cutscenes=True, full=full)
+        with tempfile.TemporaryDirectory() as directory:
+            old = self.make_old_artifact(Path(directory) / 'old', settings)
+            rebuilt = installed_regeneration(old)
+        self.assertEqual(rebuilt.to_dict(), settings.to_dict())
+        self.assertEqual(rebuilt.seed, 'My adventure')
+        self.assertEqual(rebuilt.full, settings.full)
+        self.assertEqual(rebuilt.categories, settings.categories)
+        # Only the identity follows the new generator; the name and settings stay.
+        self.assertNotEqual(settings_identity(rebuilt), settings_identity(settings, '0.10.0', ADAPTER_VERSION))
+
+    def test_regeneration_installs_in_the_same_mods_folder_and_archives_the_old_copy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            mods = self.make_hookshot(base / 'Hookshot')
+            mods.mkdir()
+            settings = Settings('kept-name')
+            old = self.make_old_artifact(
+                mods / ('OoT_Randomizer_' + settings_identity(settings, '0.10.0', ADAPTER_VERSION)[:16]), settings)
+
+            def fake_generate(nup, output, settings, progress):
+                self.make_artifact(output, settings.seed)
+            archive = base / 'archive'
+            new = generate_in_mods('game.nup', old.parent, installed_regeneration(old), archive=archive,
+                                   generate=fake_generate)
+            manifest = read_artifact(new)[0]
+            self.assertEqual(manifest['settings'], settings.to_dict())
+            self.assertEqual(manifest['generator_version'], GENERATOR_VERSION)
+            self.assertIsNone(installed_regeneration(new))
+            self.assertEqual([p.name for p in mods.iterdir()], [new.name])
+            read_artifact(archive / old.name)
 
     def test_archipelago_reinstall_keeps_the_save_binding(self):
         class ApSettings:

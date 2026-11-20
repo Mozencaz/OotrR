@@ -7,15 +7,15 @@
    "Deku Tree Compass Chest": "True",
    "Deku Tree Compass Room Side Chest": "True",
    "Deku Tree Lower Lobby Recovery Heart": "True",
-   "Deku Tree Upper Lobby Recovery Heart": "is_adult or can_child_attack or Nuts",
-   "Deku Tree GS Compass Room": "is_adult or can_child_attack",
-   "Deku Baba Sticks": "is_adult or Kokiri_Sword or Boomerang",
-   "Deku Baba Nuts": "is_adult or Slingshot or Sticks or has_explosives or Kokiri_Sword or can_use(Dins_Fire)"
+   "Deku Tree Upper Lobby Recovery Heart": "can_adult_attack or can_child_attack or Nuts",
+   "Deku Tree GS Compass Room": "can_adult_attack or can_child_attack",
+   "Deku Baba Sticks": "has_adult_sword or can_use(Kokiri_Sword) or can_use(Boomerang)",
+   "Deku Baba Nuts": "can_adult_attack or can_use(Slingshot) or can_use(Sticks) or has_explosives or can_use(Kokiri_Sword) or can_use(Dins_Fire)"
   },
   "exits": {
    "KF Outside Deku Tree": "True",
    "Deku Tree Slingshot Room": "here(has_shield)",
-   "Deku Tree Basement": "deku_tree_shortcuts or is_adult or can_child_attack or Nuts"
+   "Deku Tree Basement": "deku_tree_shortcuts or can_adult_attack or can_child_attack or Nuts"
   }
  },
  {
@@ -31,8 +31,8 @@
   "dungeon": "Deku Tree",
   "locations": {
    "Deku Tree Basement Chest": "True",
-   "Deku Tree GS Basement Gate": "is_adult or can_child_attack",
-   "Deku Tree GS Basement Vines": "can_use_projectile or can_use(Dins_Fire) or (logic_deku_basement_gs and (is_adult or Sticks or Kokiri_Sword))"
+   "Deku Tree GS Basement Gate": "can_adult_attack or can_child_attack",
+   "Deku Tree GS Basement Vines": "can_use_projectile or can_use(Dins_Fire) or (logic_deku_basement_gs and (can_adult_attack or can_use(Sticks) or can_use(Kokiri_Sword)))"
   },
   "exits": {
    "Deku Tree Basement Back Room": "here(has_fire_source_with_torch or can_use(Bow)) and here(can_use(Slingshot) or can_use(Bow))",

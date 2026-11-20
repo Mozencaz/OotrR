@@ -8,10 +8,12 @@ Every source becomes an *entry* with the same fields as a chest group of
 * ``shop`` (shelf items): ``Gyaml`` of the shelf actor, shop form;
 * ``freestanding`` (heart pieces, rupees and hearts placed in the world):
   ``Gyaml`` of the pickup, world form;
-* ``pots``/``bushes``/``rocks``/``crates``/``beehives``: explicit native
+* ``pots``/``bushes``/``rocks``/``crates``/``beehives``/``trees``: explicit native
   ``Drop__DropActor`` of the object, world form (these objects respawn).
   Empty rocks (no drop field at all) receive a new ``Drop__DropActor`` when
-  their pack declares it as an instance parameter;
+  their pack declares it as an instance parameter. Trees (``Obj_Tree_*``) have none either
+  and receive one the same way; trees whose drop table is explicitly ``None``
+  stay vanilla. Colossus palms are left out (drop never observed);
 * ``npc`` (NPC and minigame gifts): the item parameter of the giving event,
   event form. Trade items, songs, cows and masks are never touched;
 * ``scrub`` (one-time business scrubs: upgrades and heart pieces): the item
@@ -19,6 +21,8 @@ Every source becomes an *entry* with the same fields as a chest group of
 * ``boss`` (spiritual stones and medallions), ``fairy`` (great fairy rewards)
   and ``quest`` (story rewards: ocarinas, Zelda's letter, light arrows,
   Biggoron's sword): the item parameter of their giving cutscene, event form;
+* ``song`` (the 12 song cutscenes): their silent add, event form; the melody
+  teaching and the text-only get are handled by ``song_adapter``;
 * ``bossheart`` (boss heart containers): ``Gyaml`` of the placed container,
   world form.
 
@@ -28,10 +32,11 @@ from collections import defaultdict
 
 from oot_rando.game.item_forms import WORLD_CANONICAL
 from oot_rando.game.randomizer_categories import candidate_category
-from oot_rando.game.remake_world import FOLDER_AREAS, FOLDER_DUNGEON, actor_item, map_age
+from oot_rando.game.remake_world import (FOLDER_AREAS, FOLDER_DUNGEON, actor_item, map_age,
+                                        inaccessible_child_actor)
 
 GIVE_PARAMS = ('ActorName', 'ReveiveItem', 'ReceiveItem', 'TakenRewardActor', 'Actor')
-ENVIRONMENT = ('pots', 'bushes', 'rocks', 'crates', 'beehives')
+ENVIRONMENT = ('pots', 'bushes', 'rocks', 'crates', 'beehives', 'trees')
 FREESTANDING_JUNK = ('Obj_Rupee_Green', 'Obj_Rupee_Blue', 'Obj_Rupee_Red', 'Obj_Rupee_Purple',
                      'Obj_Rupee_Gold', 'Obj_Heart')
 ENV_DROPS = FREESTANDING_JUNK
@@ -40,7 +45,7 @@ ENV_DROPS = FREESTANDING_JUNK
 # crates too (Discord 14/11: Kakariko's 30 Obj_Pot_A_08 and every Hyrule Castle pot
 # and crate were left out; Obj_Pot_A_01/A_08 and Obj_BrokenBox_A_01 expose
 # Drop__DropActor per instance). Pots/crates with a random drop table stay vanilla.
-EMPTY_SOURCES = ('rocks', 'pots', 'crates')
+EMPTY_SOURCES = ('rocks', 'pots', 'crates', 'trees')
 EMPTY_VANILLA = 'Rupee (1)'
 SKIP_FOLDERS = ('DreamWorld', 'SageRoom')
 
@@ -58,6 +63,33 @@ SHOP_ITEMS = {
     'Shop_BombchuBundle_07': 'Buy Bombchu (20)', 'Shop_BombchuBundle_08': 'Buy Bombchu (20)',
 }
 SHOP_EXCLUDED_PREFIXES = ('Shop_Mask_', 'Shop_Board_', 'Shop_Item_Base', 'Shop_Sword_')
+# Shelves of one shop stand within a few metres (8 slots over ~4 m); two shops of
+# one map are tens of metres apart (Market: bazaar, potion shop, bombchu shop).
+SHOP_RADIUS = 6.0
+
+
+def shop_groups(entries):
+    """{gid: shop key} of shop entries, a key per shop (shelves clustered by position).
+
+    Shops used to be counted per map folder: with "4 items per shop" the Market's
+    three shops shared four slots (Discord 16/11: one in the bazaar, none in the
+    potion shop)."""
+    by_folder = defaultdict(list)
+    for gid, entry in sorted(entries.items()):
+        if entry['source'] == 'shop':
+            x, _, z = entry['variants'][0]['position']
+            by_folder[entry['folder']].append((gid, x, z))
+    groups = {}
+    for folder, shelves in sorted(by_folder.items()):
+        clusters = []
+        for gid, x, z in shelves:
+            near = [c for c in clusters if any((x - cx) ** 2 + (z - cz) ** 2 <= SHOP_RADIUS ** 2 for _, cx, cz in c)]
+            merged = [(gid, x, z)] + [shelf for c in near for shelf in c]
+            clusters = [c for c in clusters if not any(c is n for n in near)] + [merged]
+        for cluster in sorted(clusters, key=lambda c: min(g for g, _, _ in c)):
+            key = f'{folder}#{min(g for g, _, _ in cluster)}'
+            groups.update({gid: key for gid, _, _ in cluster})
+    return groups
 
 # NPC gifts: (AP locations, guard locations, event file stem, ((event, vanilla actor), …)).
 # All branches of one gift (e.g. medium/large bag) receive the same item. Guard
@@ -106,11 +138,22 @@ NPC_GIFTS = (
 # Never shuffled, whatever the options (documented exclusions).
 EXCLUDED_NPC_LOCATIONS = ('DMT Biggoron', 'Kak Anju as Adult', 'GC Medigoron', 'Wasteland Bombchu Salesman',
                           'ZR Magic Bean Salesman', 'HC Malon Egg', 'HC Zeldas Letter', 'HF Ocarina of Time Item',
-                          'LH Underwater Item', 'Hideout Gerudo Membership Card', 'LH Sun')
+                          'LH Sun')
+# Ruto's Letter: the bottle Link fishes out of Lake Hylia is a placed pickup of the
+# child Hyrule Field map (``Obj_Bottle_Letter``, its AP location below). It is a
+# story reward (``quest``): the generic get sequence (``Dm_SY_Get``) sets
+# ``Get_StoneOfWater_GetRutoLetter`` from the pouch actor's tag, whatever gives the
+# letter, and a derived pickup keeps ``Item_Bottle_Letter`` as its pouch actor.
+LETTER_ACTOR = 'Obj_Bottle_Letter'
+LETTER_LOCATION = 'LH Underwater Item'
 # Cutscene rewards: (source, AP locations, guards, ((event file stem, event, vanilla actor), ...)).
 # Every site of one reward gets the same item: the visible "get" box and, when
 # the cutscene adds the item silently first (ocarinas), that pouch addition too.
 EVENT_GIFTS = (
+    ('master_sword', ('ToT Master Sword',), (),
+     (('DoorOfTime', 'Event115', 'Weapon_Sword_Master'),)),
+    ('gerudo_card', ('Hideout Gerudo Membership Card',), (),
+     (('Dm_Gerudo_0025', 'Event294', 'Item_Token_Gerudo'),)),
     # Dungeon rewards, given after the boss (Deku Tree, Darunia, Ruto, sages, Rauru).
     ('boss', ('Queen Gohma',), (), (('Dm_Kokiri_0130', 'Event22', 'Item_Stone_Forest'),)),
     ('boss', ('King Dodongo',), (), (('Dm_DeathMtTrail_0025', 'Event26', 'Item_Stone_Fire'),)),
@@ -122,11 +165,14 @@ EVENT_GIFTS = (
     ('boss', ('Bongo Bongo',), (), (('Dm_Awake_Shadow_Get', 'Event3', 'Item_Medal_Shadow'),)),
     ('boss', ('Twinrova',), (), (('Dm_Awake_Spirit_Get', 'Event14', 'Item_Medal_Spirit'),)),
     ('boss', ('Links Pocket',), (), (('Dm_SageRoom_0005', 'Event48', 'Item_Medal_Light'),)),
-    # Great fairies.
-    ('fairy', ('HC Great Fairy Reward',), (), (('Dm_FairyFountain_Din', 'Event212', 'Item_DinFire'),)),
+    # Great fairies. The remake swaps two fountains of the original game: the
+    # Death Mountain Trail fairy gives Din's Fire and the Hyrule Castle one the
+    # magic meter (map icons: DeathMountainTrail → HavePlayedEvent.Dm_FairyFountain_Din,
+    # HyruleCastle → HavePlayedEvent.Dm_FairyFountain_Power).
+    ('fairy', ('DMT Great Fairy Reward',), (), (('Dm_FairyFountain_Din', 'Event212', 'Item_DinFire'),)),
     ('fairy', ('ZF Great Fairy Reward',), (), (('Dm_FairyFountain_Frore', 'Event174', 'Item_FaroreWind'),)),
     ('fairy', ('Colossus Great Fairy Reward',), (), (('Dm_FairyFountain_Nayru', 'Event163', 'Item_NayruLove'),)),
-    ('fairy', ('DMT Great Fairy Reward',), (), (('Dm_FairyFountain_Power', 'Event141', 'Item_FairyBless_MP'),)),
+    ('fairy', ('HC Great Fairy Reward',), (), (('Dm_FairyFountain_Power', 'Event141', 'Item_FairyBless_MP'),)),
     ('fairy', ('DMC Great Fairy Reward',), (), (('Dm_FairyFountain_Wisdom', 'Event144', 'Item_FairyBless_MPDouble'),)),
     ('fairy', ('OGC Great Fairy Reward',), (), (('Dm_FairyFountain_Courage', 'Event144',
                                                  'Item_FairyBless_DefenseDouble'),)),
@@ -139,6 +185,9 @@ EVENT_GIFTS = (
     ('quest', ('ToT Light Arrows Cutscene',), (), (('Dm_TimeTemple_0130', 'Event85', 'Item_Arrow_Light'),)),
     ('quest', ('DMT Biggoron',), (), (('Npc_Goron_Biggoron_Adult', 'Event123', 'Item_Sword_Biggoron'),)),
 )
+# Song locations: the silent add of each song cutscene (see patching/song_adapter.py).
+from oot_rando.patching.song_adapter import song_gifts as _song_gifts  # noqa: E402
+EVENT_GIFTS = EVENT_GIFTS + _song_gifts()
 # One-time business scrubs (``Enemy_Scrub_Business_Common``): the item sold is the
 # ``ActorName`` of each ``SimpleShopSub_Scrub_Business_OneTime`` call (one per
 # branch: e.g. medium or large bag depending on the pouch), the price its
@@ -166,7 +215,7 @@ SCRUB_LOW_PRICE = 10
 CHILD_WALLET = 200
 # Highest 'random' scrub price: kept at 99 so existing seeds replay identically.
 SCRUB_RANDOM_MAX = 99
-EVENT_SOURCES = ('npc', 'boss', 'fairy', 'quest', 'scrub')
+EVENT_SOURCES = ('npc', 'boss', 'fairy', 'quest', 'scrub', 'song', 'master_sword', 'gerudo_card')
 # Boss heart container of each dungeon map (one placed Obj_Heart_Container each).
 BOSS_HEARTS = {
     'InsideTheDekuTree': 'Deku Tree Queen Gohma Heart', 'DodongoCavern': 'Dodongos Cavern King Dodongo Heart',
@@ -213,6 +262,8 @@ def scan_map_sources(maps, instance_param=None, world_respawn=None):
         if folder in SKIP_FOLDERS:
             continue
         for index, actor in enumerate(maps[path]['root'].get('Actors', [])):
+            if inaccessible_child_actor(path, actor):
+                continue
             name = actor.get('Gyaml', '')
             ident = actor.get('Hash')
             if type(ident) is not int:
@@ -226,6 +277,13 @@ def scan_map_sources(maps, instance_param=None, world_respawn=None):
                     {'resource': path, 'index': index, 'field': 'Drop__DropActor', 'before': before}, ident)
                 if before is not None:
                     entries[f'{folder}#gs#{ident}']['reason'] = 'existing_drop'
+            elif name == LETTER_ACTOR:
+                gid = f'{folder}#letter#{ident}'
+                add('quest', 'world', gid, folder, name, 'Rutos Letter',
+                    {'resource': path, 'index': index, 'field': 'Gyaml', 'before': name}, ident)
+                entries[gid].update(kind='exact', ap=[LETTER_LOCATION])
+                if 'Presence' in actor:
+                    entries[gid]['reason'] = 'conditional_presence'
             elif name == 'Obj_Heart_Container':
                 gid = f'{folder}#heart#{ident}'
                 add('bossheart', 'world', gid, folder, name, 'Heart Container',
@@ -489,8 +547,28 @@ def collect(nup, dictionaries, members, maps):
     return entries
 
 
+UNDERWATER_INFO = 'RSDB/ActorInfo.Product.111.rstbl.byml.zs'
+
+
+def mark_underwater(nup, dictionaries, members, maps, extra):
+    """Mark the world-form spots under water (:mod:`oot_rando.game.underwater`)."""
+    from oot_rando.formats import byml_codec
+    from oot_rando.formats.inspect_resources import decompress
+    from oot_rando.game.underwater import mark_entries
+    if UNDERWATER_INFO not in members:
+        return 0
+    rows = byml_codec.load(decompress(nup.read(members[UNDERWATER_INFO]), dictionaries))['root']
+    boxes = {row['__RowId']: (row['ModelAabbMin'], row['ModelAabbMax']) for row in rows
+             if 'WaterPlane' in row.get('__RowId', '') and 'ModelAabbMin' in row and 'ModelAabbMax' in row}
+    return mark_entries(maps, extra, boxes.get)
+
+
 def scan_world(nup, dictionaries, members, progress=None):
     """Maps, chest groups, enemies and the other reward sources."""
     from oot_rando.game.remake_world import scan_maps
+    from oot_rando.game.check_names import label_entries
     maps, groups, enemies = scan_maps(nup, dictionaries, members, progress)
-    return maps, groups, enemies, collect(nup, dictionaries, members, maps)
+    extra = collect(nup, dictionaries, members, maps)
+    label_entries(maps, groups, extra)   # readable check names (game/check_names.py)
+    mark_underwater(nup, dictionaries, members, maps, extra)
+    return maps, groups, enemies, extra

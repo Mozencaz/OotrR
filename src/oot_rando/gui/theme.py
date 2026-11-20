@@ -487,3 +487,78 @@ class Sidebar(tk.Frame):
         color = '#fbf6e6' if active else c['sidebar_text']
         icon.configure(foreground=c['gold'] if active else c['sidebar_text'])
         label.configure(foreground=color, font=self.fonts.nav_active if active else self.fonts.nav)
+
+
+# ------------------------------------------------------------------ tooltips
+class Tooltip:
+    """A help bubble shown while the pointer rests on one of ``widgets``.
+
+    ``text`` is a string or a function returning one (read at each showing, so a
+    tooltip can follow the current value). Opens after ``delay`` ms, closes on leave,
+    click or scroll; it stays inside the screen."""
+
+    def __init__(self, widgets, text, fonts, delay=450, width=380):
+        self.widgets = [w for w in widgets if w is not None]
+        self.text, self.fonts, self.delay, self.width = text, fonts, delay, width
+        self.window, self.pending = None, None
+        for widget in self.widgets:
+            widget.bind('<Enter>', self.schedule, add='+')
+            widget.bind('<Leave>', self.hide, add='+')
+            widget.bind('<ButtonPress>', self.hide, add='+')
+            widget.bind('<MouseWheel>', self.hide, add='+')
+
+    def schedule(self, event=None):
+        self.cancel()
+        self.pending = self.widgets[0].after(self.delay, lambda: self.show(event))
+
+    def cancel(self):
+        if self.pending is not None:
+            self.widgets[0].after_cancel(self.pending)
+            self.pending = None
+
+    def show(self, event=None):
+        self.pending = None
+        text = self.text() if callable(self.text) else self.text
+        if not text or self.window is not None:
+            return
+        c = COLORS
+        anchor = event.widget if event is not None else self.widgets[0]
+        window = self.window = tk.Toplevel(anchor)
+        window.wm_overrideredirect(True)
+        try:
+            window.wm_attributes('-topmost', True)
+        except tk.TclError:
+            pass
+        frame = tk.Frame(window, background=c['line_strong'], padx=1, pady=1)
+        frame.pack()
+        body = tk.Frame(frame, background=c['surface'], padx=12, pady=9)
+        body.pack()
+        title, _, rest = text.partition('\n')
+        tk.Label(body, text=title, font=self.fonts.label, foreground=c['text'], background=c['surface'],
+                 justify='left', anchor='w', wraplength=self.width).pack(anchor='w')
+        if rest.strip():
+            tk.Label(body, text=rest.strip(), font=self.fonts.small, foreground=c['muted'],
+                     background=c['surface'], justify='left', anchor='w',
+                     wraplength=self.width).pack(anchor='w', pady=(4, 0))
+        window.update_idletasks()
+        x = anchor.winfo_rootx() + 12
+        y = anchor.winfo_rooty() + anchor.winfo_height() + 6
+        width, height = window.winfo_reqwidth(), window.winfo_reqheight()
+        screen_w, screen_h = window.winfo_screenwidth(), window.winfo_screenheight()
+        x = max(4, min(x, screen_w - width - 4))
+        if y + height > screen_h - 4:
+            y = anchor.winfo_rooty() - height - 6
+        window.wm_geometry(f'+{x}+{y}')
+
+    def hide(self, event=None):
+        self.cancel()
+        if self.window is not None:
+            self.window.destroy()
+            self.window = None
+
+
+def info_icon(parent, fonts, background=None):
+    """A small circled "i" placed after a label; its tooltip is attached by the caller."""
+    c = COLORS
+    return tk.Label(parent, text='\u24d8', font=(fonts.body[0], 11), foreground=c['green'],
+                    background=background or c['surface'], cursor='question_arrow', padx=2)

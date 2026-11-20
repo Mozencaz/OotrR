@@ -106,6 +106,15 @@ def received_keys(entries, slot, player_name, location_name):
     return keys
 
 
+def running_game_hint(live):
+    """`` (running game: <folder>)`` for a PC port, so that a seed installed in another build's
+    mods folder shows (Longshot keeps one folder per version), else ''."""
+    from oot_rando.pc_port import game_folder
+    image = getattr(getattr(live, 'memory', None), 'image', '')
+    folder = game_folder(image) if image else None
+    return f' (running game: {folder})' if folder else ''
+
+
 class LiveDelivery:
     """Deliverer bound to the running game (``set`` and ``snapshot`` from live_memory)."""
 
@@ -132,7 +141,7 @@ class LiveDelivery:
             self.status = 'game not reachable (' + str(error) + ')'
             return None
         if bools.get(self.marker) is not True:
-            self.status = 'no save of this seed loaded'
+            self.status = 'no save of this seed loaded' + running_game_hint(self.live)
             return None
         self.waiting = len(self.deliverer.pending(keys, bools))
         key = self.deliverer.step(keys, bools, self.clock())

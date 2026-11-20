@@ -87,6 +87,10 @@ class Units(unittest.TestCase):
         with self.assertRaisesRegex(ap.ClientError, 'certificate'):
             client._open()
         self.assertEqual([u for u, _ in attempts], ['wss://host:1'])
+        # The secure attempt carries the context that finds a Linux distribution's certificates.
+        seen = []
+        ap.ArchipelagoClient(MANIFEST, 'host:1', connect=lambda url, **options: seen.append(options) or object())._open()
+        self.assertIsInstance(seen[0].get('ssl'), ssl.SSLContext)
         # Server without TLS: plain WebSocket, marked unencrypted...
         attempts.clear()
         client = ap.ArchipelagoClient(MANIFEST, 'host:1', connect=failing(ssl.SSLError('wrong version number')))
