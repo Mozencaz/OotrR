@@ -127,7 +127,7 @@ uint32_t tracker_check_rows(const trk_t *seed, const flag_source_t *flags, uint3
   uint32_t filled = 0;
   for (uint32_t i = first; i < checks.check_count && filled < room; i++, filled++) {
     trk_check_t check = trk_check(seed, checks.first_check + i);
-    rows[filled] = (check_row_t){ trk_string(seed, check.name), i + 1, (uint8_t)check_flag(&check, flags) };
+    rows[filled] = (check_row_t){ trk_string(seed, check.name), i + 1, (uint8_t)check_flag(&check, flags), false };
   }
   return filled;
 }

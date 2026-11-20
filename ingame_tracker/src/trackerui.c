@@ -548,7 +548,7 @@ static uint32_t page_rows(const panel_t *panel, setting_row_t rows[PAGE_ROWS], c
   return count;
 }
 
-static void draw_tick_box(const layout_t *l, gd_flag_t flag, float x, float y, float row);
+static void draw_tick_box(const layout_t *l, const check_row_t *check, float x, float y, float row);
 
 static float draw_settings_page(const layout_t *l, const panel_t *panel, float y)
 {
@@ -564,7 +564,8 @@ static float draw_settings_page(const layout_t *l, const panel_t *panel, float y
     if (i == highlighted)
       draw_highlight(l, l->inner_x, top, l->inner_w, row);
     if (!rows[i].value) {
-      draw_tick_box(l, rows[i].ticked ? GD_TRUE : GD_FALSE, x, top, row);
+      check_row_t setting = { "", 0, (uint8_t)(rows[i].ticked ? GD_TRUE : GD_FALSE), false };
+      draw_tick_box(l, &setting, x, top, row);
       x += (TICK_BOX_FP + TICK_GAP_FP) * l->fp;
     }
     draw_text(&l->body, rows[i].name, x, baseline_in(&l->body, top, row), text_colour);
