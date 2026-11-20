@@ -255,6 +255,52 @@ def verify(nup_path, seed_dir):
         raise ValueError('Missing Master Sword time travel flow.')
     if set(manifest.get('skips', {}).get('master_sword_flows', {})) != set(master_flows):
         raise ValueError('Master Sword flow reports differ from the settings.')
+    # Song lessons without cutscene: the trigger gives what the lesson flow holds
+    # (its new events are replayed below, with the story fixes of the same flow).
+    from oot_rando.patching import song_lessons
+    full_options = (manifest.get('settings') or {}).get('full') or {}
+    given_lessons = manifest.get('skips', {}).get('song_lessons') or {}
+    if set(given_lessons) != set(song_lessons.lesson_locations(full_options.get('skip_song_lessons'))):
+        raise ValueError('Song lessons skipped differ from the settings.')
+    lesson_triggers = {}
+    for ap, given in sorted(given_lessons.items()):
+        lesson = song_lessons.BY_AP[ap]
+        scene = song_lessons.flow_path(lesson.stem)
+        produced_scene = out(scene) if scene in manifest['files'] else decompress(nup.read(members[scene]), d)
+        if song_lessons.given_item(produced_scene, lesson) != {'actor': given['actor'], 'flag': given['flag']}:
+            raise ValueError('Song lesson item differs from its lesson flow: ' + ap)
+        trigger = song_lessons.flow_path(lesson.trigger)
+        if trigger not in manifest['files'] or not song_lessons.trigger_applied(out(trigger), lesson, given['actor'],
+                                                                                given['flag']):
+            raise ValueError('Song lesson not given by its trigger: ' + ap)
+        if trigger in lesson_triggers:
+            raise ValueError('Two song lessons in one trigger: ' + trigger)
+        lesson_triggers[trigger] = (lesson, given, decompress(nup.read(members[scene]), d))
+    # Animated story scenes skipped: their sites are replayed last on each flow.
+    from oot_rando.patching import timeline_skip
+    dropped_timelines = manifest.get('skips', {}).get('story_timelines') or {}
+    if set(dropped_timelines) != set(timeline_skip.site_flows(full_options.get('skip_story_timelines'))):
+        raise ValueError('Animated story scenes skipped differ from the settings.')
+    timeline_paths = {timeline_skip.flow_path(name): name for name in dropped_timelines}
+    if not set(timeline_paths) <= set(manifest['files']):
+        raise ValueError('Animated story scene flow missing from the seed.')
+    # NPC lines without a choice: replayed just before the + windows.
+    from oot_rando.patching import npc_dialogue_skip
+    muted_flows = manifest.get('skips', {}).get('npc_dialogues') or {}
+    if set(muted_flows) != set(npc_dialogue_skip.zone_flows(full_options.get('skip_npc_dialogues'))):
+        raise ValueError('NPC dialogues skipped differ from the settings.')
+    muted_paths = {npc_dialogue_skip.flow_path(name): name for name in muted_flows}
+    if not set(muted_paths) <= set(manifest['files']):
+        raise ValueError('NPC dialogue flow missing from the seed.')
+    # + windows taken on their own: replayed just before the animated scenes.
+    from oot_rando.patching import skip_auto
+    taken_windows = manifest.get('skips', {}).get('auto_windows') or {}
+    if set(taken_windows) != set(skip_auto.flows(full_options.get('auto_skip_cutscenes'),
+                                                 manifest.get('skips', {}).get('cutscene_windows') or {})):
+        raise ValueError('Skip windows taken differ from the settings.')
+    window_paths = {skip_auto.flow_path(name): name for name in taken_windows}
+    if not set(window_paths) <= set(manifest['files']):
+        raise ValueError('Skip window flow missing from the seed.')
     window_context = [None, None]
     for path in sorted(manifest['files']):
         if path.startswith('Event/EventFlow/'):
@@ -343,6 +389,28 @@ def verify(nup_path, seed_dir):
                 if path == fixed_path and key in (skips.get('story_fixes') or {}):
                     original = fix(original)[0]
                     report['story_fixes'] = report.get('story_fixes', 0) + 1
+            # Kaepora's field step after the Deku Tree escape, full bottles on the shelf
+            # (story fixes applied after FLOW_FIXES, see randomizer_core).
+            from oot_rando.patching import owl_advice
+            from oot_rando.patching.shop_bottles import DISPLAY_SHOP_FLOW, patch_display_shop
+            story_skips = skips.get('story_fixes') or {}
+            if path == owl_advice.ESCAPE_FLOW and 'owl_field_step' in story_skips:
+                from oot_rando.patching.quest_guard import CHALLENGES, challenge_steps
+                original, owl = owl_advice.field_step_after_escape(
+                    original, challenge_steps(decompress(nup.read(members[CHALLENGES]), d)))
+                if json.loads(json.dumps(owl)) != story_skips['owl_field_step']:
+                    raise ValueError('Kaepora field step differs from the spoiler.')
+                report['story_fixes'] = report.get('story_fixes', 0) + 1
+            if path == DISPLAY_SHOP_FLOW and 'shop_full_bottles' in story_skips:
+                original, bottles = patch_display_shop(original)
+                if json.loads(json.dumps(bottles)) != story_skips['shop_full_bottles']:
+                    raise ValueError('Shop full bottles differ from the spoiler.')
+                report['story_fixes'] = report.get('story_fixes', 0) + 1
+            if path in lesson_triggers:
+                lesson, given, vanilla_scene = lesson_triggers[path]
+                original = song_lessons.give_in_trigger(original, vanilla_scene, lesson, given['actor'],
+                                                        given['flag'])[0]
+                report['song_lessons'] = report.get('song_lessons', 0) + 1
             if path in ((skips.get('story_fixes') or {}).get('child_castle') or {}):
                 from oot_rando.patching import child_castle_skip
                 from oot_rando.patching.quest_guard import CHALLENGES, challenge_steps
@@ -420,6 +488,26 @@ def verify(nup_path, seed_dir):
             if path in chest_flows:
                 from oot_rando.patching.chest_flags import add_entries
                 original = add_entries(original, chest_flows[path])
+            if path in muted_paths:
+                name = muted_paths[path]
+                original, muted_report = npc_dialogue_skip.mute(original, name)
+                if (json.loads(json.dumps(muted_report)) != muted_flows[name]
+                        or not npc_dialogue_skip.muted(out(path))):
+                    raise ValueError('NPC dialogues skipped differ from the spoiler: ' + path)
+                report['npc_dialogues'] = report.get('npc_dialogues', 0) + len(muted_report['talks'])
+            if path in window_paths:
+                name = window_paths[path]
+                original, taken_report = skip_auto.take_windows(original, name)
+                if (json.loads(json.dumps(taken_report)) != taken_windows[name]
+                        or not skip_auto.taken(out(path))):
+                    raise ValueError('Skip windows taken differ from the spoiler: ' + path)
+                report['auto_windows'] = report.get('auto_windows', 0) + len(taken_report)
+            if path in timeline_paths:
+                name = timeline_paths[path]
+                original, dropped = timeline_skip.drop_timelines(original, name)
+                if dropped != dropped_timelines[name] or not timeline_skip.dropped(out(path), name):
+                    raise ValueError('Animated story scenes differ from the spoiler: ' + path)
+                report['story_timelines'] = report.get('story_timelines', 0) + len(dropped)
             before = _event_snapshot(original)
             after = _event_snapshot(out(path))
             for (name, param), actor in event_edits.get(path, {}).items():
