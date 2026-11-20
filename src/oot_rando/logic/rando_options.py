@@ -324,6 +324,39 @@ OPTIONS = [
     Option('fast_chests', 'Quality of life', 'Fast chest opening', ((False, OK), (True, OK)), False,
            'Same patch as "Chests without cutscene" in the setup: the lid opens and Link holds the item up.',
            kind='bool'),
+    Option('skip_song_lessons', 'Quality of life', 'Song lessons without cutscene', ((False, OK), (True, OK)), False,
+           'The song lesson cutscene does not play: once it starts, Link holds up the item of its check right away '
+           '(songs shown as Sheik\'s harp in their colour), then the quest goes on as after the lesson. '
+           'No dialogue, no ocarina to play back. Impa, Malon, Saria, the Royal Family\'s Tomb, the windmill '
+           'and Sheik (forest, crater, ice cavern, Kakariko, temple). Not the Ocarina of Time lesson (the ocarina '
+           'cannot be held up) nor the Requiem. Not validated in game.',
+           kind='bool', experimental=(True,)),
+    Option('skip_story_timelines', 'Quality of life', 'Animated story scenes skipped', ((False, OK), (True, OK)),
+           False,
+           'Story scenes made only of animation (no text, no item) do not play: they count as seen and the '
+           'game goes on (the time of day a scene sets is set anyway, a boss intro still starts the fight '
+           'and its music; no item or equipment changes). '
+           '75 scenes, e.g. boss intros (except Ganon), the sages awakening, boss deaths and blue warps, '
+           'the Temple of Time, Ganon\'s castle barriers, Epona\'s fence jump, the first visit to the Deku '
+           'Tree, Zelda\'s escape, Kakariko burning and at night. Kept: title, ending, credits, Ganon\'s '
+           'intro and scenes that move world actors (Lake Hylia\'s scarecrows). '
+           'Not validated in game.',
+           kind='bool', experimental=(True,)),
+    Option('auto_skip_cutscenes', 'Quality of life', 'Skippable cutscenes skipped on their own',
+           ((False, OK), (True, OK)), False,
+           'Every cutscene part that + can skip is skipped without pressing it: the game goes straight to '
+           'what a + press would show, state changes kept (they are replayed as after a skip). Covers the '
+           'cutscenes made skippable by the randomizer (99 parts in 65 cutscenes) and five great fairy '
+           'fountains. Not the Water Temple water levels nor Din\'s fountain (they keep +), not the animated '
+           'scenes (see "Animated story scenes skipped") nor dialogues. Not validated in game.',
+           kind='bool', experimental=(True,)),
+    Option('skip_npc_dialogues', 'Quality of life', 'NPC lines without a choice skipped', ((False, OK), (True, OK)),
+           False,
+           'Lines of the listed NPCs that ask nothing are not shown: talking to them goes straight to their '
+           'item, their question or the end of the talk. Lines after a question the player answered are kept. '
+           'Zones so far: Kokiri Forest (every Kokiri, Mido, Saria, Fado, the Deku Tree sprout; not the shop). '
+           'Not validated in game.',
+           kind='bool', experimental=(True,)),
     Option('free_scarecrow', 'Quality of life', 'Free scarecrow', ((False, OK), (True, NO_EVENT)), False, kind='bool'),
     Option('big_poe_count', 'Quality of life', 'Big Poes to bring back', None, 10,
            'The collector gives his reward after this many Big Poes. Not validated in game.',
