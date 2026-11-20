@@ -18,7 +18,9 @@ save has found:
   observed, so it isn't counted), and the enemy souls if the seed has them;
 - each region's checks by name, ticked when collected, so you can see what's still missing there, with the highlighted
   check's internal key (the randomizer's id for it) under the list;
-- **show in the world**: A on a check of a region's list marks where it is in the game, with a box and a beam over the
+- **ticks by hand**: A on a check of a region's list ticks it as done, as a double click does in the desktop tracker; it
+  counts as found, and the ticks are kept on the SD card for each seed;
+- **show in the world**: Y on a check of a region's list marks where it is in the game, with a box and a beam over the
   picture and how far it is, or names the map it's in;
 - the seed's id, a warning when the save isn't from this seed, and "Goal reached";
 - a **postcard**: a small card with only the icons (items, songs, temples, dungeon keys) in a corner of the screen while you play;
@@ -36,11 +38,12 @@ Version 0.7.0. Tested in the game (1.1.1, in the Ryuchii emulator): the panel, i
 |---|---|
 | R + right stick up | open the panel, or close it |
 | D-pad or left stick | move the highlight over the regions and the Settings entry after them; in a region's list, scroll (left and right: a page). Held, it repeats |
-| A | open the highlighted region's list of checks, the Settings page or the page of the entry chosen on it; in a region's list, show the highlighted check in the world (A on it again puts it away, A on another check shows that one instead); on the console's page, tick or untick the kind of message chosen |
+| A | open the highlighted region's list of checks, the Settings page or the page of the entry chosen on it; in a region's list, tick the highlighted check by hand, or untick it (a check the save shows collected stays as it is); on the console's page, tick or untick the kind of message chosen |
+| Y | in a region's list, show the highlighted check in the world (Y on it again puts it away, Y on another check shows that one instead) |
 | B | back a page (a list and the Settings page: to the regions), or close the panel |
 | D-pad or left stick, on a settings page | up and down choose a setting, left and right change its value (on a kind of message, they or A tick or untick it) |
 
-While the panel is open the game doesn't see R, the right stick (so the camera stays still), A, B, the D-pad or the left
+While the panel is open the game doesn't see R, the right stick (so the camera stays still), A, B, Y, the D-pad or the left
 stick (Link stands still); while the combination is held, it doesn't see R or the right stick. A button still held when the
 panel closes stays hidden from the game until it's let go, so closing with B doesn't also swing the sword. R + right stick
 down is sloperinaGZ's menu and is left alone.
@@ -49,21 +52,43 @@ down is sloperinaGZ's menu and is left alone.
 
 In a region's list, two rows under the checks describe the highlighted one: its name with its internal key on the right
 (`key KokiriForest#1234567`, the id the randomizer gives the check, which stays the same whatever name it is shown with), then
-where it is: `A: show in the world     12 m away, 3 m up`, `... In Kokiri Forest (child)`, or why it can't be shown.
+`Ticked by hand` if it is (below) and where it is: `Y: show in the world     12 m away, 3 m up`, `... In Kokiri Forest (child)`,
+or why it can't be shown.
 
-A shows it. In the map the game is in, the check's place is drawn over the picture: a gold box a metre across round the
+Y shows it. In the map the game is in, the check's place is drawn over the picture: a gold box a metre across round the
 check's actor (its position is the box's base) and a beam 30 m up from it, in sloperinaGZ's line style (a soft glow under
 each line). The lines are **not depth-tested**: they show through walls and the ground, so the check can be found from
 anywhere in the map. With the panel closed, a band at the top of the screen (at the bottom while the console is at the top)
 names the check and says how far it is from Link, how far up or down, and, when it is off the picture, which way to look
 (`turn left`, `look up`, `behind you`). In another map, the band says which map it is in (`In Deku Tree`, `... and 1 other map`
-when it is in several). The marker stays while you play, with the panel closed, until A puts it away or another check is
+when it is in several). The marker stays while you play, with the panel closed, until Y puts it away or another check is
 shown; it is hidden while the game is paused.
 
 Only the place is shown, never what the check holds: the seed's file has no items, only the vanilla scene data's positions.
 A check with no place in the game's maps (an NPC's gift, an event) says `No place in the world for this check`; a seed made
-before 0.7.0 says `No places in this seed's file: update its tracker with the game file` (OotrR's "Update the in-game tracker"
-with the game file, or `update-tracker --nup GAME.nup`).
+before 0.7.0 says `This seed's file is too old to tick checks or show them: update its tracker with the game file` (OotrR's
+"Update the in-game tracker" with the game file, or `update-tracker --nup GAME.nup`).
+
+## Ticked by hand
+
+In a region's list, A ticks the highlighted check by hand and A again unticks it, as a double click (or Space) does in the
+randomizer's desktop tracker, which shows such a check as `Done (manual)`. A tick means done: the check counts as found in the
+region's and the panel's counts, as the desktop tracker counts its manual ticks. Its box is a green outline over a fainter green
+fill and its name a dimmer green, unlike a check the save shows collected (a filled green box), and the row under the list starts
+with `Ticked by hand`. A check the save shows collected stays collected: A does nothing on it. A `?` check (one the game has no flag
+for) can be ticked, and is then no longer counted as unreadable.
+
+The ticks are kept for each seed on the SD card, in `ootrTracker/marks-<seed id>.cfg` (in an emulator,
+`<user folder>/sdmc/ootrTracker/marks-<seed id>.cfg`), written when the list is left or the panel closed and read when the seed's
+file is loaded. The game can't write its RomFS, where `seed.trk` is, so the file sits next to the postcard's and the console's
+settings instead. The ticks are kept by the checks' ids, so updating the seed's tracker keeps them; a tick of an id the seed no
+longer has is dropped. The file is text: `ootrTracker marks 1`, `seed <id>`, a `check <id>` line per tick, then an `end` line with
+the count and a checksum. A save writes `marks-<seed id>.new` first, then the file, then deletes the copy, so a write cut off
+leaves the ticks as they were before it. A damaged file, or one of another seed or version, is left out (no ticks); the file is at
+most 32 KiB, and a tick that would make it larger is refused. A seed made before 0.7.0 has no ids, so nothing can be ticked.
+
+The in-game ticks and the desktop tracker's are kept apart: the desktop tracker doesn't read this file, and the Archipelago client
+sends the desktop tracker's manual ticks, not these.
 
 ## Settings
 

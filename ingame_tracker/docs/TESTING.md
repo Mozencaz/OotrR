@@ -1,6 +1,6 @@
 # Live test plan
 
-0.2.0's icons were seen in the game (13/11: upright, right colours, smooth); 0.2.1 to 0.4.0 (key rows, postcard, songs) were checked in the game on 1.1.1 in the Ryuchii emulator (14/11); 0.5.0's console was used in the game by two players in one room (items received and sent, hints, chat, notices), which is how other players' items were found missing. 0.6.0 (other players' items), 0.6.1 (a row per kind on the Console page), 0.6.2 (the postcard and the console hide while the game is paused) and 0.7.0 (show in the world) are not yet tested in the game, nor is game 1.0.0. The PC tests (`make test`) cover the seed file's parser (versions 1 to 4, the checks' ids and places), show in the world's places, words and camera projection, the String64 and pause reads, what the pause hides, the state, a
+0.2.0's icons were seen in the game (13/11: upright, right colours, smooth); 0.2.1 to 0.4.0 (key rows, postcard, songs) were checked in the game on 1.1.1 in the Ryuchii emulator (14/11); 0.5.0's console was used in the game by two players in one room (items received and sent, hints, chat, notices), which is how other players' items were found missing. 0.6.0 (other players' items), 0.6.1 (a row per kind on the Console page), 0.6.2 (the postcard and the console hide while the game is paused) and 0.7.0 (show in the world, ticks by hand) are not yet tested in the game, nor is game 1.0.0. The PC tests (`make test`) cover the seed file's parser (versions 1 to 4, the checks' ids and places), show in the world's places, words and camera projection, the String64 and pause reads, what the pause hides, the ticks by hand and their file (read back, damaged, another seed's), the state, a
 region's list of checks, the game-data reader over a fake GameData, the controls (repeat, what the game doesn't see), the browsing, the
 icons file's index, the postcard's and the console's settings and files, the console's lines and fading, its mailbox (half-written
 writes, a full ring, the status line) and where the console goes next to every postcard. OotrR's `tests/test_console_bridge.py` covers
@@ -161,9 +161,9 @@ Archipelago's own text client) helps to send items and chat.
 Needs a seed made by OotrR with this module (or one updated with `update-tracker --nup GAME.nup`): its `seed.trk` is version 4.
 
 - Open a region's list (Kokiri Forest): under the 18 rows, the highlighted check's name in bold with `key <its id>` dim on the right
-  (`KokiriForest#...` for a world chest, a bare number for the first chests), then `A: show in the world     N m away` in white.
-  Move the highlight: both rows follow it. The hint line reads `... A: show in the world     B: back`.
-- Mido's House chest, from outside his house: A. The row turns gold, `Shown in the world: ...`. A gold box with a beam shows where the
+  (`KokiriForest#...` for a world chest, a bare number for the first chests), then `Y: show in the world     N m away` in white.
+  Move the highlight: both rows follow it. The hint line reads `... A: tick by hand     Y: show in the world     B: back`.
+- Mido's House chest, from outside his house: Y. The row turns gold, `Shown in the world: ...`. A gold box with a beam shows where the
   chest is, through the house's walls; the distance goes down as you walk to it (about every half second with the panel open).
   Say whether the box sits on the chest (its base at the chest's base) or how far off it is, and whether the beam is upright.
 - Close the panel: the band at the top centre names the chest and says `N m away` (`, N m up` from 2 m), and `turn left`, `turn right`,
@@ -171,15 +171,36 @@ Needs a seed made by OotrR with this module (or one updated with `update-tracker
   direction words change. Check that the lines are clipped cleanly at the screen's edges and when the camera is inside the box.
 - Pause (+): the marker and the band go; unpause: they come back.
 - Leave Kokiri Forest (to the Lost Woods): the marker goes and the band says `In Kokiri Forest (child)`. Go back: it is drawn again.
-- A again on the same check in the list: the marker and band go. A on another check: that one is shown instead.
+- Y again on the same check in the list: the marker and band go. Y on another check: that one is shown instead.
 - A check of another region (a dungeon's chest) from Kokiri Forest: the line says `In <its map>` and the band names it.
-- An NPC's gift or an event (a song, a Deku Tree item): `No place in the world for this check`, A does nothing.
-- A seed made before 0.7.0 and not updated (version 3 `seed.trk`): every check says `No places in this seed's file: ...` and A
-  does nothing; after `update-tracker --nup` they have places.
+- An NPC's gift or an event (a song, a Deku Tree item): `No place in the world for this check`, Y does nothing.
+- A seed made before 0.7.0 and not updated (version 3 `seed.trk`): every check says `This seed's file is too old to tick checks or
+  show them: ...` and Y does nothing; after `update-tracker --nup` they have places.
+- Y never reaches the game while the panel is open (no item is used), nor when it is still held as the panel closes.
 - With sloperinaGZ (`subsdk9`) enabled: its collision boxes and our marker both draw, its menu (R + right stick down) still opens, and
   nothing crashes. With the console at the top: the band goes to the bottom.
 - 720p and 1080p, docked and handheld: the panel's list (18 rows, two detail rows, the hint) fits the screen with both warning lines.
 - A check in a scene with child and adult layouts (Kokiri Forest), as child and as adult: the marker in both if the check is in both.
+
+## 3i. Ticked by hand (0.7.0)
+
+- In Kokiri Forest's list, on a missing check (an empty box): A. Its box becomes a green outline over a faint green fill, its name a
+  dimmer green, and the row under the list starts with `Ticked by hand`; within half a second the list's `N / M found`, the region's
+  count on the regions page and the panel's total go up by one. The log says `tick: check N ticked by hand`. A again: an empty box,
+  the counts back down (`tick: check N unticked`).
+- A on a collected check (a filled box): nothing changes, and the log says `tick: check N is collected in the save`.
+- A on a `?` check: it is ticked, and the panel's `N unreadable`, if shown, goes down by one.
+- The hint line `D-pad: scroll (left / right: a page)     A: tick by hand     Y: show in the world     B: back` fits its row at 720p
+  and 1080p.
+- Leave the list (B): `<user folder>/sdmc/ootrTracker/marks-<seed id>.cfg` holds a `check` line per tick and an `end` line, and
+  no `marks-<seed id>.new` is left. Quit and start the game again: the ticks come back (`marks: N checks ticked by hand`).
+- Fill the file with junk, cut it short, or copy another seed's file to this seed's name: the log says `marks: ... is damaged or
+  another seed's: left out`, there are no ticks, and nothing crashes.
+- A seed made before 0.7.0 and not updated: A does nothing on a check, and the log says `marks: the seed file has no checks' ids
+  (version 3): nothing can be ticked`.
+- Pick up a ticked check in the game: it shows collected (a filled box) and is counted once.
+- Compare with the desktop tracker: a check ticked there (`Done (manual)`) isn't ticked in the game, and the other way round (they
+  are kept apart).
 
 ## 4. What it shows
 

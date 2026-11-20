@@ -10,6 +10,8 @@
 #include "gamefile.h"
 #include "locate.h"
 #include "mailbox.h"
+#include "marks.h"
+#include "marksfile.h"
 #include "overlay.h"
 #include "panel.h"
 #include "postcard.h"
@@ -54,6 +56,8 @@ static struct {
   uint32_t located;          /* the check shown in the world (locate.h), LOCATE_NONE if none */
   uint64_t next_locate_ms;
   locate_view_t locate_view; /* handed to the present thread last */
+  marks_t marks;             /* the checks ticked by hand */
+  bool marks_changed;        /* not yet written to the SD card */
 } app;
 
 /* Runs inside rtld's DT_INIT: checked reads and unformatted logging only. */
@@ -107,6 +111,8 @@ static bool ensure_seed(uint64_t now)
   if (app.seed_loaded) {
     postcardfile_load(&app.postcard);
     consolefile_load(&app.console);
+    marks_init(&app.marks, &app.seed);
+    marksfile_load(&app.marks, &app.seed);
     mailbox_set_seed(mailbox_shared(), trk_string(&app.seed, app.seed.seed_id));
     mailbox_start(&app.client, now);
     app.console_dirty = true;
@@ -135,7 +141,7 @@ static uint32_t highlighted_check(void)
                                           : LOCATE_NONE;
 }
 
-/* the line under the list for the highlighted check: its id, and where it is or what A does */
+/* the line under the list for the highlighted check: its id, and where it is or what Y does */
 static void fill_detail(locate_detail_t *detail)
 {
   uint32_t check = highlighted_check();
@@ -174,7 +180,7 @@ static void refresh_located(uint64_t now)
   overlay_publish_locate(&view);
 }
 
-/* A on a check of a region's list: shown in the world, or put away if it was; a check with no place stays as
+/* Y on a check of a region's list: shown in the world, or put away if it was; a check with no place stays as
  * it is (the line under the list says why). */
 static void toggle_located(uint64_t now)
 {
@@ -188,6 +194,36 @@ static void toggle_located(uint64_t now)
   else
     log_printf("show in the world: check %u", (unsigned)check);
   refresh_located(now);
+}
+
+/* --- the checks ticked by hand (marks.h) ------------------------------------------------------- */
+
+/* A on a check of a region's list: ticked by hand, or unticked if it was. A check the save shows collected stays as
+ * it is, as the desktop tracker leaves it. The counts are worked out again at the next frame. */
+static void toggle_mark(void)
+{
+  uint32_t check = highlighted_check();
+  if (check == LOCATE_NONE)
+    return;
+  if (app.marks.state != MARKS_ON) {
+    log_printf("tick: this seed file can't keep ticks");
+    return;
+  }
+  if (gamedata_attach(&app.data) && tracker_check_flag(&app.seed, &app.data.source, check) == GD_TRUE) {
+    log_printf("tick: check %u is collected in the save", (unsigned)check);
+    return;
+  }
+  mark_result_t result = marks_toggle(&app.marks, &app.seed, check);
+  if (result == MARK_REFUSED) {
+    log_printf("tick: check %u can't be ticked (its id, or the file is full)", (unsigned)check);
+    return;
+  }
+  app.marks_changed = true;
+  app.next_refresh_ms = 0;
+  if (result == MARK_TICKED)
+    log_printf("tick: check %u ticked by hand", (unsigned)check);
+  else
+    log_printf("tick: check %u unticked", (unsigned)check);
 }
 
 /* --- the panel --------------------------------------------------------------------------------- */
@@ -204,6 +240,7 @@ static panel_mode_t work_out(panel_t *panel)
   if (!gamedata_attach(&app.data))
     return PANEL_WAITING_FOR_GAME_DATA;
   tracker_compute(&app.seed, &app.data.source, &panel->state);
+  tracker_count_marks(&app.seed, &app.data.source, &app.marks, &panel->state);
   return PANEL_TRACKING;
 }
 
@@ -219,6 +256,7 @@ static void fill_browse(panel_t *panel)
   if (panel->mode == PANEL_TRACKING && app.browse.view == BROWSE_CHECKS) {
     panel->row_count = tracker_check_rows(&app.seed, &app.data.source, app.browse.region, app.browse.top, panel->rows,
                                           BROWSE_CHECK_ROWS);
+    tracker_mark_rows(&app.seed, &app.marks, app.browse.region, app.browse.top, panel->rows, panel->row_count);
     fill_detail(&panel->detail);
   }
 }
@@ -311,7 +349,7 @@ static bool on_console_page(void)
   return app.open && app.browse.view == BROWSE_CONSOLE;
 }
 
-/* The settings are written when their page is left (or the panel closed), not at each change. */
+/* The settings and the ticks are written when their page is left (or the panel closed), not at each change. */
 static void save_settings_changes(void)
 {
   if (app.postcard_changed && !(app.open && app.browse.view == BROWSE_POSTCARD)) {
@@ -321,6 +359,10 @@ static void save_settings_changes(void)
   if (app.console_changed && !on_console_page()) {
     app.console_changed = false;
     consolefile_save(&app.console);
+  }
+  if (app.marks_changed && !(app.open && app.browse.view == BROWSE_CHECKS)) {
+    app.marks_changed = false;
+    marksfile_save(&app.marks, &app.seed);
   }
 }
 
@@ -339,10 +381,14 @@ static void navigate(control_t command, uint64_t now)
   bool sideways = command == CONTROL_LEFT || command == CONTROL_RIGHT;
   int direction = command == CONTROL_RIGHT ? 1 : -1;
   bool kind_row = app.browse.view == BROWSE_CONSOLE && console_setting_is_kind((console_setting_t)app.browse.setting);
-  if (kind_row && (command == CONTROL_SELECT || sideways))
+  if (command == CONTROL_LOCATE && app.browse.view != BROWSE_CHECKS)
+    return; /* Y shows a check of a region's list in the world; elsewhere it does nothing */
+  if (command == CONTROL_LOCATE)
+    toggle_located(now);
+  else if (kind_row && (command == CONTROL_SELECT || sideways))
     change_console_setting(direction);
   else if (command == CONTROL_SELECT && app.browse.view == BROWSE_CHECKS)
-    toggle_located(now);
+    toggle_mark();
   else if (command == CONTROL_SELECT)
     browse_open(&app.browse, app.seed.region_count);
   else if (app.browse.view == BROWSE_POSTCARD && sideways)

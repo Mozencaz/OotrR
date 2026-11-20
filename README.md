@@ -93,9 +93,10 @@ the game's own style: press **R + right stick up** to open it and again (or **B*
 items (with the game's own icons and their levels), the twelve ocarina songs, the dungeons' small keys and boss keys, the checks found per region and in total,
 the enemy souls, and a warning when the loaded save is not from this seed. The D-pad or the left stick moves
 over the regions, **A** opens a region's checks by name (ticked when collected), **B** goes back. In a region's
-list, the highlighted check's internal key (its id) shows under the list, and **A** shows where the check is in the
+list, the highlighted check's internal key (its id) shows under the list, **A** ticks the check by hand (it counts as found,
+as the desktop tracker's manual ticks do, and is kept for each seed on the SD card) and **Y** shows where the check is in the
 world: a box and a beam over the picture with how far it is, or the name of the map it's in (only the place, never
-what it holds). While it is open the game does not see R, the right stick, A, B, the D-pad or the left stick. The last entry of the
+what it holds). While it is open the game does not see R, the right stick, A, B, Y, the D-pad or the left stick. The last entry of the
 regions, **Settings**, has two pages. **Postcard** turns on a small card with only the icons (items, songs, temples, dungeon keys) in a
 corner of the screen; its position, size and opacity are set there. **Console** shows Archipelago messages over the game (on by
 default for an Archipelago seed, see [below](#archipelago-multiworld)); its position, opacity, lines, fade and the kinds of message

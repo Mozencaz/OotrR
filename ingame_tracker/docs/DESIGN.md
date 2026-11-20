@@ -84,14 +84,15 @@ those rows read anew: the rest waits for the next refresh, so scrolling costs a 
 `controls.c`. A frame is counted from the controller reads (`poll.c`): the first controller the game reads is the anchor, a read of it
 8 ms after the last starts a frame, and the buttons held during the frame that ended are the frame's input. R + right stick up
 (`BTN_R`, `BTN_RS_UP`, bit 21) toggles on its press. With the panel open, B (on its press) goes back or closes, A opens the
-highlighted region's list, and the D-pad or the left stick's direction bits move the highlight: on the press, then after 350 ms every
-90 ms while held. One command a frame, in that order (the combination, B, A, a direction).
+highlighted region's list (in a list, it ticks the highlighted check by hand), Y (`CONTROL_LOCATE`) shows a list's highlighted check in
+the world, and the D-pad or the left stick's direction bits move the highlight: on the press, then after 350 ms every 90 ms while
+held. One command a frame, in that order (the combination, B, A, Y, a direction). Y does nothing outside a region's list.
 
-While the panel is open, every state the game reads has R, the right stick's direction bits, A, B, the D-pad and the left stick's direction
-bits cleared, and both sticks' axes centred (`app_edit_state`); while the combination is held with the panel closed, R and the right
-stick. When the panel closes, those of them still held stay hidden (and a stick still pushed stays centred) until they are let go for a
-frame, so the B that closed the panel doesn't reach the game. Nothing is hidden until the seed file has loaded. R + right stick down is
-sloperinaGZ's menu, R3 + D-pad is ocarinaMIDI's.
+While the panel is open, every state the game reads has R, the right stick's direction bits, A, B, Y, the D-pad and the left stick's
+direction bits cleared, and both sticks' axes centred (`app_edit_state`); while the combination is held with the panel closed, R and
+the right stick. When the panel closes, those of them still held stay hidden (and a stick still pushed stays centred) until they are
+let go for a frame, so the B that closed the panel doesn't reach the game. Nothing is hidden until the seed file has loaded. R + right
+stick down is sloperinaGZ's menu, R3 + D-pad is ocarinaMIDI's.
 
 ## Browsing
 
@@ -230,7 +231,7 @@ are in [the format document](../../docs/ingame-tracker-format.md#the-consoles-ma
 
 ## Show in the world
 
-A on a check of a region's list (`app.c` `toggle_located`) makes it the check shown, A on it again none, A on another that one; a
+Y on a check of a region's list (`app.c` `toggle_located`) makes it the check shown, Y on it again none, Y on another that one; a
 check the seed file has no place for (an NPC's gift, an event, or a file older than version 4) stays as it was, and the row under the
 list says why. The parts:
 
@@ -270,6 +271,32 @@ no save data yet (the panel says "Waiting for the game's save data"); the game's
 (no panel; the controls still work); the GPU not finishing a frame's drawing for 5 s (the panel gives up); no `icons.bin`, a damaged one,
 an NVN without the functions the icons need, or no memory for them (the items show as their letters); a picture that can't be read or
 that NVN won't take (that item shows as its letters).
+
+## Ticked by hand
+
+A on a check of a region's list (`app.c` `toggle_mark`) ticks it, or unticks it, as the desktop tracker's double click toggles a
+check's manual completion (`ManualTracker` in `randomizer_services.py`, shown as `Done (manual)`). As there, a check the save shows
+collected can't be ticked or unticked, and a tick counts as found. The parts:
+
+- `marks.c` is pure: a bit per check of the seed file (up to 4,096), the toggle, and the file's text. The ticks are on only for a
+  version 4 seed file with ids and a seed id of letters and digits; a check's id must be 1 to 160 characters without a control
+  character. The file is `ootrTracker marks 1`, `seed <id>`, a `check <id>` line per tick in the seed file's order, and
+  `end <count> <FNV-1a of every byte before that line, 8 hexadecimal digits>`. `marks_t.length` is kept exact at each toggle, and a
+  tick that would take the file past 32 KiB is refused, so the file always fits its buffer. `marks_parse` takes a file only if it is
+  whole (each line ended, the count and the sum right, nothing after the end line), of version 1 and of this seed; an id the seed
+  file doesn't have, or a second line of one, is left out, as `ManualTracker` intersects its file with the seed's ids. A lookup
+  starts after the last check found, so a file in the seed's order is read in one pass.
+- `tracker.c`: `tracker_count_marks` adds the ticked checks the save doesn't show collected to their region's and the total
+  `collected` (a `?` one leaves `unreadable`), after `tracker_compute`; `tracker_mark_rows` sets `check_row_t.marked` for the rows
+  of a list. The trackable counts don't change.
+- `marksfile.c` keeps the file on the SD card through `sdfile.c` (the RomFS, where `seed.trk` is, can't be written):
+  `ootrTracker/marks-<seed id>.cfg`. The module can't rename a file: `nn::fs::RenameFile` isn't among the sdk functions it is known
+  to call, and a missing import would only show in the game. So a save writes the same text to `marks-<seed id>.new`, then to the
+  file, and deletes the copy once both are written; a load reads the file, or the copy if the file is missing or damaged. A write
+  cut off therefore leaves one whole copy of the ticks before that save. It reads when the seed file loads and writes when the list
+  is left or the panel closed with a change, as the settings are, with a 32 KiB buffer from the heap for the time of the call.
+- `trackerui.c`: a ticked box is `done_colour`'s outline over the same green at 35 % (a collected one is filled), the name in a
+  dimmer green, and the second row under the list starts with `Ticked by hand` before the place's line.
 
 ## Known limits
 

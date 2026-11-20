@@ -8,6 +8,7 @@
 
 #include "flags.h"
 #include "grid.h"
+#include "marks.h"
 #include "trkfile.h"
 
 typedef enum { ITEM_UNKNOWN, ITEM_MISSING, ITEM_OWNED } item_status_t;
@@ -49,6 +50,7 @@ typedef struct {
   const char *name; /* points into the seed file; "" if the file has no names (version 1) */
   uint32_t number;  /* its place in its region, from 1 */
   uint8_t flag;     /* gd_flag_t: collected, missing or unknown */
+  bool marked;      /* ticked by hand (marks.h) */
 } check_row_t;
 
 void tracker_compute(const trk_t *seed, const flag_source_t *flags, tracker_state_t *state);
@@ -57,5 +59,13 @@ void tracker_compute_icons(const trk_t *seed, const flag_source_t *flags, tracke
 /* Up to `room` of region `region`'s checks from its `first`; how many were filled. */
 uint32_t tracker_check_rows(const trk_t *seed, const flag_source_t *flags, uint32_t region, uint32_t first,
                             check_row_t *rows, uint32_t room);
+/* Check `check`'s save flag (GD_UNKNOWN past the checks). */
+gd_flag_t tracker_check_flag(const trk_t *seed, const flag_source_t *flags, uint32_t check);
+/* The checks ticked by hand counted as found in a state tracker_compute filled, as the desktop tracker counts its
+ * own: those the save shows collected are counted already, and a `?` one ticked is no longer unreadable. */
+void tracker_count_marks(const trk_t *seed, const flag_source_t *flags, const marks_t *marks, tracker_state_t *state);
+/* Which of `count` rows from tracker_check_rows (region `region` from its `first`) are ticked by hand. */
+void tracker_mark_rows(const trk_t *seed, const marks_t *marks, uint32_t region, uint32_t first, check_row_t *rows,
+                       uint32_t count);
 
 #endif

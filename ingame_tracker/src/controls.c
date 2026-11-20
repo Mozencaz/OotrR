@@ -8,7 +8,7 @@
 #define RIGHT_STICK_DIRECTIONS (BTN_RS_LEFT | BTN_RS_UP | BTN_RS_RIGHT | BTN_RS_DOWN)
 #define LEFT_STICK_DIRECTIONS  (BTN_LS_LEFT | BTN_LS_UP | BTN_LS_RIGHT | BTN_LS_DOWN)
 #define COMBO_BUTTONS          (COMBO_MODIFIER | RIGHT_STICK_DIRECTIONS)
-#define PANEL_BUTTONS          (COMBO_BUTTONS | BTN_A | BTN_B | BTN_DPAD | LEFT_STICK_DIRECTIONS)
+#define PANEL_BUTTONS          (COMBO_BUTTONS | BTN_A | BTN_B | BTN_Y | BTN_DPAD | LEFT_STICK_DIRECTIONS)
 #define REPEAT_AFTER_MS 350 /* a direction held this long repeats, */
 #define REPEAT_EVERY_MS 90  /* this often */
 
@@ -66,6 +66,8 @@ control_t controls_frame(uint32_t held, bool panel_open, uint64_t now_ms)
     return CONTROL_BACK;
   if (pressed & BTN_A)
     return CONTROL_SELECT;
+  if (pressed & BTN_Y)
+    return CONTROL_LOCATE;
   return direction_command(held, now_ms);
 }
 

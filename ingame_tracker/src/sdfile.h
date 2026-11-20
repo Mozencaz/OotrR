@@ -1,6 +1,7 @@
-/* Small settings files on the SD card (ootrTracker/<name>.cfg), written and read through the game's own nn::fs as
- * sloperinaGZ keeps its settings (src/ootgz/settings.c, GPL-3). The card is user:/sdmc in an emulator's user folder.
- * The card is mounted once, at the first read; without it nothing is kept past the game's end. */
+/* Small files on the SD card (ootrTracker/<name>.cfg: the postcard's and the console's settings, the ticks of
+ * marksfile.c), written and read through the game's own nn::fs as sloperinaGZ keeps its settings
+ * (src/ootgz/settings.c, GPL-3). The card is user:/sdmc in an emulator's user folder. The card is mounted once, at the
+ * first read; without it nothing is kept past the game's end. */
 #ifndef SDFILE_H
 #define SDFILE_H
 
@@ -14,5 +15,7 @@
 bool sdfile_read(const char *who, const char *path, char *text, size_t room, size_t *size);
 /* Writes the file again; false (logged) if there is no card or the write failed. */
 bool sdfile_write(const char *who, const char *path, const char *text, size_t length);
+/* Deletes the file, if the card is mounted (nothing if the file isn't there). */
+void sdfile_delete(const char *path);
 
 #endif

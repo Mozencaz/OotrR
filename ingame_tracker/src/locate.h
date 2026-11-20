@@ -1,7 +1,8 @@
-/* "Show in the world": A on a check of a region's list shows where it is, A on it again (or on another check) puts
- * it away. The seed file (version 4) holds each check's places in the game's maps; the check is drawn in the world
- * when the game is in one of them (worldmark.c), and named by map otherwise. Only the place is shown, never what
- * the check holds: the file has no rewards. Pure (no game reads), so the tests run it on the PC. */
+/* "Show in the world": Y on a check of a region's list shows where it is, Y on it again puts it away and Y on
+ * another check shows that one instead. The seed file (version 4) holds each check's places in the game's maps; the
+ * check is drawn in the world when the game is in one of them (worldmark.c), and named by map otherwise. Only the
+ * place is shown, never what the check holds: the file has no rewards. Pure (no game reads), so the tests run it on
+ * the PC. */
 #ifndef LOCATE_H
 #define LOCATE_H
 
@@ -53,14 +54,14 @@ typedef struct {
 
 /* The seed file's index of region `region`'s check `nth`, or LOCATE_NONE. */
 uint32_t locate_check_of(const trk_t *trk, uint32_t region, uint32_t nth);
-/* A on check `check` while `shown` is shown: the check shown from now on. */
+/* Y on check `check` while `shown` is shown: the check shown from now on. */
 uint32_t locate_toggle(uint32_t shown, uint32_t check);
 /* Where check `check` is, the game being in map `map` (NULL: not known). */
 locate_t locate_find(const trk_t *trk, uint32_t check, const char *map);
 /* What to say about it: "12 m away, 3 m up" (from `link`, Link's position, NULL if not known), "In Kokiri Forest
  * (child)", "No place in the world for this check"... */
 void locate_describe(const locate_t *where, const float link[3], char *out, size_t room);
-/* The panel's line for a check shown: "Shown in the world: " and locate_describe's, or what A does. */
+/* The panel's line for a check shown: "Shown in the world: " and locate_describe's, or what Y does. */
 void locate_panel_line(bool shown, const locate_t *where, const float link[3], char *out, size_t room);
 /* The band's line for the check drawn at `point`: how far it is from `link` (NULL: not known) and, when it isn't on
  * the picture (`side`), which way to look: "12 m away, 3 m up, turn left". */

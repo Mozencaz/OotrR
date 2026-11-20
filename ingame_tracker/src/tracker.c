@@ -132,6 +132,44 @@ uint32_t tracker_check_rows(const trk_t *seed, const flag_source_t *flags, uint3
   return filled;
 }
 
+gd_flag_t tracker_check_flag(const trk_t *seed, const flag_source_t *flags, uint32_t check)
+{
+  if (check >= seed->check_count)
+    return GD_UNKNOWN;
+  trk_check_t record = trk_check(seed, check);
+  return check_flag(&record, flags);
+}
+
+void tracker_count_marks(const trk_t *seed, const flag_source_t *flags, const marks_t *marks, tracker_state_t *state)
+{
+  if (!marks->count)
+    return;
+  for (uint32_t i = 0; i < seed->region_count && i < state->region_count; i++) {
+    trk_region_t region = trk_region(seed, i);
+    for (uint32_t c = 0; c < region.check_count; c++) {
+      uint32_t check = region.first_check + c;
+      if (!marks_has(marks, check))
+        continue;
+      gd_flag_t flag = tracker_check_flag(seed, flags, check);
+      if (flag == GD_TRUE)
+        continue;
+      state->regions[i].collected++;
+      state->collected++;
+      state->unreadable -= flag == GD_UNKNOWN;
+    }
+  }
+}
+
+void tracker_mark_rows(const trk_t *seed, const marks_t *marks, uint32_t region, uint32_t first, check_row_t *rows,
+                       uint32_t count)
+{
+  if (region >= seed->region_count)
+    return;
+  uint32_t start = trk_region(seed, region).first_check + first;
+  for (uint32_t i = 0; i < count; i++)
+    rows[i].marked = marks_has(marks, start + i);
+}
+
 void tracker_compute(const trk_t *seed, const flag_source_t *flags, tracker_state_t *state)
 {
   *state = (tracker_state_t){ .link = link_of(seed, flags) };

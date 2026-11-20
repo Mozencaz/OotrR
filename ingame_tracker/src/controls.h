@@ -1,7 +1,8 @@
 /* The tracker's controls: R + right stick up opens and closes the panel. While it's open the D-pad or the left
- * stick moves its highlight (held, it repeats), A opens a region's list and B goes back, or closes. While the
- * panel is open (or the combination is held) the game doesn't see R or the right stick, nor, with the panel open,
- * A, B, the D-pad or the left stick; the buttons still held when it closes stay hidden until they're let go.
+ * stick moves its highlight (held, it repeats), A opens a region's list (in a list, it ticks the highlighted check by
+ * hand), Y shows the highlighted check of a list in the world, and B goes back, or closes. While the panel is open
+ * (or the combination is held) the game doesn't see R or the right stick, nor, with the panel open, A, B, Y, the
+ * D-pad or the left stick; the buttons still held when it closes stay hidden until they're let go.
  * R + right stick down is sloperinaGZ's menu, so it is left alone.
  * Based on ocarinaMIDI's file of the same name (c599fa5, GPL-3). */
 #ifndef CONTROLS_H
@@ -11,7 +12,7 @@
 #include <stdint.h>
 
 typedef enum {
-  CONTROL_NONE, CONTROL_TOGGLE, CONTROL_BACK, CONTROL_SELECT,
+  CONTROL_NONE, CONTROL_TOGGLE, CONTROL_BACK, CONTROL_SELECT, CONTROL_LOCATE,
   CONTROL_UP, CONTROL_DOWN, CONTROL_LEFT, CONTROL_RIGHT,
 } control_t;
 

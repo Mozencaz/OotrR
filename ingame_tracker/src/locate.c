@@ -128,7 +128,8 @@ void locate_describe(const locate_t *where, const float link[3], char *out, size
       put(out, room, &at, "No place in the world for this check");
       return;
     case LOCATE_OLD_FILE:
-      put(out, room, &at, "No places in this seed's file: update its tracker with the game file");
+      put(out, room, &at, "This seed's file is too old to tick checks or show them: update its tracker with the game "
+                          "file");
       return;
     case LOCATE_OFF:
       return;
@@ -167,7 +168,7 @@ void locate_panel_line(bool shown, const locate_t *where, const float link[3], c
     locate_describe(where, link, out, room);
     return;
   }
-  put(out, room, &at, shown ? "Shown in the world: " : "A: show in the world     ");
+  put(out, room, &at, shown ? "Shown in the world: " : "Y: show in the world     ");
   char said[LOCATE_TEXT_ROOM];
   locate_describe(where, link, said, sizeof(said));
   put(out, room, &at, said);

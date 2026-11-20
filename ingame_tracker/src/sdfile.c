@@ -16,8 +16,8 @@ static bool mount_sd(void)
     result = fs_mount_sd_debug(SD_MOUNT);
   sd_state = result == 0 ? SD_MOUNTED : SD_MISSING;
   if (result != 0)
-    log_printf("settings: no SD card access (0x%x): the postcard's and the console's settings won't be kept",
-               (unsigned)result);
+    log_printf("settings: no SD card access (0x%x): the postcard's and the console's settings and the ticks won't be "
+               "kept", (unsigned)result);
   return sd_state == SD_MOUNTED;
 }
 
@@ -59,4 +59,10 @@ bool sdfile_write(const char *who, const char *path, const char *text, size_t le
   if (result != 0)
     log_printf("%s: writing %s failed (0x%x)", who, path, (unsigned)result);
   return result == 0;
+}
+
+void sdfile_delete(const char *path)
+{
+  if (sd_state == SD_MOUNTED)
+    fs_delete_file(path);
 }

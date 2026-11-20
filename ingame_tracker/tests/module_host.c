@@ -17,6 +17,7 @@
 #include "../src/iconfile.h"
 #include "../src/locate.h"
 #include "../src/mailbox.h"
+#include "../src/marks.h"
 #include "../src/npad.h"
 #include "../src/postcard.h"
 #include "../src/sizes.h"
@@ -954,9 +955,10 @@ static int test_what_the_game_does_not_see(void)
   CHECK(controls_centres_right_stick(combo, false));
   uint32_t hidden = controls_hidden(combo, false);
   CHECK((hidden & BTN_R) && (hidden & BTN_RS_UP) && (hidden & BTN_RS_LEFT) && (hidden & BTN_RS_DOWN));
-  CHECK(!(hidden & BTN_B) && !(hidden & BTN_A) && !(hidden & BTN_RSTICK));
+  CHECK(!(hidden & BTN_B) && !(hidden & BTN_A) && !(hidden & BTN_Y) && !(hidden & BTN_RSTICK));
   hidden = controls_hidden(0, true);
   CHECK((hidden & BTN_B) && (hidden & BTN_R) && (hidden & BTN_A) && (hidden & BTN_DPAD) == BTN_DPAD);
+  CHECK(hidden & BTN_Y); /* show in the world's */
   CHECK((hidden & BTN_LS_LEFT) && (hidden & BTN_LS_DOWN) && !(hidden & BTN_X) && !(hidden & BTN_ZL));
   CHECK(controls_centres_right_stick(0, true) && controls_centres_left_stick(true));
   return 0;
@@ -975,6 +977,26 @@ static int test_buttons_held_at_closing_stay_hidden_until_let_go(void)
   CHECK((controls_hidden(BTN_B, false) & BTN_B) && !controls_centres_left_stick(false));
   CHECK(controls_frame(0, false, 30) == CONTROL_NONE);
   CHECK(controls_hidden(BTN_B, false) == 0); /* a new press of B is the game's */
+  return 0;
+}
+
+static int test_y_shows_in_the_world_only_with_the_panel_open(void)
+{
+  controls_reset();
+  CHECK(controls_frame(BTN_Y, false, 0) == CONTROL_NONE); /* the game's while the panel is closed */
+  CHECK(controls_hidden(BTN_Y, false) == 0);
+  CHECK(controls_frame(0, true, 10) == CONTROL_NONE);
+  CHECK(controls_frame(BTN_Y, true, 20) == CONTROL_LOCATE);
+  CHECK(controls_frame(BTN_Y, true, 30) == CONTROL_NONE); /* on the press only */
+  CHECK(controls_frame(BTN_Y | BTN_A, true, 40) == CONTROL_SELECT); /* A pressed while Y is held */
+  CHECK(controls_frame(0, true, 50) == CONTROL_NONE);
+  CHECK(controls_frame(BTN_A | BTN_Y, true, 60) == CONTROL_SELECT); /* both at once: A first */
+  CHECK(controls_frame(0, true, 70) == CONTROL_NONE);
+  CHECK(controls_frame(BTN_Y, true, 80) == CONTROL_LOCATE);
+  controls_hold_back_held(); /* the panel closed with Y held */
+  CHECK(controls_hidden(BTN_Y, false) & BTN_Y);
+  CHECK(controls_frame(0, false, 90) == CONTROL_NONE);
+  CHECK(controls_hidden(BTN_Y, false) == 0); /* a new press of Y is the game's */
   return 0;
 }
 
@@ -2002,7 +2024,7 @@ static int test_a_checks_place_is_here_elsewhere_or_nowhere(void)
   return 0;
 }
 
-static int test_a_shows_a_check_and_puts_it_away(void)
+static int test_y_shows_a_check_and_puts_it_away(void)
 {
   CHECK(locate_toggle(LOCATE_NONE, 1) == 1);
   CHECK(locate_toggle(1, 1) == LOCATE_NONE);
@@ -2045,7 +2067,7 @@ static int test_what_is_said_of_a_checks_place(void)
   locate_describe(&elsewhere, link, text, sizeof(text));
   CHECK(!strcmp(text, "In Kokiri Forest (child) and 1 other map"));
   locate_panel_line(false, &elsewhere, link, text, sizeof(text));
-  CHECK(!strcmp(text, "A: show in the world     In Kokiri Forest (child) and 1 other map"));
+  CHECK(!strcmp(text, "Y: show in the world     In Kokiri Forest (child) and 1 other map"));
   elsewhere.more_maps = 2;
   locate_describe(&elsewhere, link, text, sizeof(text));
   CHECK(!strcmp(text, "In Kokiri Forest (child) and 2 other maps"));
@@ -2054,9 +2076,10 @@ static int test_what_is_said_of_a_checks_place(void)
   CHECK(!strcmp(text, "In Kokiri Forest (child)"));
   locate_t nowhere = { .state = LOCATE_NOWHERE }, old = { .state = LOCATE_OLD_FILE }, off = { .state = LOCATE_OFF };
   locate_panel_line(false, &nowhere, link, text, sizeof(text));
-  CHECK(!strcmp(text, "No place in the world for this check")); /* A does nothing there */
+  CHECK(!strcmp(text, "No place in the world for this check")); /* Y does nothing there */
   locate_panel_line(false, &old, link, text, sizeof(text));
-  CHECK(!strcmp(text, "No places in this seed's file: update its tracker with the game file"));
+  CHECK(!strcmp(text, "This seed's file is too old to tick checks or show them: update its tracker with the game "
+                      "file"));
   locate_panel_line(false, &off, link, text, sizeof(text));
   CHECK(!strcmp(text, ""));
   return 0;
@@ -2110,6 +2133,165 @@ static int test_a_camera_that_isnt_one_is_refused(void)
   return 0;
 }
 
+/* --- the checks ticked by hand ----------------------------------------------------------------- */
+
+static int test_a_ticks_a_check_and_a_again_unticks_it(void)
+{
+  blob_t blob = synthetic(), old = synthetic_of_version(3);
+  trk_t trk, old_trk;
+  const char *why = "";
+  CHECK(trk_parse(&trk, blob.bytes, blob.size, &why) && trk_parse(&old_trk, old.bytes, old.size, &why));
+  marks_t marks;
+  marks_init(&marks, &trk);
+  CHECK(marks.state == MARKS_ON && marks.count == 0 && !marks_has(&marks, 1) && marks_can_tick(&marks, &trk, 1));
+  size_t empty = marks.length;
+  CHECK(marks_toggle(&marks, &trk, 1) == MARK_TICKED && marks_has(&marks, 1) && marks.count == 1);
+  CHECK(marks.length == empty + strlen("check ") + strlen(check_idents[1]) + 1);
+  CHECK(marks_toggle(&marks, &trk, 1) == MARK_UNTICKED && !marks_has(&marks, 1) && marks.count == 0);
+  CHECK(marks.length == empty);
+  CHECK(marks_toggle(&marks, &trk, 3) == MARK_REFUSED && marks_toggle(&marks, &trk, UINT32_MAX) == MARK_REFUSED);
+  CHECK(marks.count == 0 && !marks_has(&marks, 3));
+  char text[64];
+  marks_init(&marks, &old_trk); /* version 3: no ids, so nothing can be ticked */
+  CHECK(marks.state == MARKS_OLD_FILE && !marks_can_tick(&marks, &old_trk, 0));
+  CHECK(marks_toggle(&marks, &old_trk, 0) == MARK_REFUSED && marks.count == 0);
+  CHECK(marks_format(&marks, &old_trk, text, sizeof(text)) == 0 && !marks_parse(&marks, &old_trk, text, 0));
+  return 0;
+}
+
+static int test_ticks_count_as_found_but_never_twice(void)
+{
+  blob_t blob = synthetic();
+  trk_t trk;
+  const char *why = "";
+  CHECK(trk_parse(&trk, blob.bytes, blob.size, &why));
+  fake_flags_t fake = fake_with(GD_UNKNOWN);
+  set_bool(&fake, BOOL_A, GD_TRUE);  /* Mido's chest collected */
+  set_bool(&fake, BOOL_B, GD_FALSE); /* the map's chest missing; the sword's chest (a Bool64) unknown: a `?` */
+  marks_t marks;
+  marks_init(&marks, &trk);
+  CHECK(marks_toggle(&marks, &trk, 0) == MARK_TICKED); /* collected already: counted once */
+  CHECK(marks_toggle(&marks, &trk, 1) == MARK_TICKED); /* a `?` can be ticked */
+  tracker_state_t state;
+  tracker_compute(&trk, &fake.source, &state);
+  CHECK(state.collected == 1 && state.unreadable == 1);
+  tracker_count_marks(&trk, &fake.source, &marks, &state);
+  CHECK(state.regions[0].collected == 2 && state.regions[0].trackable == 2);
+  CHECK(state.regions[1].collected == 0 && state.collected == 2 && state.trackable == 3 && state.unreadable == 0);
+  CHECK(marks_toggle(&marks, &trk, 2) == MARK_TICKED);
+  tracker_compute(&trk, &fake.source, &state);
+  tracker_count_marks(&trk, &fake.source, &marks, &state);
+  CHECK(state.regions[1].collected == 1 && state.collected == 3 && state.trackable == 3);
+  check_row_t rows[4];
+  uint32_t count = tracker_check_rows(&trk, &fake.source, 0, 0, rows, 4);
+  CHECK(count == 2 && !rows[0].marked && !rows[1].marked); /* the save's state alone */
+  tracker_mark_rows(&trk, &marks, 0, 0, rows, count);
+  CHECK(rows[0].marked && rows[0].flag == GD_TRUE && rows[1].marked && rows[1].flag == GD_UNKNOWN);
+  count = tracker_check_rows(&trk, &fake.source, 0, 1, rows, 4); /* from the second */
+  tracker_mark_rows(&trk, &marks, 0, 1, rows, count);
+  CHECK(count == 1 && rows[0].number == 2 && rows[0].marked);
+  CHECK(marks_toggle(&marks, &trk, 1) == MARK_UNTICKED);
+  tracker_mark_rows(&trk, &marks, 0, 1, rows, count);
+  CHECK(!rows[0].marked);
+  CHECK(tracker_check_flag(&trk, &fake.source, 0) == GD_TRUE && tracker_check_flag(&trk, &fake.source, 1) == GD_UNKNOWN);
+  CHECK(tracker_check_flag(&trk, &fake.source, 2) == GD_FALSE && tracker_check_flag(&trk, &fake.source, 3) == GD_UNKNOWN);
+  return 0;
+}
+
+static int test_the_ticks_file_reads_back_what_it_wrote(void)
+{
+  blob_t blob = synthetic();
+  trk_t trk;
+  const char *why = "";
+  CHECK(trk_parse(&trk, blob.bytes, blob.size, &why));
+  marks_t marks, read;
+  marks_init(&marks, &trk);
+  static char text[MARKS_FILE_ROOM], again[MARKS_FILE_ROOM];
+  size_t length = marks_format(&marks, &trk, text, sizeof(text));
+  const char *empty = "ootrTracker marks 1\nseed abc123\nend 0 ";
+  CHECK(length == marks.length && length == strlen(empty) + 9 && !memcmp(text, empty, strlen(empty)));
+  marks_init(&read, &trk);
+  CHECK(marks_parse(&read, &trk, text, length) && read.count == 0);
+  CHECK(marks_toggle(&marks, &trk, 2) == MARK_TICKED && marks_toggle(&marks, &trk, 1) == MARK_TICKED);
+  length = marks_format(&marks, &trk, text, sizeof(text));
+  const char *head = "ootrTracker marks 1\nseed abc123\ncheck KokiriForest#222\ncheck npc#Deku Tree Map Chest\nend 2 ";
+  CHECK(length == marks.length && length == strlen(head) + 9 && !memcmp(text, head, strlen(head)));
+  CHECK(text[length - 1] == '\n');
+  marks_init(&read, &trk);
+  CHECK(marks_parse(&read, &trk, text, length));
+  CHECK(read.count == 2 && marks_has(&read, 1) && marks_has(&read, 2) && !marks_has(&read, 0) && read.length == length);
+  CHECK(marks_format(&read, &trk, again, sizeof(again)) == length && !memcmp(again, text, length));
+  CHECK(marks_format(&marks, &trk, again, length - 1) == 0); /* no room for it */
+  char name[32];
+  CHECK(marks_file_name(&trk, false, name, sizeof(name)) && !strcmp(name, "marks-abc123.cfg"));
+  CHECK(marks_file_name(&trk, true, name, sizeof(name)) && !strcmp(name, "marks-abc123.new"));
+  CHECK(!marks_file_name(&trk, false, name, 10));
+  return 0;
+}
+
+/* FNV-1a, as marks.c sums the file */
+static uint32_t fnv1a(const char *text, size_t size)
+{
+  uint32_t sum = 2166136261u;
+  for (size_t i = 0; i < size; i++)
+    sum = (sum ^ (uint8_t)text[i]) * 16777619u;
+  return sum;
+}
+
+/* `body` with an end line saying `count` and its sum, as marks_format ends a file */
+static size_t sealed(char *out, size_t room, const char *body, uint32_t count)
+{
+  size_t at = strlen(body);
+  memcpy(out, body, at);
+  return at + (size_t)snprintf(out + at, room - at, "end %u %08x\n", (unsigned)count, (unsigned)fnv1a(body, at));
+}
+
+static int test_a_damaged_or_other_seeds_ticks_file_is_left_out(void)
+{
+  blob_t blob = synthetic();
+  trk_t trk;
+  const char *why = "";
+  CHECK(trk_parse(&trk, blob.bytes, blob.size, &why));
+  marks_t marks, read;
+  marks_init(&marks, &trk);
+  CHECK(marks_toggle(&marks, &trk, 0) == MARK_TICKED);
+  static char good[512], text[512];
+  size_t length = marks_format(&marks, &trk, good, sizeof(good));
+  const char *body = "ootrTracker marks 1\nseed abc123\ncheck KokiriForest#111\n";
+  CHECK(sealed(text, sizeof(text), body, 1) == length && !memcmp(text, good, length)); /* the sum is FNV-1a */
+  for (size_t cut = 0; cut < length; cut++) { /* cut short anywhere: refused, and what was there stays */
+    marks_init(&read, &trk);
+    CHECK(marks_toggle(&read, &trk, 2) == MARK_TICKED);
+    CHECK(!marks_parse(&read, &trk, good, cut) && read.count == 1 && marks_has(&read, 2) && !marks_has(&read, 0));
+  }
+  static const struct { const char *body; uint32_t count; } bad[] = {
+    { "ootrTracker marks 1\nseed abc124\ncheck KokiriForest#111\n", 1 }, /* another seed's */
+    { "ootrTracker marks 2\nseed abc123\ncheck KokiriForest#111\n", 1 }, /* another version */
+    { "ootrTracker marks 1\nseed abc123\ncheck KokiriForest#111\n", 2 }, /* a count other than its lines */
+    { "ootrTracker marks 1\nseed abc123\nsomething else\n", 0 },         /* a line of another kind */
+    { "ootrTracker marks 1\nseed abc123\ncheck \n", 1 },                 /* an empty id */
+    { "ootrTracker marks 1\ncheck KokiriForest#111\n", 1 },              /* no seed line */
+  };
+  for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); i++) {
+    size_t n = sealed(text, sizeof(text), bad[i].body, bad[i].count);
+    marks_init(&read, &trk);
+    CHECK(!marks_parse(&read, &trk, text, n) && read.count == 0);
+  }
+  memcpy(text, good, length);
+  text[strlen("ootrTracker marks 1\nseed abc123\ncheck Kokiri")] ^= 1; /* a byte changed: the sum says so */
+  CHECK(!marks_parse(&read, &trk, text, length));
+  memcpy(text, good, length);
+  text[length] = '\n'; /* something after the end */
+  CHECK(!marks_parse(&read, &trk, text, length + 1));
+  size_t n = sealed(text, sizeof(text),
+                    "ootrTracker marks 1\nseed abc123\ncheck Gone#1\ncheck npc#Deku Tree Map Chest\n"
+                    "check npc#Deku Tree Map Chest\n", 3);
+  marks_init(&read, &trk); /* an id this seed file doesn't have is left out, and a second line of one */
+  CHECK(marks_parse(&read, &trk, text, n) && read.count == 1 && marks_has(&read, 2));
+  CHECK(read.length == marks_format(&read, &trk, good, sizeof(good)));
+  return 0;
+}
+
 /* --- driver ----------------------------------------------------------------------------------- */
 
 typedef struct { const char *name; int (*run)(void); int (*run_with_file)(const char *); } test_t;
@@ -2148,6 +2330,7 @@ static const test_t tests[] = {
   { "a_held_direction_repeats", test_a_held_direction_repeats, 0 },
   { "what_the_game_does_not_see", test_what_the_game_does_not_see, 0 },
   { "buttons_held_at_closing_stay_hidden_until_let_go", test_buttons_held_at_closing_stay_hidden_until_let_go, 0 },
+  { "y_shows_in_the_world_only_with_the_panel_open", test_y_shows_in_the_world_only_with_the_panel_open, 0 },
   { "the_highlight_moves_over_the_regions_columns", test_the_highlight_moves_over_the_regions_columns, 0 },
   { "a_list_opens_scrolls_and_goes_back", test_a_list_opens_scrolls_and_goes_back, 0 },
   { "the_settings_entry_opens_the_postcard_and_the_console", test_the_settings_entry_opens_the_postcard_and_the_console, 0 },
@@ -2185,8 +2368,12 @@ static const test_t tests[] = {
   { "icons_index_refuses_damage", test_icons_index_refuses_damage, 0 },
   { "icons_index_fills_the_atlas", test_icons_index_fills_the_atlas, 0 },
   { "a_checks_place_is_here_elsewhere_or_nowhere", test_a_checks_place_is_here_elsewhere_or_nowhere, 0 },
-  { "a_shows_a_check_and_puts_it_away", test_a_shows_a_check_and_puts_it_away, 0 },
+  { "y_shows_a_check_and_puts_it_away", test_y_shows_a_check_and_puts_it_away, 0 },
   { "what_is_said_of_a_checks_place", test_what_is_said_of_a_checks_place, 0 },
+  { "a_ticks_a_check_and_a_again_unticks_it", test_a_ticks_a_check_and_a_again_unticks_it, 0 },
+  { "ticks_count_as_found_but_never_twice", test_ticks_count_as_found_but_never_twice, 0 },
+  { "the_ticks_file_reads_back_what_it_wrote", test_the_ticks_file_reads_back_what_it_wrote, 0 },
+  { "a_damaged_or_other_seeds_ticks_file_is_left_out", test_a_damaged_or_other_seeds_ticks_file_is_left_out, 0 },
   { "the_camera_projects_as_the_games", test_the_camera_projects_as_the_games, 0 },
   { "a_camera_that_isnt_one_is_refused", test_a_camera_that_isnt_one_is_refused, 0 },
 };
