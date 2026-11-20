@@ -299,6 +299,20 @@ def verify(nup_path, seed_dir):
                 if path == fixed_path and key in (skips.get('story_fixes') or {}):
                     original = fix(original)[0]
                     report['story_fixes'] = report.get('story_fixes', 0) + 1
+            from oot_rando.patching import owl_advice
+            if path == owl_advice.ESCAPE_FLOW and 'owl_field_step' in (skips.get('story_fixes') or {}):
+                from oot_rando.patching.quest_guard import CHALLENGES, challenge_steps
+                original, details = owl_advice.field_step_after_escape(
+                    original, challenge_steps(decompress(nup.read(members[CHALLENGES]), d)))
+                if json.loads(json.dumps(details)) != skips['story_fixes']['owl_field_step']:
+                    raise ValueError('Kaepora field step differs from the spoiler.')
+                report['story_fixes'] = report.get('story_fixes', 0) + 1
+            from oot_rando.patching.shop_bottles import DISPLAY_SHOP_FLOW, patch_display_shop
+            if path == DISPLAY_SHOP_FLOW and 'shop_full_bottles' in (skips.get('story_fixes') or {}):
+                original, details = patch_display_shop(original)
+                if json.loads(json.dumps(details)) != skips['story_fixes']['shop_full_bottles']:
+                    raise ValueError('Shop full bottle guards differ from the spoiler.')
+                report['story_fixes'] = report.get('story_fixes', 0) + 1
             if path in ((skips.get('story_fixes') or {}).get('child_castle') or {}):
                 from oot_rando.patching import child_castle_skip
                 from oot_rando.patching.quest_guard import CHALLENGES, challenge_steps
