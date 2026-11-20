@@ -25,13 +25,13 @@ save has found:
 The postcard and the console hide while the game is paused, so its menus are clear, and come back when it plays again. The panel
 works while the game is paused too.
 
-Version 0.6.2. Tested in the game (1.1.1, in the Ryuchii emulator): the panel, icons, postcard and songs, and 0.5.0's console with two players. Other players' items (0.6.0), the Console page's rows (0.6.1) and hiding while paused (0.6.2) are **not yet tested in the game**, nor is game 1.0.0. See [docs/TESTING.md](docs/TESTING.md).
+Version 0.6.3. Tested in the game (1.1.1, in the Ryuchii emulator): the panel, icons, postcard and songs, and 0.5.0's console with two players. Other players' items (0.6.0), the Console page's rows (0.6.1), hiding while paused (0.6.2) and reopening where it was closed (0.6.3) are **not yet tested in the game**, nor is game 1.0.0. See [docs/TESTING.md](docs/TESTING.md).
 
 ## Controls
 
 | | |
 |---|---|
-| R + right stick up | open the panel, or close it |
+| R + right stick up | open the panel where it was last closed (the same page and highlight), or close it |
 | D-pad or left stick | move the highlight over the regions and the Settings entry after them; in a region's list, scroll (left and right: a page). Held, it repeats |
 | A | open the highlighted region's list of checks, the Settings page or the page of the entry chosen on it; on the console's page, tick or untick the kind of message chosen |
 | B | back a page (a list and the Settings page: to the regions), or close the panel |

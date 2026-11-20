@@ -89,7 +89,7 @@ check counts over the game window; toggle it with **Ctrl + Shift + O**.
 ## In-game tracker
 
 On an emulator or a Switch, every seed carries a small module that draws a tracker inside the game, in
-the game's own style: press **R + right stick up** to open it and again (or **B**) to close it. It shows the
+the game's own style: press **R + right stick up** to open it and again (or **B**) to close it; it opens again where it was. It shows the
 items (with the game's own icons and their levels), the twelve ocarina songs, the dungeons' small keys and boss keys, the checks found per region and in total,
 the enemy souls, and a warning when the loaded save is not from this seed. The D-pad or the left stick moves
 over the regions, **A** opens a region's checks by name (ticked when collected), **B** goes back. While it is

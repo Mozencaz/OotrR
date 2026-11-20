@@ -35,11 +35,23 @@ uint32_t browse_page_row(const browse_t *browse)
   return *page_row((browse_t *)browse);
 }
 
-void browse_show_regions(browse_t *browse, uint32_t region_count)
+void browse_reopen(browse_t *browse, uint32_t region_count, uint32_t check_count)
 {
-  browse->view = BROWSE_REGIONS;
   if (browse->region > region_count)
     browse->region = region_count;
+  if (browse->view != BROWSE_CHECKS)
+    return;
+  if (browse->region == region_count) { /* the Settings entry has no list */
+    browse->view = BROWSE_REGIONS;
+    return;
+  }
+  uint32_t last = check_count ? check_count - 1 : 0;
+  if (browse->check > last)
+    browse->check = last;
+  if (browse->top > browse->check)
+    browse->top = browse->check;
+  else if (browse->check >= browse->top + BROWSE_CHECK_ROWS)
+    browse->top = browse->check - BROWSE_CHECK_ROWS + 1;
 }
 
 static void move_over_regions(browse_t *browse, nav_t nav, uint32_t region_count)

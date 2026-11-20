@@ -38,8 +38,9 @@ uint32_t browse_region_rows(uint32_t region_count);
 /* The rows of a settings page (0 if the view isn't one), and the highlighted row of the one shown. */
 uint32_t browse_page_rows(browse_view_t view);
 uint32_t browse_page_row(const browse_t *browse);
-/* The regions again, with the highlight where it was (kept inside the regions and the Settings entry). */
-void browse_show_regions(browse_t *browse, uint32_t region_count);
+/* The page shown when the panel last closed, with its highlight, kept inside the regions and the Settings entry
+ * and, in a list, inside its `check_count` checks. */
+void browse_reopen(browse_t *browse, uint32_t region_count, uint32_t check_count);
 /* Up and down step through the regions in order (down a column, then the next one), left and right go to the
  * next column; in a list, up and down step through the checks, left and right a page; on a settings page, up and
  * down step through its rows (left and right change a value: app.c's). `check_count`: the highlighted region's

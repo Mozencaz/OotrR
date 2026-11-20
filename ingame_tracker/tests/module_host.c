@@ -858,8 +858,28 @@ static int test_the_highlight_moves_over_the_regions_columns(void)
   browse_move(&b, NAV_DOWN, 0, 0); /* no regions: the Settings entry is the only one */
   CHECK(b.region == 0);
   b.region = 35;
-  browse_show_regions(&b, 20); /* fewer regions than the highlight: kept inside, at the Settings entry */
+  browse_reopen(&b, 20, 0); /* fewer regions than the highlight: kept inside, at the Settings entry */
   CHECK(b.view == BROWSE_REGIONS && b.region == 20);
+  return 0;
+}
+
+static int test_the_panel_reopens_where_it_was_closed(void)
+{
+  browse_t b = { BROWSE_CHECKS, 2, 30, 20, 0, 0 };
+  browse_reopen(&b, 5, 40);
+  CHECK(b.view == BROWSE_CHECKS && b.region == 2 && b.check == 30 && b.top == 20); /* the same list and row */
+  browse_reopen(&b, 5, 10);
+  CHECK(b.view == BROWSE_CHECKS && b.check == 9 && b.top == 9); /* a shorter list: its last check, shown */
+  b.top = 0;
+  b.check = 25;
+  browse_reopen(&b, 5, 40);
+  CHECK(b.check == 25 && b.top == 25 - BROWSE_CHECK_ROWS + 1); /* the row stays in sight */
+  b.region = 5;
+  browse_reopen(&b, 5, 0);
+  CHECK(b.view == BROWSE_REGIONS && b.region == 5); /* the Settings entry has no list */
+  b = (browse_t){ BROWSE_CONSOLE, 5, 0, 0, SETTINGS_CONSOLE, 3 };
+  browse_reopen(&b, 5, 0);
+  CHECK(b.view == BROWSE_CONSOLE && b.entry == SETTINGS_CONSOLE && b.setting == 3); /* a settings page */
   return 0;
 }
 
@@ -1841,6 +1861,7 @@ static const test_t tests[] = {
   { "moving_data_is_followed_by_the_next_attach", test_moving_data_is_followed_by_the_next_attach, 0 },
   { "the_games_pause_is_its_bool_or_its_requests", test_the_games_pause_is_its_bool_or_its_requests, 0 },
   { "the_combo_toggles_on_its_press_only", test_the_combo_toggles_on_its_press_only, 0 },
+  { "the_panel_reopens_where_it_was_closed", test_the_panel_reopens_where_it_was_closed, 0 },
   { "a_and_b_and_directions_only_with_the_panel_open", test_a_and_b_and_directions_only_with_the_panel_open, 0 },
   { "a_held_direction_repeats", test_a_held_direction_repeats, 0 },
   { "what_the_game_does_not_see", test_what_the_game_does_not_see, 0 },
