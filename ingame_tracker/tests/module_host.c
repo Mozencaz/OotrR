@@ -711,6 +711,30 @@ static int test_moving_data_is_followed_by_the_next_attach(void)
   return 0;
 }
 
+/* sloperinaGZ's gd_game_paused: Sequence_IsPause, or Sequence_GamePauseRequestCount above 0 */
+#define IS_PAUSE_HASH       0x604AEBE1u
+#define PAUSE_REQUESTS_HASH 0x64A61098u
+
+static int test_the_games_pause_is_its_bool_or_its_requests(void)
+{
+  static fake_game_t fake;
+  gamedata_t data;
+  for (int round = 0; round < 3; round++) {
+    build_fake_game(&fake);
+    gamedata_init(&data, fake.game);
+    CHECK(gamedata_attach(&data) && !gamedata_paused(&data));
+    if (round == 0)
+      table_insert(fake.bool_table, IS_PAUSE_HASH, 1); /* the bool, false */
+    else if (round == 1)
+      table_insert(fake.bool_table, IS_PAUSE_HASH, 0); /* the bool, true */
+    else
+      table_insert(fake.int_table, PAUSE_REQUESTS_HASH, 0); /* 100 requests */
+    CHECK(gamedata_paused(&data) == (round > 0));
+    free_fake_game(&fake);
+  }
+  return 0;
+}
+
 /* --- the controls ----------------------------------------------------------------------------- */
 
 static int test_the_combo_toggles_on_its_press_only(void)
@@ -1160,6 +1184,43 @@ static console_settings_t console_read(const char *text)
   console_settings_t s = console_defaults();
   console_parse(&s, text, strlen(text));
   return s;
+}
+
+/* paused, the postcard and the console hide; they come back when the game plays again */
+static int test_the_pause_hides_the_postcard_and_the_console(void)
+{
+  postcard_settings_t card = postcard_defaults();
+  CHECK(!postcard_over_game(&card, false, false)); /* off at first */
+  card.shown = true;
+  CHECK(postcard_over_game(&card, false, false));
+  CHECK(!postcard_over_game(&card, false, true));
+  CHECK(postcard_over_game(&card, false, false));
+  console_settings_t console = console_defaults();
+  CHECK(console_over_game(&console, true, false, false)); /* on for an Archipelago seed */
+  CHECK(!console_over_game(&console, true, false, true));
+  CHECK(console_over_game(&console, true, false, false));
+  CHECK(!console_over_game(&console, false, false, false)); /* off for a local one, paused or not */
+  CHECK(!console_over_game(&console, false, false, true));
+  return 0;
+}
+
+/* The panel is opened on purpose: paused, it works as ever. It draws the card itself on the Postcard page, so the card
+ * isn't drawn on its own meanwhile, paused or not; the console stays handed over for the Console page's preview. */
+static int test_the_panel_stays_usable_while_paused(void)
+{
+  postcard_settings_t card = postcard_defaults();
+  card.shown = true;
+  CHECK(!postcard_over_game(&card, true, false) && !postcard_over_game(&card, true, true));
+  console_settings_t console = console_defaults();
+  CHECK(console_over_game(&console, true, true, true));
+  CHECK(!console_over_game(&console, false, true, true)); /* off stays off */
+  controls_reset(); /* the controls don't read the pause: the combination and the panel's buttons as ever */
+  CHECK(controls_frame(BTN_R | BTN_RS_UP, false, 0) == CONTROL_TOGGLE);
+  CHECK(controls_frame(0, true, 10) == CONTROL_NONE);
+  CHECK(controls_frame(BTN_A, true, 20) == CONTROL_SELECT);
+  CHECK(controls_frame(BTN_B, true, 30) == CONTROL_BACK);
+  CHECK(controls_hidden(0, true) & BTN_A);
+  return 0;
 }
 
 static int test_console_file_text(void)
@@ -1778,6 +1839,7 @@ static const test_t tests[] = {
   { "nothing_is_read_without_a_manager", test_nothing_is_read_without_a_manager, 0 },
   { "the_bool_entry_is_recognised_by_its_vtable", test_the_bool_entry_is_recognised_by_its_vtable, 0 },
   { "moving_data_is_followed_by_the_next_attach", test_moving_data_is_followed_by_the_next_attach, 0 },
+  { "the_games_pause_is_its_bool_or_its_requests", test_the_games_pause_is_its_bool_or_its_requests, 0 },
   { "the_combo_toggles_on_its_press_only", test_the_combo_toggles_on_its_press_only, 0 },
   { "a_and_b_and_directions_only_with_the_panel_open", test_a_and_b_and_directions_only_with_the_panel_open, 0 },
   { "a_held_direction_repeats", test_a_held_direction_repeats, 0 },
@@ -1795,6 +1857,8 @@ static const test_t tests[] = {
   { "console_defaults_and_values", test_console_defaults_and_values, 0 },
   { "console_settings_cycle_and_each_kind_of_seed_has_its_own_switch",
     test_console_settings_cycle_and_each_kind_of_seed_has_its_own_switch, 0 },
+  { "the_pause_hides_the_postcard_and_the_console", test_the_pause_hides_the_postcard_and_the_console, 0 },
+  { "the_panel_stays_usable_while_paused", test_the_panel_stays_usable_while_paused, 0 },
   { "console_file_text", test_console_file_text, 0 },
   { "console_file_without_its_version_or_damaged_leaves_the_defaults",
     test_console_file_without_its_version_or_damaged_leaves_the_defaults, 0 },

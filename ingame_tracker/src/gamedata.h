@@ -58,5 +58,8 @@ void gamedata_init(gamedata_t *data, game_t game);
 bool gamedata_attach(gamedata_t *data);
 /* Whether the Bool64bitKey flags were found by the last attach. */
 bool gamedata_has_bool64(const gamedata_t *data);
+/* The game's own pause (its pause screen or an item menu), as sloperinaGZ's gd_game_paused tells it, after an
+ * attach; false when the game can't say. */
+bool gamedata_paused(const gamedata_t *data);
 
 #endif

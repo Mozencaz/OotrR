@@ -183,6 +183,10 @@ A small card with the items' grid, the songs under it and the dungeons' keys, dr
   `tracker_compute_icons` (items, songs and keys only: not the 1,500 region flags), and the present hook draws the card from it every frame.
   While the settings page is open the card is drawn as a preview: the panel is drawn first, then the card
   over its corner, so a change is seen at once. On the regions and a region's list the card is hidden.
+- The game's pause: while the card or the console is on, `read_pause` in `app.c` reads it every 100 ms (`gamedata_paused`,
+  sloperinaGZ's `gd_game_paused`: the Bool `Sequence_IsPause`, or the Int `Sequence_GamePauseRequestCount` above 0). While the game
+  is paused and the panel closed, the card isn't published (`postcard_over_game`): an empty panel is, once, and the card comes back
+  at the next frame after the pause. The panel itself doesn't read the pause.
 - Drawing (`trackerui.c`): `layout_scaled` gives the fonts and hairline for a font pixel of any size, so the card is the panel's
   own `draw_grid` and `draw_keys` at the card's scale (`postcard_scale` of the picture's font pixel: 0.55, 0.75 or 1.0 of the full-size
   card, items in 22 x 18 font-pixel cells, so the icons are nearly square, the songs in cells a sixth of the card's width and 14 tall) with the keys in 3 columns. The opacity is `gpuui_set_opacity`: each
@@ -217,6 +221,8 @@ are in [the format document](../../docs/ingame-tracker-format.md#the-consoles-ma
   then beside it. The rows are collected from the bottom (the status line, then the newest lines, each wrapped over at most 3 rows) until
   the box is full; each row has its own band, so a short console doesn't darken an empty box. The opacity and each line's fade multiply
   through `gpuui_set_opacity`. While the panel is open it is drawn only as the preview on the console's page (whole, at full fade).
+  While the game is paused and the panel closed, the view is published with `shown` false (`console_over_game`), and again when the
+  pause ends; opening or closing the panel publishes it again, so the preview shows while paused.
   With the console's 12 rows and the postcard the frame stays under `MAX_QUADS`; the console is never drawn with the regions' panel.
 
 ## Failure modes

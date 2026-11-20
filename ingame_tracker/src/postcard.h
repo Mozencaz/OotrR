@@ -27,6 +27,10 @@ typedef struct {
 
 /* Off, bottom right, small, 50 %. */
 postcard_settings_t postcard_defaults(void);
+/* Whether the card is drawn on its own over the game: it is on, the panel is closed (while the panel is open it
+ * draws the card itself, on the Postcard page) and the game isn't paused, so the pause screen and the item menus
+ * stay clear. */
+bool postcard_over_game(const postcard_settings_t *settings, bool panel_open, bool paused);
 /* Moves a setting one value on (direction +1) or back (-1), round the ring of its values. */
 void postcard_step(postcard_settings_t *settings, postcard_setting_t setting, int direction);
 const char *postcard_setting_name(postcard_setting_t setting);

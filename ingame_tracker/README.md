@@ -22,7 +22,10 @@ save has found:
 - a **console** for Archipelago seeds: the items you receive and send, other players' items, hints, chat and the server's
   notices, as a few lines over the game, written there by OotrR's Archipelago client.
 
-Version 0.6.1. Tested in the game (1.1.1, in the Ryuchii emulator): the panel, icons, postcard and songs, and 0.5.0's console with two players. Other players' items (0.6.0) and the Console page's rows (0.6.1) are **not yet tested in the game**, nor is game 1.0.0. See [docs/TESTING.md](docs/TESTING.md).
+The postcard and the console hide while the game is paused, so its menus are clear, and come back when it plays again. The panel
+works while the game is paused too.
+
+Version 0.6.2. Tested in the game (1.1.1, in the Ryuchii emulator): the panel, icons, postcard and songs, and 0.5.0's console with two players. Other players' items (0.6.0), the Console page's rows (0.6.1) and hiding while paused (0.6.2) are **not yet tested in the game**, nor is game 1.0.0. See [docs/TESTING.md](docs/TESTING.md).
 
 ## Controls
 
@@ -59,7 +62,8 @@ Left and right change the chosen setting at once, and while the settings are sho
 With the postcard on and the panel closed, the card is drawn in its corner every frame: the items' grid (with the stones and
 medallions) and the songs under it, over the dungeons' keys (medallion, small keys found out of the total, boss key), with the same
 icons and `?` marks as the panel and no text lists. It takes no input and the game keeps every button. The opacity is the whole card's, its box and its
-icons. At 1080p the card is about 340 pixels wide when small, 470 medium and 620 large.
+icons. At 1080p the card is about 340 pixels wide when small, 470 medium and 620 large. While the game is paused the card
+hides, and it comes back when the game plays again.
 
 The settings are saved on the SD card, in `ootrTracker/postcard.cfg` (in an emulator, `<user folder>/sdmc/ootrTracker/postcard.cfg`),
 when the settings are left or the panel is closed, and read when the seed's file is loaded at start. A missing or damaged file
@@ -87,7 +91,8 @@ The console shows the newest lines of the kinds ticked, oldest at the top, each 
 hints, white chat, grey notices, lavender other players' items: one player finding their own item, or sending one to a third); a
 long line wraps over up to three rows. A line fades out after the Fade time; Permanent keeps the last lines. It is drawn whether
 the panel is open or not, takes no input, and keeps clear of the postcard: next to it, narrower, or above or below it. While the
-console's page is shown it is drawn whole as a preview, under the panel ("No messages yet" before the first line).
+console's page is shown it is drawn whole as a preview, under the panel ("No messages yet" before the first line). While the
+game is paused the console hides, as the postcard does, and comes back when it plays again; its page's preview still shows.
 Console is kept apart for local and Archipelago seeds, so turning it on for one leaves the other's default.
 
 Its lines come from OotrR's Archipelago client (the desktop application or `ap-client`), which finds the console's mailbox in
@@ -159,6 +164,8 @@ GPL-3.0-or-later ([LICENSE](LICENSE)); this folder only, the rest of the reposit
   (`builds.c`, `gamedata.c`) is what sloperinaGZ's group found.
 - The items' grid and the key labels follow the desktop tracker of the randomizer (`src/oot_rando/tracker/` in this repository, MIT).
 - The console's kinds of message, a check box each, follow sloperinaGZ's watch list (`src/ootgz/menus.c`, master 5b44a21).
+- The game's pause, which hides the postcard and the console, is read as sloperinaGZ's `gd_game_paused` reads it
+  (`src/ootgz/gamedata.c`, commit 8a2c73c).
 - `src/third_party` (see its README) holds [stb_truetype](https://github.com/nothings/stb) (public domain) and zstd's educational decoder
   (BSD or GPLv2, Meta Platforms), both as sloperinaGZ ships them.
 - No game files are included. You need your own copy of the game; the module reads its font and shader from it at run time,

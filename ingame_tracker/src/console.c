@@ -50,6 +50,11 @@ bool console_shown(const console_settings_t *settings, bool archipelago)
   return settings->shown[archipelago];
 }
 
+bool console_over_game(const console_settings_t *settings, bool archipelago, bool panel_open, bool paused)
+{
+  return console_shown(settings, archipelago) && (panel_open || !paused);
+}
+
 bool console_kind_shown(const console_settings_t *settings, console_kind_t kind)
 {
   return kind < CONSOLE_KIND_COUNT && (settings->kinds >> kind & 1);

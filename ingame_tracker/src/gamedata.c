@@ -16,6 +16,10 @@
 #define INT_STRIDE         0x28
 #define INT_VALUE_OFFSET   0x1C
 
+/* the game's own pause (sloperinaGZ's gd_game_paused, 8a2c73c) */
+#define SEQUENCE_IS_PAUSE                  0x604AEBE1u /* Sequence_IsPause (Bool) */
+#define SEQUENCE_GAME_PAUSE_REQUEST_COUNT  0x64A61098u /* Sequence_GamePauseRequestCount (Int) */
+
 /* sanity limits for a type entry read from memory */
 #define MAX_FIELD_COUNT     0x10000
 #define MAX_HASH_TABLE_SIZE 0x100000
@@ -228,4 +232,13 @@ bool gamedata_attach(gamedata_t *data)
 bool gamedata_has_bool64(const gamedata_t *data)
 {
   return data->bool64_type != 0;
+}
+
+/* --- the game's pause ------------------------------------------------------------------------ */
+
+bool gamedata_paused(const gamedata_t *data)
+{
+  int32_t requests = 0;
+  return data->source.bool_flag(&data->source, SEQUENCE_IS_PAUSE) == GD_TRUE ||
+         (data->source.int_value(&data->source, SEQUENCE_GAME_PAUSE_REQUEST_COUNT, &requests) && requests > 0);
 }

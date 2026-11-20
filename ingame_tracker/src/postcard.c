@@ -32,6 +32,11 @@ postcard_settings_t postcard_defaults(void)
                                 .opacity = DEFAULT_OPACITY_STEP };
 }
 
+bool postcard_over_game(const postcard_settings_t *settings, bool panel_open, bool paused)
+{
+  return settings->shown && !panel_open && !paused;
+}
+
 static uint8_t step_in_ring(uint8_t value, int direction, unsigned count)
 {
   return (uint8_t)((value + (direction < 0 ? count - 1 : 1)) % count);

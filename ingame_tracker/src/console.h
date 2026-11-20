@@ -36,6 +36,10 @@ typedef struct {
  * kind's line (one written before that kind came) leaves it at this default. */
 console_settings_t console_defaults(void);
 bool console_shown(const console_settings_t *settings, bool archipelago);
+/* Whether the console is handed over to be drawn: it is on for this kind of seed and the game isn't paused, so the
+ * pause screen and the item menus stay clear; with the panel open (opened on purpose) the pause doesn't count, and
+ * the Console page shows it as its preview. */
+bool console_over_game(const console_settings_t *settings, bool archipelago, bool panel_open, bool paused);
 bool console_kind_shown(const console_settings_t *settings, console_kind_t kind);
 /* Moves a setting of the Console page one value on (+1) or back (-1), round its values; On/Off is the one of
  * this kind of seed. A kind's row ticks or unticks it, either way. */

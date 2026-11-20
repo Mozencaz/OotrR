@@ -24,6 +24,7 @@ void free(void *p); /* from main */
 #define REFRESH_MS         500   /* the panel is worked out twice a second while it's open */
 #define PRELOAD_AFTER_MS   10000 /* the seed file is read this long after the first frame: the game's files are mounted */
 #define RETRY_SEED_MS      2000  /* a failed read isn't tried again sooner */
+#define PAUSE_READ_MS      100   /* the game's pause is read this often while the postcard or the console is on */
 
 static struct {
   game_t game;
@@ -45,6 +46,8 @@ static struct {
   mailbox_client_t client;
   console_log_t console_log;
   char console_status[CONSOLE_STATUS_ROOM]; /* the status line handed over last */
+  bool paused;           /* the game's pause as read last: the postcard and the console hide meanwhile */
+  uint64_t next_pause_ms;
 } app;
 
 /* Runs inside rtld's DT_INIT: checked reads and unformatted logging only. */
@@ -149,10 +152,10 @@ static void refresh_panel(uint64_t now)
   app.next_refresh_ms = now + REFRESH_MS;
 }
 
-/* The postcard is drawn on its own while it's on and the panel is closed. */
+/* The postcard is drawn on its own while it's on, the panel is closed and the game isn't paused. */
 static bool postcard_wanted(void)
 {
-  return app.postcard.shown && app.seed_loaded && app.game.build && !app.open;
+  return app.seed_loaded && app.game.build && postcard_over_game(&app.postcard, app.open, app.paused);
 }
 
 /* Only the items and keys are worked out for it; it is redrawn every frame from them. */
@@ -179,23 +182,30 @@ static void show_browse(void)
   overlay_publish(&app.panel);
 }
 
+static void publish_hidden(void)
+{
+  panel_t hidden;
+  memset(&hidden, 0, sizeof(hidden));
+  overlay_publish(&hidden);
+}
+
 static void open_panel(uint64_t now)
 {
   trackerui_load(); /* the game's font and shader, once: a pause the first time */
   app.open = true;
+  app.console_dirty = true; /* paused, the Console page's preview shows it all the same */
   browse_show_regions(&app.browse, app.seed.region_count);
   refresh_panel(now);
 }
 
 static void close_panel(void)
 {
-  panel_t hidden;
-  memset(&hidden, 0, sizeof(hidden));
   app.open = false;
   app.last_mode = PANEL_HIDDEN;
   app.next_refresh_ms = 0; /* the postcard, if it's on, comes back at the next frame */
+  app.console_dirty = true; /* hidden again if the game is paused */
   controls_hold_back_held();
-  overlay_publish(&hidden);
+  publish_hidden();
 }
 
 static void change_postcard_setting(int direction)
@@ -279,6 +289,30 @@ static void run(control_t command, uint64_t now)
   }
 }
 
+/* --- the game's pause -------------------------------------------------------------------------- */
+
+/* While the game is paused (its pause screen or an item menu) the postcard and the console hide, so its menus are
+ * clear, and they come back when it plays again. The panel, opened on purpose, works as ever. */
+static void read_pause(uint64_t now)
+{
+  if (now < app.next_pause_ms)
+    return;
+  app.next_pause_ms = now + PAUSE_READ_MS;
+  bool wanted = app.seed_loaded && app.game.build && (app.postcard.shown || console_shown(&app.console, app.archipelago));
+  bool paused = wanted && gamedata_attach(&app.data) && gamedata_paused(&app.data);
+  if (paused == app.paused)
+    return;
+  app.paused = paused;
+  log_printf("the game is %s: the postcard and the console %s", paused ? "paused" : "playing",
+             paused ? "hide" : "show again");
+  app.console_dirty = true;
+  if (app.open)
+    return;
+  app.next_refresh_ms = 0; /* the postcard, if it's on, comes back at the next frame */
+  if (paused)
+    publish_hidden();
+}
+
 /* --- the console ------------------------------------------------------------------------------- */
 
 /* The client's new lines and its status, every frame (a few reads while nothing changes); the present thread gets
@@ -300,7 +334,7 @@ static void update_console(uint64_t now)
     return;
   static console_view_t view; /* about 2 KiB: not on the game thread's stack */
   view.settings = app.console;
-  view.shown = console_shown(&app.console, app.archipelago);
+  view.shown = console_over_game(&app.console, app.archipelago, app.open, app.paused);
   text_copy(view.status, sizeof(view.status), status);
   text_copy(app.console_status, sizeof(app.console_status), status);
   consolelog_view(&app.console_log, &app.console, &view);
@@ -321,6 +355,7 @@ void app_frame(uint32_t held)
   }
   run(controls_frame(held, app.open, now), now);
   save_settings_changes();
+  read_pause(now);
   update_console(now);
   if (now < app.next_refresh_ms)
     return;
