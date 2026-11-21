@@ -9,6 +9,9 @@
 #define DUNGEON_ABBR_FALLBACK 2 /* characters of a dungeon with no known label */
 _Static_assert(DUNGEON_ABBR_FALLBACK < ABBR_MAX, "the label fits");
 
+/* counted is left out (false) for every cell but the bottles */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 static const grid_cell_t cells[GRID_CELLS] = {
   { "Kokiri Sword", "KS", 1, EQUIPMENT }, { "Biggoron Sword", "BS", 1, EQUIPMENT },
   { "Deku Shield", "DS", 1, EQUIPMENT }, { "Hylian Shield", "HS", 1, EQUIPMENT },
@@ -41,6 +44,7 @@ static const grid_cell_t cells[GRID_CELLS] = {
   { "Sarias Song", "Sa", 1, 0x3C9A5C }, { "Suns Song", "Su", 1, 0xB89A3A },
   { "Song of Time", "ST", 1, 0x4A6FB0 }, { "Song of Storms", "SS", 1, 0x6A7A8A },
 };
+#pragma GCC diagnostic pop
 
 static const struct { const char *dungeon, *abbr, *medallion; } dungeon_abbrs[] = {
   { "Forest Temple", "Fo", "Forest Medallion" }, { "Fire Temple", "Fi", "Fire Medallion" },

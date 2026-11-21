@@ -624,7 +624,7 @@ class IconTests(unittest.TestCase):
 
     def test_the_songs_come_after_the_items_in_the_modules_order_and_before_the_keys_and_counts(self):
         grid = (REPOSITORY / 'ingame_tracker' / 'src' / 'grid.c').read_text(encoding='utf-8')
-        cells = re.findall(r'\{ "([^"]+)", "[^"]+", \d, \w+ \}', grid)
+        cells = re.findall(r'\{ "([^"]+)", "[^"]+", \w+, \w+(?:, \w+)? \}', grid)
         items = [item for row in GRID for item, *_ in row]
         self.assertEqual(cells, items + [item for item, _ in SONGS])
         icons = ingame_icons.grid_icons()
