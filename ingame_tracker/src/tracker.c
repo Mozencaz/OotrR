@@ -13,8 +13,10 @@ static save_link_t link_of(const trk_t *seed, const flag_source_t *flags)
   }
 }
 
-/* An item's level is the highest of its rules whose flag is set; it is unknown if the game has none of them. */
-static void evaluate_item(const trk_t *seed, trk_item_t item, const flag_source_t *flags, cell_state_t *out)
+/* An item's level is the highest of its rules whose flag is set, or how many are set if `counted`; it is unknown if
+ * the game has none of them. */
+static void evaluate_item(const trk_t *seed, trk_item_t item, bool counted, const flag_source_t *flags,
+                          cell_state_t *out)
 {
   bool known = false;
   uint32_t level = 0;
@@ -22,8 +24,9 @@ static void evaluate_item(const trk_t *seed, trk_item_t item, const flag_source_
     trk_rule_t rule = trk_rule(seed, item.first_rule + r);
     gd_flag_t flag = flags->bool_flag(flags, rule.hash);
     known |= flag != GD_UNKNOWN;
-    if (flag == GD_TRUE && rule.level > level)
-      level = rule.level;
+    if (flag != GD_TRUE)
+      continue;
+    level = counted ? level + 1 : rule.level > level ? rule.level : level;
   }
   out->level = (uint8_t)(level > UINT8_MAX ? UINT8_MAX : level);
   out->status = level ? ITEM_OWNED : known ? ITEM_MISSING : ITEM_UNKNOWN;
@@ -35,8 +38,8 @@ static void compute_items(const trk_t *seed, const flag_source_t *flags, tracker
     trk_item_t item = trk_item(seed, i);
     const char *name = trk_string(seed, item.name);
     cell_state_t evaluated;
-    evaluate_item(seed, item, flags, &evaluated);
     int cell = grid_index_of(name);
+    evaluate_item(seed, item, cell >= 0 && grid_cell(cell)->counted, flags, &evaluated);
     if (cell >= 0) {
       state->cells[cell] = evaluated;
     } else if (text_starts_with(name, SOUL_PREFIX)) {

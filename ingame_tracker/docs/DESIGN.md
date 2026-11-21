@@ -66,7 +66,9 @@ A key the game doesn't have is `GD_UNKNOWN`, never false: an unknown check isn't
   unknown when it knows none. Items named `Soul (...)` are counted as souls, the others are looked up in `grid.c`'s cells: the 36 items
   in four rows of nine, then the 12 ocarina songs. A song is an item of one rule, the game's `IsGet.Item_Melody_<name>` Bool, which the
   exporter adds to every seed (`tracking_metadata.SONGS`); a seed file made before that has none, so its songs are unknown (`?`) until
-  `update-tracker`;
+  `update-tracker`. A cell whose `grid.c` entry is `counted` (the Bottle, five levels) takes as its level how many of its rules'
+  Bools are set instead of the highest: its rules are the five bottle slots' `...BottleInfo.Bottle<A-E>.IsValid` Bools, so two
+  bottles in slots B and D read 2, and the cell draws the number as it does a level. The postcard draws the same cells;
 - a region's count is its checks whose flag is set, out of its checks;
 - small keys found = the larger of keys found and keys held, or all of them with a key ring applied; the boss key is its Bool;
 - the save is of this seed when the seed marker reads true, and of another when it reads false.

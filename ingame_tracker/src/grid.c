@@ -5,6 +5,7 @@
 #define EQUIPMENT 0x5F84B0
 #define ITEMS     0xA9814A
 #define MAGIC     0x8466B0
+#define BOTTLE_SLOTS 5
 #define DUNGEON_ABBR_FALLBACK 2 /* characters of a dungeon with no known label */
 _Static_assert(DUNGEON_ABBR_FALLBACK < ABBR_MAX, "the label fits");
 
@@ -19,7 +20,7 @@ static const grid_cell_t cells[GRID_CELLS] = {
   { "Bomb Bag", "Bo", 3, ITEMS }, { "Progressive Hookshot", "Hk", 2, ITEMS },
   { "Boomerang", "Bm", 1, ITEMS }, { "Megaton Hammer", "MH", 1, ITEMS },
   { "Lens of Truth", "LT", 1, ITEMS }, { "Ocarina", "Oc", 2, ITEMS },
-  { "Bottle", "Bt", 1, ITEMS },
+  { "Bottle", "Bt", BOTTLE_SLOTS, ITEMS, true },
 
   { "Magic Meter", "Mg", 2, MAGIC }, { "Dins Fire", "Din", 1, MAGIC },
   { "Farores Wind", "Far", 1, MAGIC }, { "Nayrus Love", "Nay", 1, MAGIC },

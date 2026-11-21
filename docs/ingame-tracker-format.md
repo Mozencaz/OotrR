@@ -109,6 +109,12 @@ also to the files of seeds made before it did. So are the twelve ocarina songs, 
 `..._SunSong`, `..._TimeSong` and `..._StormSong`. The format itself did not change: a module that doesn't know the songs ignores
 these items, and a file made before them leaves the songs unknown in the module.
 
+The `Bottle` item is counted by the module: its rules are the five bottle
+slots' Bools, `PlayerStatus.AssignableItem.BottleInfo.BottleA.IsValid` to `...BottleE.IsValid` (`0xf39ce410`, `0x000ff6ea`,
+`0xf63b1194`, `0xb7f052ce`, `0xe27b136d`), at levels 1 to 5, and the number of them that are true is shown, whichever slots they are
+(`tracking_metadata.BOTTLE_RULES`; the exporter drops the seed's own `IsGet.Item_Bottle` rule, also from seeds made before).
+A module older than 0.6.4 takes the highest level, and its Bottle cell has one level: it shows the Bottle owned, without a number.
+
 ### Keys (24 bytes each)
 
 One row per dungeon with small keys or a boss key to follow.

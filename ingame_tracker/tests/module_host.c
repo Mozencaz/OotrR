@@ -56,12 +56,15 @@ static uint32_t add_string(strings_t *strings, const char *text)
 
 enum { SEED_MARKER = 4000, GOAL_MARKER = 5000, BOOL_A = 100, BOOL_B = 200, BOW_L1 = 11, BOW_L2 = 12, BOOMERANG = 13,
        SOUL_GHOUL = 14, SOUL_BAT = 15, FOREST_FOUND = 21, FOREST_HELD = 22, FOREST_RING = 23, FOREST_BOSS = 24,
-       WELL_FOUND = 31, WELL_HELD = 32, LULLABY = 41, SONG_OF_TIME = 42, PRELUDE = 43 };
+       WELL_FOUND = 31, WELL_HELD = 32, LULLABY = 41, SONG_OF_TIME = 42, PRELUDE = 43, BOTTLE_A = 51 };
+#define BOTTLE_SLOTS    5 /* the Bottle item's rules: one flag a slot, A to E, at BOTTLE_A + slot */
+#define SYNTHETIC_ITEMS 8
+#define SYNTHETIC_RULES (8 + BOTTLE_SLOTS)
 #define BOOL64_KEY 0x1111222233334444ull
 
 static const char *const check_names[3] = { "Mido's House Chest", "Kokiri Sword Chest", "Deku Tree Map Chest" };
 
-/* Two regions (2 and 1 checks), seven items (the last three are songs), two dungeons with keys; the strings come
+/* Two regions (2 and 1 checks), eight items (three songs, then the bottles), two dungeons with keys; the strings come
  * first. Version 1 has no check names, versions 1 and 2 no flags. */
 static blob_t synthetic_with(int version, uint32_t flags)
 {
@@ -73,14 +76,14 @@ static blob_t synthetic_with(int version, uint32_t flags)
   uint32_t bow = add_string(&strings, "Bow"), boomerang = add_string(&strings, "Boomerang");
   uint32_t ghoul = add_string(&strings, "Soul (Ghoul)"), bat = add_string(&strings, "Soul (Bat)");
   uint32_t lullaby = add_string(&strings, "Zeldas Lullaby"), time_song = add_string(&strings, "Song of Time");
-  uint32_t prelude = add_string(&strings, "Prelude of Light");
+  uint32_t prelude = add_string(&strings, "Prelude of Light"), bottle = add_string(&strings, "Bottle");
   uint32_t forest_temple = add_string(&strings, "Forest Temple"), well = add_string(&strings, "Bottom of the Well");
   uint32_t names[3] = { 0, 0, 0 };
   for (int i = 0; version >= 2 && i < 3; i++)
     names[i] = add_string(&strings, check_names[i]);
   uint32_t strings_padded = (strings.size + 3) & ~3u;
   uint32_t regions_at = header + strings_padded, checks_at = regions_at + 2 * 12, items_at = checks_at + 3 * 16;
-  uint32_t rules_at = items_at + 7 * 8, keys_at = rules_at + 8 * 8, size = keys_at + 2 * 24;
+  uint32_t rules_at = items_at + SYNTHETIC_ITEMS * 8, keys_at = rules_at + SYNTHETIC_RULES * 8, size = keys_at + 2 * 24;
   uint8_t *b = blob.bytes;
   memcpy(b, "RTRK", 4);
   put16(b + 4, (uint32_t)version);
@@ -93,8 +96,8 @@ static blob_t synthetic_with(int version, uint32_t flags)
   put32(b + 28, strings.size);
   put32(b + 32, regions_at); put32(b + 36, 2);
   put32(b + 40, checks_at); put32(b + 44, 3);
-  put32(b + 48, items_at); put32(b + 52, 7);
-  put32(b + 56, rules_at); put32(b + 60, 8);
+  put32(b + 48, items_at); put32(b + 52, SYNTHETIC_ITEMS);
+  put32(b + 56, rules_at); put32(b + 60, SYNTHETIC_RULES);
   put32(b + 64, keys_at); put32(b + 68, 2);
   if (version >= 3)
     put32(b + HEADER_BYTES, flags);
@@ -108,16 +111,21 @@ static blob_t synthetic_with(int version, uint32_t flags)
   put64(b + checks_at + 32, BOOL_B); put32(b + checks_at + 40, TRK_KIND_BOOL);
   for (int i = 0; i < 3; i++)
     put32(b + checks_at + i * 16 + 12, names[i]);
-  uint32_t items[7][3] = { { bow, 0, 2 }, { boomerang, 2, 1 }, { ghoul, 3, 1 }, { bat, 4, 1 },
-                           { lullaby, 5, 1 }, { time_song, 6, 1 }, { prelude, 7, 1 } };
-  for (int i = 0; i < 7; i++) {
+  uint32_t items[SYNTHETIC_ITEMS][3] = { { bow, 0, 2 }, { boomerang, 2, 1 }, { ghoul, 3, 1 }, { bat, 4, 1 },
+                                         { lullaby, 5, 1 }, { time_song, 6, 1 }, { prelude, 7, 1 },
+                                         { bottle, 8, BOTTLE_SLOTS } };
+  for (int i = 0; i < SYNTHETIC_ITEMS; i++) {
     put32(b + items_at + i * 8, items[i][0]);
     put16(b + items_at + i * 8 + 4, items[i][1]);
     put16(b + items_at + i * 8 + 6, items[i][2]);
   }
-  uint32_t rules[8][2] = { { BOW_L1, 1 }, { BOW_L2, 2 }, { BOOMERANG, 1 }, { SOUL_GHOUL, 1 }, { SOUL_BAT, 1 },
-                           { LULLABY, 1 }, { SONG_OF_TIME, 1 }, { PRELUDE, 1 } };
-  for (int i = 0; i < 8; i++) {
+  uint32_t rules[SYNTHETIC_RULES][2] = { { BOW_L1, 1 }, { BOW_L2, 2 }, { BOOMERANG, 1 }, { SOUL_GHOUL, 1 },
+                                         { SOUL_BAT, 1 }, { LULLABY, 1 }, { SONG_OF_TIME, 1 }, { PRELUDE, 1 } };
+  for (int slot = 0; slot < BOTTLE_SLOTS; slot++) {
+    rules[SYNTHETIC_RULES - BOTTLE_SLOTS + slot][0] = BOTTLE_A + slot;
+    rules[SYNTHETIC_RULES - BOTTLE_SLOTS + slot][1] = (uint32_t)slot + 1;
+  }
+  for (int i = 0; i < SYNTHETIC_RULES; i++) {
     put32(b + rules_at + i * 8, rules[i][0]);
     put16(b + rules_at + i * 8 + 4, rules[i][1]);
   }
@@ -161,7 +169,7 @@ static int test_parse_reads_every_table(void)
   CHECK(trk_parse(&trk, blob.bytes, blob.size, &why));
   CHECK(trk.seed_marker == SEED_MARKER && trk.goal_marker == GOAL_MARKER);
   CHECK(!strcmp(trk_string(&trk, trk.seed_id), "abc123"));
-  CHECK(trk.region_count == 2 && trk.check_count == 3 && trk.item_count == 7 && trk.key_count == 2);
+  CHECK(trk.region_count == 2 && trk.check_count == 3 && trk.item_count == SYNTHETIC_ITEMS && trk.key_count == 2);
   trk_region_t deku = trk_region(&trk, 1);
   CHECK(!strcmp(trk_string(&trk, deku.name), "Deku Tree") && deku.first_check == 2 && deku.check_count == 1);
   trk_check_t check = trk_check(&trk, 1);
@@ -212,7 +220,7 @@ static int test_parse_refuses_a_row_leaving_its_table(void)
   put32(blob.bytes + trk.regions_at + 8, 9); /* the first region claims 9 checks of 3 */
   CHECK(!parses(&blob));
   blob = synthetic();
-  put16(blob.bytes + trk.items_at + 6, 9); /* the first item claims 9 rules of 8 */
+  put16(blob.bytes + trk.items_at + 6, SYNTHETIC_RULES + 1); /* the first item claims 14 rules of 13 */
   CHECK(!parses(&blob));
   return 0;
 }
@@ -390,6 +398,42 @@ static int test_state_of_a_save(void)
   CHECK(state.key_count == 2 && state.keys[0].has_small_keys && state.keys[0].small_keys_known);
   CHECK(state.keys[0].found == 3 && state.keys[0].total == 5 && state.keys[0].boss == BOSS_KEY_HELD);
   CHECK(state.keys[1].found == 3 && state.keys[1].total == 3 && state.keys[1].boss == BOSS_KEY_NONE);
+  return 0;
+}
+
+/* the Bottle cell's level with the given slots' flags set, as the panel and as the postcard have it (-1 if they differ) */
+static int bottle_level_with(const trk_t *trk, const bool slots[BOTTLE_SLOTS])
+{
+  fake_flags_t fake = fake_with(GD_FALSE);
+  for (int slot = 0; slot < BOTTLE_SLOTS; slot++)
+    set_bool(&fake, BOTTLE_A + slot, slots[slot] ? GD_TRUE : GD_FALSE);
+  tracker_state_t panel, postcard;
+  tracker_compute(trk, &fake.source, &panel);
+  tracker_compute_icons(trk, &fake.source, &postcard);
+  cell_state_t shown = panel.cells[grid_index_of("Bottle")];
+  bool owned = shown.status == ITEM_OWNED;
+  return shown.level == postcard.cells[grid_index_of("Bottle")].level && owned == (shown.level > 0) ? shown.level : -1;
+}
+
+/* the bottles are counted by their slots' flags, whatever order the slots fill in */
+static int test_the_bottle_cell_counts_its_slots(void)
+{
+  blob_t blob = synthetic();
+  trk_t trk;
+  const char *why = "";
+  CHECK(trk_parse(&trk, blob.bytes, blob.size, &why));
+  CHECK(grid_cell(grid_index_of("Bottle"))->counted && grid_cell(grid_index_of("Bottle"))->levels == BOTTLE_SLOTS);
+  const bool none[BOTTLE_SLOTS] = { false }, only_a[BOTTLE_SLOTS] = { true }, b_and_d[BOTTLE_SLOTS] = { false, true, false, true },
+             only_e[BOTTLE_SLOTS] = { false, false, false, false, true }, all[BOTTLE_SLOTS] = { true, true, true, true, true };
+  CHECK(bottle_level_with(&trk, none) == 0);
+  CHECK(bottle_level_with(&trk, only_a) == 1);
+  CHECK(bottle_level_with(&trk, b_and_d) == 2); /* out of order: two bottles, not "level 4" */
+  CHECK(bottle_level_with(&trk, only_e) == 1);
+  CHECK(bottle_level_with(&trk, all) == BOTTLE_SLOTS);
+  fake_flags_t unknown = fake_with(GD_UNKNOWN); /* the game has none of the slots' flags: not the same as no bottle */
+  tracker_state_t state;
+  tracker_compute(&trk, &unknown.source, &state);
+  CHECK(state.cells[grid_index_of("Bottle")].status == ITEM_UNKNOWN);
   return 0;
 }
 
@@ -1876,6 +1920,7 @@ static const test_t tests[] = {
   { "the_real_seed_file", 0, test_the_real_seed_file },
   { "state_of_a_save", test_state_of_a_save, 0 },
   { "the_skulltula_count", test_the_skulltula_count, 0 },
+  { "the_bottle_cell_counts_its_slots", test_the_bottle_cell_counts_its_slots, 0 },
   { "state_when_the_game_knows_nothing", test_state_when_the_game_knows_nothing, 0 },
   { "a_save_of_another_seed_and_the_goal", test_a_save_of_another_seed_and_the_goal, 0 },
   { "a_key_ring_counts_every_key", test_a_key_ring_counts_every_key, 0 },

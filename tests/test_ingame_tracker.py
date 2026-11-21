@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from oot_rando.game.tracking_metadata import GAMEDATA, SONGS, inventory_rules
+from oot_rando.game.tracking_metadata import BOTTLE_SLOT_FLAGS, GAMEDATA, SONGS, inventory_rules
 from oot_rando.patching.soul_adapter import murmur3
 from oot_rando.randomizer.randomizer_core import Settings, generate
 from oot_rando.randomizer.randomizer_services import (_key_actors, generate_in_mods, read_artifact,
@@ -249,6 +249,21 @@ class ExportTests(unittest.TestCase):
         lullaby = murmur3('IsGet.Item_Melody_ZeldaLullaby')
         self.assertEqual(inventory_rules(None, known={lullaby}),
                          [{'item': 'Zeldas Lullaby', 'hash': str(lullaby), 'count': 1}])
+
+    def test_the_bottle_is_the_five_slots_flags(self):
+        # The module counts the Bottle's set flags (one per bottle slot, A to E), so the exporter gives it those and
+        # not the seed's own IsGet.Item_Bottle, which would count as a sixth; the levels 1 to 5 are the slots' numbers.
+        names = [f'PlayerStatus.AssignableItem.BottleInfo.Bottle{slot}.IsValid' for slot in 'ABCDE']
+        self.assertEqual(BOTTLE_SLOT_FLAGS, tuple(names))
+        self.assertEqual([murmur3(name) for name in names], [0xf39ce410, 0x000ff6ea, 0xf63b1194, 0xb7f052ce, 0xe27b136d])
+        manifest, checks, tracking = synthetic_seed()
+        tracking['inventory'].append({'item': 'Bottle', 'hash': str(murmur3('IsGet.Item_Bottle')), 'count': 1})
+        items = dict(fmt.parse(ingame_bundle.seed_file(manifest, checks, tracking))['items'])
+        self.assertEqual(items['Bottle'], [(murmur3(name), level) for level, name in enumerate(names, 1)])
+
+    def test_the_bottle_slots_only_for_the_flags_the_game_saves(self):
+        slot_b = murmur3(BOTTLE_SLOT_FLAGS[1])
+        self.assertEqual(inventory_rules(None, known={slot_b}), [{'item': 'Bottle', 'hash': str(slot_b), 'count': 2}])
 
     def test_dungeon_keys(self):
         keys = fmt.parse(ingame_bundle.seed_file(*synthetic_seed()))['keys']
