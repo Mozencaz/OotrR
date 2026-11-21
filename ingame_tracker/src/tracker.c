@@ -46,6 +46,13 @@ static void compute_items(const trk_t *seed, const flag_source_t *flags, tracker
   }
 }
 
+static void compute_skulltulas(const flag_source_t *flags, tracker_state_t *state)
+{
+  int32_t held = 0;
+  state->skulltulas_known = flags->int_value(flags, GOLD_SKULLTULA_COUNT_HASH, &held);
+  state->skulltulas = held > 0 ? (uint32_t)held : 0;
+}
+
 static gd_flag_t check_flag(const trk_check_t *check, const flag_source_t *flags)
 {
   if (check->kind == TRK_KIND_BOOL64)
@@ -139,6 +146,7 @@ void tracker_compute(const trk_t *seed, const flag_source_t *flags, tracker_stat
   compute_items(seed, flags, state);
   compute_regions(seed, flags, state);
   compute_keys(seed, flags, state);
+  compute_skulltulas(flags, state);
 }
 
 void tracker_compute_icons(const trk_t *seed, const flag_source_t *flags, tracker_state_t *state)
@@ -146,4 +154,5 @@ void tracker_compute_icons(const trk_t *seed, const flag_source_t *flags, tracke
   *state = (tracker_state_t){ .link = link_of(seed, flags) };
   compute_items(seed, flags, state);
   compute_keys(seed, flags, state);
+  compute_skulltulas(flags, state);
 }

@@ -393,6 +393,34 @@ static int test_state_of_a_save(void)
   return 0;
 }
 
+/* the Gold Skulltula count, in the full state and in the postcard's */
+static int test_the_skulltula_count(void)
+{
+  blob_t blob = synthetic();
+  trk_t trk;
+  const char *why = "";
+  CHECK(trk_parse(&trk, blob.bytes, blob.size, &why));
+  const int32_t held[] = { 0, 37, GOLD_SKULLTULA_TOTAL, -5 };
+  const uint32_t expected[] = { 0, 37, GOLD_SKULLTULA_TOTAL, 0 }; /* a negative value is none */
+  for (unsigned i = 0; i < sizeof(held) / sizeof(*held); i++) {
+    fake_flags_t fake = fake_with(GD_UNKNOWN);
+    fake.ints[fake.int_count].hash = GOLD_SKULLTULA_COUNT_HASH;
+    fake.ints[fake.int_count++].value = held[i];
+    tracker_state_t full, icons;
+    tracker_compute(&trk, &fake.source, &full);
+    tracker_compute_icons(&trk, &fake.source, &icons);
+    CHECK(full.skulltulas_known && full.skulltulas == expected[i]);
+    CHECK(icons.skulltulas_known && icons.skulltulas == expected[i]);
+  }
+  fake_flags_t nothing = fake_with(GD_UNKNOWN);
+  tracker_state_t state;
+  tracker_compute(&trk, &nothing.source, &state);
+  CHECK(!state.skulltulas_known && state.skulltulas == 0); /* the game has no such field: shown as ? */
+  tracker_compute_icons(&trk, &nothing.source, &state);
+  CHECK(!state.skulltulas_known && state.skulltulas == 0);
+  return 0;
+}
+
 static int test_state_when_the_game_knows_nothing(void)
 {
   blob_t blob = synthetic();
@@ -1667,7 +1695,8 @@ static int test_the_panel_fits_the_screen_with_the_songs(void)
 
 static int test_the_postcard_fits_the_screen_at_each_size(void)
 {
-  CHECK(sizes_card_width() == 208 && sizes_card_height(DUNGEONS_WITH_KEYS) == 157 && sizes_card_height(0) == 112);
+  CHECK(sizes_card_width() == 208 && sizes_card_height(DUNGEONS_WITH_KEYS) == 176 && sizes_card_height(0) == 131);
+  CHECK(sizes_card_height(0) == 2 * CARD_PAD_FP + CELLS_BLOCK_FP + SECTION_GAP_FP + COUNTER_ROW_FP); /* the count under the songs */
   CHECK(sizes_key_rows(DUNGEONS_WITH_KEYS, CARD_KEY_COLUMNS) == 3 && sizes_key_rows(0, CARD_KEY_COLUMNS) == 0);
   const float widths_1080[POSTCARD_SIZE_COUNT] = { 343, 468, 624 }; /* about 340, 470 and 620 pixels */
   for (unsigned s = 0; s < sizeof(screens) / sizeof(*screens); s++) {
@@ -1846,6 +1875,7 @@ static const test_t tests[] = {
   { "parse_refuses_a_name_outside_the_strings", test_parse_refuses_a_name_outside_the_strings, 0 },
   { "the_real_seed_file", 0, test_the_real_seed_file },
   { "state_of_a_save", test_state_of_a_save, 0 },
+  { "the_skulltula_count", test_the_skulltula_count, 0 },
   { "state_when_the_game_knows_nothing", test_state_when_the_game_knows_nothing, 0 },
   { "a_save_of_another_seed_and_the_goal", test_a_save_of_another_seed_and_the_goal, 0 },
   { "a_key_ring_counts_every_key", test_a_key_ring_counts_every_key, 0 },

@@ -10,6 +10,9 @@
 #include "grid.h"
 #include "trkfile.h"
 
+#define GOLD_SKULLTULA_TOTAL      100u
+#define GOLD_SKULLTULA_COUNT_HASH 0x04735978u /* PouchData.Item_Token_Gold.StockNum, the tokens held (sloperinaGZ's data_skulltulas) */
+
 typedef enum { ITEM_UNKNOWN, ITEM_MISSING, ITEM_OWNED } item_status_t;
 typedef enum { BOSS_KEY_NONE, BOSS_KEY_UNKNOWN, BOSS_KEY_MISSING, BOSS_KEY_HELD } boss_key_t;
 typedef enum { SAVE_LINK_UNKNOWN, SAVE_OF_THIS_SEED, SAVE_OF_ANOTHER } save_link_t;
@@ -37,6 +40,8 @@ typedef struct {
   bool goal_reached;
   cell_state_t cells[GRID_CELLS];
   uint32_t souls_owned, souls_total;
+  uint32_t skulltulas;       /* Gold Skulltula tokens held, of GOLD_SKULLTULA_TOTAL */
+  bool skulltulas_known;     /* the game has the field */
   dungeon_keys_t keys[TRK_MAX_KEY_ROWS];
   uint32_t key_count;
   region_state_t regions[TRK_MAX_REGIONS];
@@ -52,7 +57,7 @@ typedef struct {
 } check_row_t;
 
 void tracker_compute(const trk_t *seed, const flag_source_t *flags, tracker_state_t *state);
-/* Only what the postcard shows: the items and the dungeons' keys (not the regions' checks, the largest part). */
+/* Only what the postcard shows: the items, the dungeons' keys and the Skulltula count (not the regions' checks, the largest part). */
 void tracker_compute_icons(const trk_t *seed, const flag_source_t *flags, tracker_state_t *state);
 /* Up to `room` of region `region`'s checks from its `first`; how many were filled. */
 uint32_t tracker_check_rows(const trk_t *seed, const flag_source_t *flags, uint32_t region, uint32_t first,

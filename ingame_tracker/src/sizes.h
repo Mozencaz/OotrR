@@ -26,6 +26,7 @@
 #define SONG_ROW_FP       14
 #define KEYS_ROW_FP       13
 #define SUMMARY_ROW_FP    13
+#define COUNTER_ROW_FP    13   /* the postcard's last row: the Skulltula count */
 #define REGION_ROW_FP     10
 #define HINT_ROW_FP       12
 #define LIST_HEAD_ROW_FP  14
