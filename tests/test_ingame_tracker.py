@@ -423,16 +423,17 @@ class IconTests(unittest.TestCase):
         grid, panel = ((source / name).read_text(encoding='utf-8') for name in ('grid.c', 'trackerui.c'))
         icons = ingame_icons.grid_icons()
         self.assertLessEqual(len(icons), ingame_icons.MAX_ICONS)
-        self.assertEqual(icons[-len(ingame_icons.KEY_ICONS):], ingame_icons.KEY_ICONS)
-        for item, _ in icons[:-len(ingame_icons.KEY_ICONS)]:
+        extras = ingame_icons.KEY_ICONS + ingame_icons.COUNTER_ICONS
+        self.assertEqual(icons[-len(extras):], extras)
+        for item, _ in icons[:-len(extras)]:
             self.assertIn('{ "%s",' % item, grid)
-        for item, _ in ingame_icons.KEY_ICONS:
+        for item, _ in extras:
             self.assertIn('"%s"' % item, panel)
         self.assertIn(('Megaton Hammer', 'Item_Hammer_PouchIcon'), icons)
         self.assertIn(('Forest Medallion', 'DataFileImportantIcon_04'), icons)
         self.assertEqual(len({item for item, _ in icons}), len(icons))
 
-    def test_the_songs_come_after_the_items_in_the_modules_order_and_before_the_keys(self):
+    def test_the_songs_come_after_the_items_in_the_modules_order_and_before_the_keys_and_counts(self):
         grid = (REPOSITORY / 'ingame_tracker' / 'src' / 'grid.c').read_text(encoding='utf-8')
         cells = re.findall(r'\{ "([^"]+)", "[^"]+", \d, \w+ \}', grid)
         items = [item for row in GRID for item, *_ in row]
@@ -441,7 +442,7 @@ class IconTests(unittest.TestCase):
         songs = [item for item, _ in SONGS]
         at = [item for item, _ in icons].index(songs[0])
         self.assertEqual(icons[at:at + 12], [(item, ingame_icons.LAYOUT_PICTURES[item]) for item in songs])
-        self.assertEqual(icons[at + 12:], ingame_icons.KEY_ICONS)
+        self.assertEqual(icons[at + 12:], ingame_icons.KEY_ICONS + ingame_icons.COUNTER_ICONS)
         self.assertLessEqual(len(icons), ingame_icons.MAX_ICONS)
 
     def test_the_icon_limit_is_the_modules_atlas(self):
@@ -449,6 +450,13 @@ class IconTests(unittest.TestCase):
         limits = [int(re.search(pattern, (source / name).read_text(encoding='utf-8')).group(1))
                   for name, pattern in (('iconfile.h', r'#define ICONFILE_MAX\s+(\d+)'), ('gpuui.h', r'#define GPUUI_ICONS\s+(\d+)'))]
         self.assertEqual(limits, [ingame_icons.MAX_ICONS] * 2)
+
+    def test_the_skulltula_count_is_the_pouchs_token_stock_with_the_tokens_icon(self):
+        header = (REPOSITORY / 'ingame_tracker' / 'src' / 'tracker.h').read_text(encoding='utf-8')
+        hashed = int(re.search(r'#define GOLD_SKULLTULA_COUNT_HASH\s+0x([0-9A-Fa-f]+)u', header).group(1), 16)
+        self.assertEqual(hashed, murmur3('PouchData.Item_Token_Gold.StockNum'))
+        self.assertEqual(int(re.search(r'#define GOLD_SKULLTULA_TOTAL\s+(\d+)u', header).group(1)), 100)
+        self.assertEqual(ingame_icons.COUNTER_ICONS, [('Gold Skulltula Token', 'Item_Token_Gold')])
 
     def test_the_songs_pictures_are_the_melody_lists_in_the_order_of_the_games_scores(self):
         self.assertEqual(sorted(ingame_icons.MELODY_ORDER), sorted(item for item, _ in SONGS))
@@ -793,6 +801,15 @@ class SongsInTheGameTests(unittest.TestCase):
                  if entry.get('SaveFileIndex') == 0 and 'Hash' in entry}
         for item, flag in SONGS:
             self.assertIn(murmur3('IsGet.' + flag), saved, item)
+
+    def test_the_game_saves_the_skulltula_count_and_has_the_tokens_picture(self):
+        from oot_rando.formats.inspect_resources import Byml, decompress, dictionaries
+        raw = decompress(self.nup.read(self.nup.latest('romfs/' + GAMEDATA)), dictionaries(self.nup))
+        saved = {int(entry['Hash']) for entry in Byml(raw).root['Data']['Int'] if entry.get('SaveFileIndex') == 0}
+        self.assertIn(murmur3('PouchData.Item_Token_Gold.StockNum'), saved)
+        icons = dict(ingame_icons.parse(ingame_icons.nup_icons(self.nup)))
+        token = icons['Gold Skulltula Token']
+        self.assertEqual((token['width'], token['height'], token['format']), (341, 341, 0x2D06))
 
     def test_the_game_has_a_picture_for_every_song(self):
         icons = dict(ingame_icons.parse(ingame_icons.nup_icons(self.nup)))
