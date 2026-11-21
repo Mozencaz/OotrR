@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import threading
 
-from oot_rando.game.tracking_metadata import inventory_rules
+from oot_rando.game.tracking_metadata import BOTTLE_ITEM, inventory_rules
 from oot_rando.logic.rules import split_age_member
 from oot_rando.randomizer.randomizer_services import ManualTracker, read_artifact
 from oot_rando.tracker.save_reader import load_snapshot
@@ -172,10 +172,13 @@ class TrackerSession:
             row = (self.metadata or {}).get('checks', {}).get(ident, {})
             # A manually checked row is not evidence that the planned reward was obtained.
             reward = row.get('reward', '') if automatic else ''
+            # No saved flag to read (an NPC gift, a shop refill, a source left in place
+            # that keeps no flag): only a manual tick completes the row.
+            untracked = self.metadata is not None and not row.get('collection')
             return {'completed': completed, 'access': self._access.get(ident, 'unknown'),
                     'reward': reward, 'source': 'save' if automatic else (
                         'manual' if completed else ''), 'observed': automatic,
-                    'missing_souls': tuple(self._soul_reasons.get(ident, ()))}
+                    'untracked': untracked, 'missing_souls': tuple(self._soul_reasons.get(ident, ()))}
 
     def _get_logic(self):
         if self._logic is not None or self._logic_error:
@@ -221,7 +224,9 @@ class TrackerSession:
             key, item = int(rule['hash']), rule['item']
             if key in snapshot['bool']:
                 known.add(item)
-                if snapshot['bool'][key]:
+                if snapshot['bool'][key] and item == BOTTLE_ITEM:
+                    counts[item] += 1  # one flag a slot: the slots set, not the highest
+                elif snapshot['bool'][key]:
                     counts[item] = max(counts[item], rule.get('count', 1))
         return counts, known
 

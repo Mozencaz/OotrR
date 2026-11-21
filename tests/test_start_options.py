@@ -63,6 +63,34 @@ class OptionTests(unittest.TestCase):
             with self.subTest(name=name):
                 rando_options.validate({name: value}, supported_only=True)
 
+    def test_spiritual_stones_option(self):
+        from oot_rando.archipelago.bridge import ap_option_specs
+        from oot_rando.randomizer.full_randomizer import ap_settings
+        option = rando_options.BY_NAME['spiritual_stones']
+        self.assertEqual((option.label, option.tab, option.default), ('Require Spiritual Stones', 'World', 'all'))
+        self.assertEqual(option.allowed(), ('all', 'vanilla'))
+        self.assertEqual(rando_options.defaults()['spiritual_stones'], 'all')
+        for value in option.allowed():
+            values = rando_options.validate({'spiritual_stones': value}, supported_only=True)
+            self.assertEqual(ap_settings(values, True)['spiritual_stones'], value)
+        with self.assertRaises(ValueError):
+            rando_options.validate({'spiritual_stones': 'emerald'})
+        spec = next(s for s in ap_option_specs() if s['name'] == 'spiritual_stones')
+        self.assertEqual((spec['values'], spec['default']), (['all', 'vanilla'], 'all'))
+        imported, ignored = rando_options.from_ap_yaml(rando_options.to_ap_yaml(
+            rando_options.validate({'spiritual_stones': 'vanilla'})))
+        self.assertEqual((imported['spiritual_stones'], ignored), ('vanilla', []))
+        older, _ = rando_options.from_ap_yaml('game: OoT Remake\nOoT Remake:\n  open_kakariko: open\n')
+        self.assertEqual(older['spiritual_stones'], 'all')
+
+    def test_recorded_options_leave_out_the_unrecorded_value(self):
+        values = rando_options.defaults()
+        self.assertNotIn('spiritual_stones', rando_options.recorded(values))
+        self.assertEqual(rando_options.recorded(dict(values, spiritual_stones='vanilla'))['spiritual_stones'], 'vanilla')
+        self.assertEqual(rando_options.stored_value({}, 'spiritual_stones'), 'all')
+        self.assertEqual(rando_options.stored_value({'spiritual_stones': 'vanilla'}, 'spiritual_stones'), 'vanilla')
+        self.assertEqual(rando_options.stored_value({}, 'open_kakariko'), 'closed')
+
     def test_apworld_specs_skip_the_inventory(self):
         from oot_rando.archipelago.bridge import ap_option_specs, player_yaml
         names = [spec['name'] for spec in ap_option_specs()]
@@ -78,6 +106,17 @@ class GuiSourceTests(unittest.TestCase):
         from pathlib import Path
         source = Path(__file__).resolve().parents[1] / 'src' / 'oot_rando' / 'gui' / 'randomizer_gui.py'
         compile(source.read_text(encoding='utf-8'), str(source), 'exec')
+
+    def test_stones_option_has_its_tooltip_in_the_open_world_card(self):
+        from oot_rando.gui import randomizer_gui as g
+        card = next(names for title, _, names in g.SETTING_GROUPS if title == 'Open world')
+        self.assertIn('spiritual_stones', card)
+        option = rando_options.BY_NAME['spiritual_stones']
+        tip = g.option_tip(option, option.label, option.help)
+        self.assertTrue(tip.startswith('Require Spiritual Stones'))
+        for text in ('Require all', 'Vanilla', 'DoorOfTime_CheckStoneNum', 'Kokiri Emerald', 'original game'):
+            self.assertIn(text, tip)
+        self.assertIn('Require all (default)', tip)
 
     def test_every_setting_has_a_tooltip_and_a_place(self):
         from oot_rando.gui import randomizer_gui as g

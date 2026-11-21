@@ -3,7 +3,7 @@
  * height (3 pixels at 1080p). The sections follow OotrR's overlay: the items in rows and the ocarina songs under
  * them (their icons, from the seed's icons.bin, once they're in; their letters until then or without it), the
  * dungeons' keys, the checks found by region, one of them highlighted; or, with a region's list open, its checks.
- * The postcard is the items, the songs and the keys alone, as a smaller card in a corner, drawn with the same
+ * The postcard is the items, the songs, the keys and the Skulltula count alone, as a smaller card in a corner, drawn with the same
  * code; the Archipelago console is the desktop client's latest lines in a band at an edge, each fading out. The
  * check shown in the world (locate.h) is drawn over the picture by worldmark.c, with a band naming it while the
  * panel is closed. */
@@ -66,6 +66,8 @@
 #define ICON_FILE        GAME_ROM "/RandoTracker/icons.bin"
 #define SMALL_KEY_ICON   "Small Key" /* the keys' entries in it, after the grid's items */
 #define BOSS_KEY_ICON    "Boss Key"
+#define SKULLTULA_ICON   "Gold Skulltula Token" /* the count's entry in it */
+#define SKULLTULA_LABEL  "GS"                   /* in its place without the icon */
 _Static_assert(ICONFILE_MAX <= GPUUI_ICONS, "an atlas slot for each icon");
 #define HINT_LIST        "D-pad: scroll (left / right: a page)     A: tick by hand     Y: show in the world     B: back"
 #define TICKED_TEXT      "Ticked by hand"
@@ -126,11 +128,12 @@ static struct {
   uint32_t next;                /* the next entry to bring in */
   int8_t cell_icon[GRID_CELLS]; /* each grid cell's icon (its entry and atlas slot), or -1 */
   int8_t small_key, boss_key;   /* the keys row's, or -1 */
+  int8_t skulltula;             /* the Skulltula count's, or -1 */
 } icon_ui;
 
 static bool icon_used(uint32_t entry)
 {
-  if ((int8_t)entry == icon_ui.small_key || (int8_t)entry == icon_ui.boss_key)
+  if ((int8_t)entry == icon_ui.small_key || (int8_t)entry == icon_ui.boss_key || (int8_t)entry == icon_ui.skulltula)
     return true;
   int cell = grid_index_of(icon_ui.index.entries[entry].name);
   return cell >= 0 && icon_ui.cell_icon[cell] == (int8_t)entry;
@@ -143,7 +146,7 @@ static void icons_start(void)
   icon_ui.state = ICONS_NONE;
   for (int i = 0; i < GRID_CELLS; i++)
     icon_ui.cell_icon[i] = -1;
-  icon_ui.small_key = icon_ui.boss_key = -1;
+  icon_ui.small_key = icon_ui.boss_key = icon_ui.skulltula = -1;
   const char *why = "";
   int64_t got = gamefile_read_at(ICON_FILE, 0, head, sizeof(head), &icon_ui.file_size);
   if (got < 0) {
@@ -159,7 +162,8 @@ static void icons_start(void)
     const char *name = icon_ui.index.entries[i].name;
     int cell = grid_index_of(name);
     int8_t *icon = cell >= 0 ? &icon_ui.cell_icon[cell] : text_equal(name, SMALL_KEY_ICON) ? &icon_ui.small_key
-                 : text_equal(name, BOSS_KEY_ICON) ? &icon_ui.boss_key : 0;
+                 : text_equal(name, BOSS_KEY_ICON) ? &icon_ui.boss_key
+                 : text_equal(name, SKULLTULA_ICON) ? &icon_ui.skulltula : 0;
     if (icon && *icon < 0) {
       *icon = (int8_t)i;
       used++;
@@ -410,6 +414,33 @@ static float draw_keys(const layout_t *l, const tracker_state_t *state, float y,
   return y + sizes_key_rows(state->key_count, columns) * row + SECTION_GAP_FP * l->fp;
 }
 
+static void skulltula_text(const tracker_state_t *state, char line[COUNT_ROOM])
+{
+  if (state->skulltulas_known)
+    snprintf(line, COUNT_ROOM, "%u/%u", (unsigned)state->skulltulas, GOLD_SKULLTULA_TOTAL);
+  else
+    snprintf(line, COUNT_ROOM, "?/%u", GOLD_SKULLTULA_TOTAL);
+}
+
+/* the Gold Skulltula count: the token's icon (else "GS") and the tokens held out of GOLD_SKULLTULA_TOTAL */
+static float skulltula_width(const layout_t *l, const tracker_state_t *state)
+{
+  char line[COUNT_ROOM];
+  skulltula_text(state, line);
+  return (KEY_ICON_FP + KEY_ICON_GAP_FP) * l->fp + text_width(&l->body, line);
+}
+
+static void draw_skulltulas(const layout_t *l, const tracker_state_t *state, float x, float y, float row)
+{
+  char line[COUNT_ROOM];
+  float baseline = baseline_in(&l->bold, y, row), side = KEY_ICON_FP * l->fp;
+  if (!draw_icon_at(icon_ui.skulltula, x, y + (row - side) / 2, side, icon_owned))
+    draw_text(&l->bold, SKULLTULA_LABEL, x, baseline, title_colour);
+  skulltula_text(state, line);
+  draw_text(&l->body, line, x + side + KEY_ICON_GAP_FP * l->fp, baseline, text_colour);
+}
+
+/* the checks found at the left; the Skulltulas and the souls at the right */
 static float draw_summary(const layout_t *l, const tracker_state_t *state, float y)
 {
   char line[COUNT_ROOM * 2];
@@ -420,10 +451,14 @@ static float draw_summary(const layout_t *l, const tracker_state_t *state, float
     snprintf(line, sizeof(line), "%u unreadable", (unsigned)state->unreadable);
     draw_text(&l->body, line, x, baseline, dim_colour);
   }
+  float right = l->inner_x + l->inner_w;
   if (state->souls_total) {
     snprintf(line, sizeof(line), "Souls %u/%u", (unsigned)state->souls_owned, (unsigned)state->souls_total);
-    draw_text(&l->body, line, l->inner_x + l->inner_w - text_width(&l->body, line), baseline, text_colour);
+    float width = text_width(&l->body, line);
+    draw_text(&l->body, line, right - width, baseline, text_colour);
+    right -= width + l->body.em;
   }
+  draw_skulltulas(l, state, right - skulltula_width(l, state), y, row);
   return y + row + SECTION_GAP_FP * l->fp;
 }
 
@@ -747,7 +782,8 @@ static void draw_postcard(const panel_t *panel, const box_t *card, nvn_rect_t ar
   gpuui_fill(l.x, l.y, l.w, l.h, to_gpu(box_colour, BOX_OPACITY));
   float y = draw_grid(&l, &panel->state, l.y + CARD_PAD_FP * l.fp);
   if (panel->state.key_count)
-    draw_keys(&l, &panel->state, y, CARD_KEY_COLUMNS);
+    y = draw_keys(&l, &panel->state, y, CARD_KEY_COLUMNS);
+  draw_skulltulas(&l, &panel->state, l.inner_x, y, COUNTER_ROW_FP * l.fp);
   gpuui_set_opacity(1);
 }
 

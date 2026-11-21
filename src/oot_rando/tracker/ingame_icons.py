@@ -42,12 +42,14 @@ LAYOUT_PICTURES = {
 }
 # The dungeons' keys, for the panel's key row (named as the module looks them up; not grid items).
 KEY_ICONS = [('Small Key', 'Item_Dungeon_SmallKey'), ('Boss Key', 'Item_Dungeon_BossKey')]
+# The counts' icons, after the keys: the Gold Skulltula token, beside its count X/100 (named as the module looks it up).
+COUNTER_ICONS = [('Gold Skulltula Token', 'Item_Token_Gold')]
 MAX_HEADER = 8 << 20                    # an archive's header (its texture records), the most read
 
 
 def grid_icons():
     """(item, picture name) of each picture the panel uses: the grid's items that have one, in the grid's
-    order, then the songs, then the keys."""
+    order, then the songs, then the keys, then the counts' icons."""
     icons = []
     for row in GRID:
         for item, *_ in row:
@@ -55,7 +57,7 @@ def grid_icons():
                 icons.append((item, LAYOUT_PICTURES[item]))
             elif item in ICONS:
                 icons.append((item, SMALLER.get(item, ICONS[item][0])))
-    return icons + [(song, LAYOUT_PICTURES[song]) for song, _ in SONGS] + KEY_ICONS
+    return icons + [(song, LAYOUT_PICTURES[song]) for song, _ in SONGS] + KEY_ICONS + COUNTER_ICONS
 
 
 def _record(data, at, data_from=0):

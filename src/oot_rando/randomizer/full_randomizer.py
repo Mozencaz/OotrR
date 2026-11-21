@@ -217,9 +217,9 @@ def vname(group_id):
 
 
 def ap_settings(options, open_forest):
-    values = {name: options[name] for name in ('open_kakariko', 'open_door_of_time', 'zora_fountain',
-                                               'gerudo_fortress', 'open_gerudo_valley_bridge', 'starting_age',
-                                               'bridge', 'trials',
+    values = {name: options[name] for name in ('open_kakariko', 'open_door_of_time', 'door_of_time_requirement', 'zora_fountain',
+                                               'spiritual_stones', 'gerudo_fortress', 'open_gerudo_valley_bridge',
+                                               'starting_age', 'bridge', 'trials',
                                                'shuffle_ganon_bosskey', 'big_poe_count', 'chicken_count',
                                                'free_scarecrow', 'shuffle_child_trade', 'logic_rules',
                                                'shuffle_master_sword', 'shuffle_gerudo_card',
@@ -593,14 +593,21 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             and 'Small Key (Fire Temple)' not in removed_keys):
         starting['Small Key (Fire Temple)'] += 1
 
-    def sweep(placed, counts=None):
+    def sweep(placed, counts=None, before_adult=False):
         placements = dict(base)
         for gid in logic_locations:
             placements.setdefault(vname(gid), None)
         for gid, item in placed.items():
             if vname(gid) in logic.virtual:
                 placements[vname(gid)] = item
-        state = logic.new_state(Counter(counts or {}) + starting)
+        inventory = Counter(counts or {}) + starting
+        if before_adult:
+            # Prove a child route from actual pickups, never from a first trip
+            # through the pedestal (or an assumed Time Travel item).
+            placements = {loc: None if item == 'Time Travel' else item
+                          for loc, item in placements.items()}
+            inventory.pop('Time Travel', None)
+        state = logic.new_state(inventory)
         return _sweep_with_requirements(logic, placements, state)
 
     return SimpleNamespace(
@@ -626,11 +633,15 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
     rng = DetRandom(hashlib.sha256((seed_key + '\0full-fill-v1').encode()).digest())
     if forced is not None:
         state, collected, spheres = sweep(forced)
+        child_missing = child_door_missing(c, forced)
         sphere_of = {loc[len('Remake|'):]: index for index, sphere in enumerate(spheres)
                      for loc in sphere if loc.startswith('Remake|')}
-        return {'beatable': state.has('Triforce'), 'spheres': sphere_of, 'sphere_count': len(spheres),
+        return {'beatable': state.has('Triforce') and not child_missing,
+                'before_adult_missing': child_missing, 'spheres': sphere_of, 'sphere_count': len(spheres),
                 'unreachable': sorted(g for g in logic_locations if vname(g) not in collected),
-                'progressive': progressive_plan(forced, c.natives)}
+                'progressive': progressive_plan(forced, c.natives),
+                # Read by verify: the chests left in place get their opening flag too.
+                'matches': c.matches}
 
     last_error = 'no attempt'
     for attempt in range(MAX_ATTEMPTS):
@@ -679,6 +690,10 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
             raise FillError('Item and chest counts do not match.')
         placed.update(zip(free, filler))
         # --- independent verification -----------------------------------------
+        child_missing = child_door_missing(c, placed)
+        if child_missing:
+            last_error = 'Door of Time items unavailable before adulthood: ' + ', '.join(child_missing)
+            continue
         state, collected, spheres = sweep(placed)
         if not state.has('Triforce'):
             last_error = 'victory not guaranteed'
@@ -697,6 +712,21 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
         return result
     raise FillError('No beatable seed in ' + str(MAX_ATTEMPTS) + ' attempts (' + last_error
                     + '). Change the seed or the options.')
+
+
+def child_door_missing(c, placed):
+    """Required door items the child cannot collect without ever becoming adult.
+
+    One ocarina suffices; spare copies may remain on adult maps. A real sweep
+    also rules out child pickups whose dependencies require an adult visit.
+    """
+    if c.settings['open_door_of_time'] or c.settings['starting_age'] != 'child':
+        return []
+    stones = {'song': (), 'vanilla': ('Goron Ruby', 'Zora Sapphire'),
+              'all': ('Kokiri Emerald', 'Goron Ruby', 'Zora Sapphire')}
+    required = ('Ocarina', 'Song of Time') + stones[c.settings['door_of_time_requirement']]
+    state, _, _ = c.sweep(placed, before_adult=True)
+    return [item for item in required if not state.has(item)]
 
 
 # Starting items that cannot be handed over silently at the end of the opening:

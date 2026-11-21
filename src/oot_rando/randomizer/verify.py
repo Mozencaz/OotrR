@@ -138,8 +138,8 @@ def verify(nup_path, seed_dir):
             repeat_boards[shelf['resource']].append(shelf)
     report ={'maps': 0, 'rewards': 0, 'presence': 0, 'events': 0}
     always_skulltulas = bool((manifest.get('settings') or {}).get('skulltulas_always_present'))
-    # Per-chest opening flags: each shuffled chest's own event (chest_flags), rebuilt
-    # from the spoiler's chests and the original maps.
+    # Per-chest opening flags: each chest's own event (chest_flags), rebuilt from the
+    # spoiler's chests, the chests left in place and the original maps.
     chest_records = manifest.get('skips', {}).get('chest_flags', {}).get('records', [])
     if manifest.get('skips', {}).get('chest_flags') is not None:
         from oot_rando.patching import chest_flags
@@ -148,6 +148,7 @@ def verify(nup_path, seed_dir):
         chest_spoiler = [{'id': p['id'], 'source': 'chest',
                           'variants': [(v['resource'], v['index']) for v in groups.get(p['id'], []) if 'index' in v]}
                          for p in full if p.get('source') == 'chest']
+        chest_spoiler += chest_flags.vanilla_placements(plan['matches'], full)
         original_map = lambda path: Byml(decompress(nup.read(members[path]), d)).root
         expected_records, _ = chest_flags.plan_records(chest_spoiler, original_map, manifest['seed_id'], original_rows)
         if expected_records != chest_records:
@@ -193,6 +194,18 @@ def verify(nup_path, seed_dir):
         if not story_fixes.kakariko_burning_applied(out(GAMEDATA)):
             raise ValueError('Unexpected Kakariko burning condition in the game data.')
         report['story_fixes'] = report.get('story_fixes', 0) + 1
+    # Cuccos to bring back: the pen's logic module and her lines (the flow is also checked below).
+    from oot_rando.patching import cuccos
+    unpack = lambda path, raw: decompress(raw, d) if path.endswith('.zs') else raw
+    report.update(cuccos.check_seed(manifest, members, lambda path: unpack(path, nup.read(members[path])),
+                                    lambda path: unpack(path, (seed_dir / 'romfs' / path).read_bytes())))
+    if (manifest.get('skips', {}).get('story_fixes') or {}).get('door_song_condition') is not None:
+        from oot_rando.logic import rando_options
+        requirement = rando_options.stored_value(
+            (manifest.get('settings') or {}).get('full') or {}, 'door_of_time_requirement')
+        if not story_fixes.door_song_condition_applied(out(GAMEDATA), requirement):
+            raise ValueError('Unexpected Door of Time ocarina condition in the game data.')
+        report['story_fixes'] = report.get('story_fixes', 0) + 1
     if (manifest.get('skips', {}).get('story_fixes') or {}).get('scene_conditions') is not None:
         if not story_fixes.scene_expressions_applied(out(GAMEDATA)):
             raise ValueError('Unexpected scene conditions in the game data.')
@@ -236,6 +249,8 @@ def verify(nup_path, seed_dir):
     soul_actors, soul_expressions_seen = set(), set()
     from oot_rando.patching import special_item_shuffle
     master_flows = special_item_shuffle.flow_paths(manifest['settings']['full'], members)
+    from oot_rando.patching.story_fixes import escape_stones
+    stones = escape_stones(manifest['settings']['full'])
     if set(master_flows) - set(manifest['files']):
         raise ValueError('Missing Master Sword time travel flow.')
     if set(manifest.get('skips', {}).get('master_sword_flows', {})) != set(master_flows):
@@ -307,7 +322,7 @@ def verify(nup_path, seed_dir):
                 report['progressive_tokens'] = len(all_tokens)
             if path == ACTION_GUIDE_FLOW and 'zelda_escape_item_get' in (skips.get('story_fixes') or {}):
                 from oot_rando.patching.story_fixes import zelda_escape_on_item_get
-                original = zelda_escape_on_item_get(original)[0]
+                original = zelda_escape_on_item_get(original, stones)[0]
                 report['story_fixes'] = report.get('story_fixes', 0) + 1
             from oot_rando.patching.qol_patches import SWORD_CHEST_FLOW, skip_kokiri_sword_cutscene
             if path == SWORD_CHEST_FLOW and skips.get('sword_chest'):
@@ -324,7 +339,7 @@ def verify(nup_path, seed_dir):
                     original, challenge_steps(decompress(nup.read(members[CHALLENGES]), d)))[0]
                 report['story_fixes'] = report.get('story_fixes', 0) + 1
             from oot_rando.patching import story_fixes
-            for fixed_path, key, fix in story_fixes.FLOW_FIXES:
+            for fixed_path, key, fix in story_fixes.flow_fixes(stones):
                 if path == fixed_path and key in (skips.get('story_fixes') or {}):
                     original = fix(original)[0]
                     report['story_fixes'] = report.get('story_fixes', 0) + 1
@@ -388,6 +403,9 @@ def verify(nup_path, seed_dir):
                         raise ValueError('Big Poe count differs from the settings.')
                     original = big_poes.patch_flow(original, skips['big_poes'])
                     report['big_poes'] = skips['big_poes']
+            if skips.get('cuccos'):
+                if path in {f'Event/EventFlow/{cuccos.FLOW}.bfevfl.zs', f'Event/EventFlow/{cuccos.FLOW}.110.bfevfl.zs'}:
+                    original = cuccos.patch_flow(original, skips['cuccos'])
             song_flows = skips.get('songs') or {}
             from oot_rando.patching.song_adapter import TEACHING_FLOW_PATH, add_teaching_entries
             if path == TEACHING_FLOW_PATH and any(ops.get('teaching') for ops in song_flows.values()):
@@ -678,6 +696,9 @@ def verify(nup_path, seed_dir):
                                    'items_in_other_worlds': len(multiworld.get('remote', []))})
         nup.stream.close()
         return report
+    if plan.get('before_adult_missing'):
+        raise ValueError('Logic replay: Door of Time items unavailable before adulthood: '
+                         + ', '.join(plan['before_adult_missing']))
     if not plan['beatable']:
         raise ValueError('Logic replay: victory not reached.')
     report.update(souls=len(soul_actors), derived=len(derived), beatable=True, spheres=plan['sphere_count'],

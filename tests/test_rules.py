@@ -1,10 +1,12 @@
 """Rules the remake adds or that AP applies in Python (Rules.py), not in JSON."""
+import json
 import sys
 import unittest
 from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+from oot_rando.logic import rando_options
 from oot_rando.logic.rules import Logic, shop_rule
 from oot_rando.logic.world import World
 
@@ -162,6 +164,102 @@ class LogicTests(unittest.TestCase):
             self.assertEqual('Fire Temple Boss Key Chest' not in without, locked, mode)
             _, ring, _ = logic.sweep(chest, logic.new_state(inventory + Counter({'Small Key (Fire Temple)': 8})))
             self.assertIn('Fire Temple Boss Key Chest', ring, mode)
+
+    # The locations behind Zelda's escape. The Master Sword no longer waits for it (0.7.3).
+    ESCAPE = ('HF Ocarina of Time Item', 'Song from Ocarina of Time')
+    # What they ask for under each value: "all" is upstream's rules, "vanilla" the Goron Ruby and the Zora Sapphire.
+    ESCAPE_RULES = {
+        'all': {'HF Ocarina of Time Item': "is_child and has_all_stones",
+                'Song from Ocarina of Time': "is_child and has_all_stones and 'Met Zelda'"},
+        'vanilla': {'HF Ocarina of Time Item': "is_child and Goron_Ruby and Zora_Sapphire and 'Met Zelda'",
+                    'Song from Ocarina of Time': "is_child and Goron_Ruby and Zora_Sapphire and 'Met Zelda'"}}
+
+    def stones_logic(self, value=None, **settings):
+        if value is not None:
+            settings['spiritual_stones'] = value
+        return Logic(self.data, dict(settings, open_forest='closed_deku'))
+
+    def escape_found(self, logic, counts):
+        """The escape locations reached with ``counts`` and the ocarina and song that open the Door of Time."""
+        placements = dict.fromkeys(self.ESCAPE)
+        counts = dict(counts, Ocarina=1, **{'Song of Time': 1})
+        _, collected, _ = logic.sweep(placements, logic.new_state(Counter(counts)))
+        return set(self.ESCAPE) & set(collected)
+
+    def test_the_default_asks_for_every_stone(self):
+        self.assertEqual(Logic(self.data).settings['spiritual_stones'], 'all')
+        self.assertEqual(rando_options.defaults()['spiritual_stones'], 'all')
+
+    def test_escape_waits_for_zelda_and_the_stones(self):
+        # Zelda's escape and the Door of Time (DoorOfTime) follow Zelda and the stones held
+        # (the game checks them: patching/story_fixes.py).
+        stones = {'all': ('Kokiri Emerald', 'Goron Ruby', 'Zora Sapphire'), 'vanilla': ('Goron Ruby', 'Zora Sapphire')}
+        for value, needed in stones.items():
+            logic = self.stones_logic(value)
+            held = dict.fromkeys(needed, 1)
+            with self.subTest(spiritual_stones=value):
+                self.assertEqual(self.escape_found(logic, dict(held, **{'Met Zelda': 1})), set(self.ESCAPE))
+                for missing in needed:
+                    counts = {k: v for k, v in held.items() if k != missing}
+                    self.assertFalse(self.escape_found(logic, dict(counts, **{'Met Zelda': 1})), missing)
+                self.assertNotIn('Song from Ocarina of Time', self.escape_found(logic, held))
+        # Neither escape location without Zelda, the Song of Time held.
+        self.assertFalse(self.escape_found(self.stones_logic('vanilla'), {}))
+
+    def test_the_pedestal_does_not_wait_for_the_stones(self):
+        # The Song of Time opens the door before the escape (story_fixes.door_song_before_escape).
+        for value in rando_options.BY_NAME['spiritual_stones'].allowed():
+            logic = self.stones_logic(value)
+            with self.subTest(spiritual_stones=value):
+                placements = {'Master Sword Pedestal': None}
+                for counts, reached in (({'Ocarina': 1, 'Song of Time': 1}, True), ({'Ocarina': 1}, False)):
+                    _, collected, _ = logic.sweep(placements, logic.new_state(Counter(counts)))
+                    self.assertEqual('Master Sword Pedestal' in collected, reached, counts)
+
+    def test_the_tracker_rebuilds_the_logic_from_the_stored_settings(self):
+        # tracking.json keeps the logic settings (full_randomizer ``tracking_logic``); the tracker builds the logic from them.
+        from oot_rando.randomizer.full_randomizer import ap_settings
+        held = {'Goron Ruby': 1, 'Zora Sapphire': 1, 'Met Zelda': 1}
+        for value in rando_options.BY_NAME['spiritual_stones'].allowed():
+            with self.subTest(spiritual_stones=value):
+                original = Logic(self.data, ap_settings(dict(rando_options.defaults(), spiritual_stones=value), True))
+                rebuilt = Logic(self.data, json.loads(json.dumps(original.settings)))
+                for counts in (held, dict(held, **{'Kokiri Emerald': 1})):
+                    self.assertEqual(self.escape_found(rebuilt, counts), self.escape_found(original, counts))
+        # Settings kept before the option do not hold it.
+        older = {name: v for name, v in self.stones_logic().settings.items() if name != 'spiritual_stones'}
+        carried = self.stones_logic(rando_options.UNRECORDED['spiritual_stones'])
+        for counts in (held, dict(held, **{'Kokiri Emerald': 1})):
+            self.assertEqual(self.escape_found(Logic(self.data, older), counts), self.escape_found(carried, counts))
+
+    def test_vanilla_escape_needs_no_kokiri_emerald(self):
+        # The native check (DoorOfTime_CheckStoneNum) reads the Fire and Water quests only.
+        counts = {'Goron Ruby': 1, 'Zora Sapphire': 1, 'Met Zelda': 1}
+        self.assertEqual(self.escape_found(self.stones_logic('vanilla'), counts), set(self.ESCAPE))
+        self.assertFalse(self.escape_found(self.stones_logic('all'), counts))
+        everything = dict(counts, **{'Kokiri Emerald': 1})
+        self.assertEqual(self.escape_found(self.stones_logic('all'), everything), set(self.ESCAPE))
+
+    def test_each_value_answers_with_its_rules(self):
+        # "Require all" answers as upstream's rules; "vanilla" as the Goron Ruby and the Zora Sapphire.
+        items = ('Kokiri Emerald', 'Goron Ruby', 'Zora Sapphire', 'Met Zelda')
+        for value, rules in self.ESCAPE_RULES.items():
+            for door_open in (False, True):
+                current = self.stones_logic(value, open_door_of_time=door_open)
+                for location, text in rules.items():
+                    expected = current.compile(text)
+                    actual = dict(current.location_rules)[location][0][1]
+                    for mask in range(1 << len(items)):
+                        counts = {item: 1 for bit, item in enumerate(items) if mask >> bit & 1}
+                        for age in ('child', 'adult'):
+                            state = current.new_state(Counter(counts))
+                            self.assertEqual(bool(actual(state, state.counts, age)),
+                                             bool(expected(state, state.counts, age)),
+                                             (value, location, counts, age, door_open))
+
+    def test_bare_logic_settings_are_those_made_before_the_option(self):
+        # The logic settings an earlier seed kept (tracker) do not name the option.
+        self.assertEqual(Logic(self.data).settings['spiritual_stones'], rando_options.UNRECORDED['spiritual_stones'])
 
     def test_escape_waits_for_zelda_and_stones_but_not_the_door(self):
         # Zelda's escape follows Zelda and the three stones (the game checks the stones

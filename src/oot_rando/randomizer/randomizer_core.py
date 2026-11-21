@@ -165,7 +165,7 @@ class Settings:
         # ``full`` is omitted when unset so that earlier seeds keep their identity.
         return {f.name: (sorted(getattr(self, f.name)) if f.name in ('pool', 'excluded_checks')
                         else {name: self.categories.get(name, False) for name in sorted(CATEGORIES)}
-                        if f.name == 'categories' else dict(sorted(self.full.items()))
+                        if f.name == 'categories' else dict(sorted(rando_options.recorded(self.full).items()))
                         if f.name == 'full' else getattr(self, f.name))
                 for f in fields(self) if not (f.name in ('full', 'archipelago') and getattr(self, f.name) is None)
                 and not (f.name in OPTIONAL_SKIPS and not getattr(self, f.name))}
@@ -482,7 +482,8 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
             # Story locks broken by items found in any order (patching/story_fixes.py).
             from oot_rando.patching import story_fixes
             story = {}
-            for path, key, fix in story_fixes.FLOW_FIXES:
+            stones = story_fixes.escape_stones(settings.full)
+            for path, key, fix in story_fixes.flow_fixes(stones):
                 extra_raw[path], story[key] = fix(extra_raw.get(path) or decompress(read(path), d))
             # Kaepora's first field arrival never plays (its effects are set at the start):
             # its quest step follows the Deku Tree escape instead (patching/owl_advice.py).
@@ -566,11 +567,15 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
             # Scenes no longer required: the Water Temple gate (Serenade), the Door of Time
             # (Zelda's escape) and the rainbow bridge (Zelda's revelation).
             extra_raw[GAMEDATA], story['scene_conditions'] = story_fixes.scene_expressions(extra_raw[GAMEDATA])
+            # The altar rejects the song before the opening flow can run unless
+            # its native invalid-condition is updated too.
+            extra_raw[GAMEDATA], story['door_song_condition'] = story_fixes.door_song_condition(
+                extra_raw[GAMEDATA], rando_options.stored_value(settings.full, 'door_of_time_requirement'))
             for path, key, fix in story_fixes.scene_module_fixes():
                 extra_raw[path], story[key] = fix(extra_raw.get(path) or read(path))
-            # Zelda's escape on the three stones, checked at every item get.
+            # Zelda's escape on the stones held, checked at every item get.
             extra_raw[ACTION_GUIDE_FLOW], story['zelda_escape_item_get'] = story_fixes.zelda_escape_on_item_get(
-                extra_raw[ACTION_GUIDE_FLOW])
+                extra_raw[ACTION_GUIDE_FLOW], stones)
             # The clock runs before Zelda (Impa's send-off flag set at the start).
             story['clock'] = story_fixes.CLOCK_FLAG
             # Zones open from the start, kept open (patching/world_openings.py).
@@ -647,6 +652,22 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
                 for path in event_paths(members, big_poes.FLOW):
                     extra_raw[path] = big_poes.patch_flow(
                         extra_raw[path] if path in extra_raw else decompress(read(path), d), poe_count)
+            # Cuccos to bring back: the cucco lady's pen, its logic module and her lines (patching/cuccos.py).
+            from oot_rando.patching import cuccos
+            cucco_count = settings.full.get('chicken_count', cuccos.VANILLA_COUNT)
+            if cucco_count != cuccos.VANILLA_COUNT:
+                from oot_rando.game.extra_sources import event_paths
+                flows = event_paths(members, cuccos.FLOW)
+                if not flows:
+                    raise ValueError('Cucco minigame flow not found.')
+                for path in flows:
+                    extra_raw[path] = cuccos.patch_flow(
+                        extra_raw[path] if path in extra_raw else decompress(read(path), d), cucco_count)
+                extra_raw[cuccos.LOGIC_MODULE] = cuccos.patch_logic(
+                    extra_raw.get(cuccos.LOGIC_MODULE) or read(cuccos.LOGIC_MODULE), cucco_count)
+                for path in cuccos.message_paths(members):
+                    extra_raw[path], _ = cuccos.patch_messages(
+                        extra_raw.get(path) or decompress(read(path), d), cucco_count)
         skips = {'title_badge': title_badge}
         if settings.full is not None:
             skips['ocarina_guide'] = ocarina_guide
@@ -666,6 +687,8 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
                 skips['master_sword_flows'] = full['master_sword_flows']
             if settings.full.get('big_poe_count', 10) != 10:
                 skips['big_poes'] = settings.full['big_poe_count']
+            if settings.full.get('chicken_count', 7) != 7:
+                skips['cuccos'] = settings.full['chicken_count']
         current_flow = lambda path: extra_raw[path] if path in extra_raw else decompress(read(path), d)
         # Every seed: area presentations never play (patching/area_presentations.py):
         # pre-marked at the start in full mode, else left on their first frame.
@@ -722,17 +745,19 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
                 flag: False for record in mailbox_items for flag in (record['recv'], record['got'])})
             skips['ap_mailbox'] = {'items': mailbox_items, 'row': mailbox_row}
         if full is not None:
-            # Chests save no flag of their own: each shuffled chest runs its own copy of
-            # its opening event, which sets a saved Bool first (tracking, Archipelago).
-            # Last of the event patches: the copied rows inherit every completed list.
+            # Chests save no flag of their own: each chest, shuffled or left in place, runs
+            # its own copy of its opening event, which sets a saved Bool first (tracking,
+            # Archipelago). Last of the event patches: the copied rows inherit every
+            # completed list.
             report('Opening flags of the chests…')
             from oot_rando.patching import chest_flags
             current_raw = lambda path: extra_raw[path] if path in extra_raw else decompress(read(path), d)
             map_root = lambda path: Byml(raw_maps[path] if path in raw_maps else decompress(read(path), d)).root
             settings_raw = current_raw(chest_flags.EVENT_SETTINGS)
             settings_rows = {row['__RowId']: row for row in Byml(settings_raw).root}
-            records, skipped = chest_flags.plan_records(full['placements'], map_root, settings_identity(settings),
-                                                        settings_rows)
+            # Not ``chests``: that name holds the Kokiri chests the spoiler lists below.
+            flagged = full['placements'] + chest_flags.vanilla_placements(full['matches'], full['placements'])
+            records, skipped = chest_flags.plan_records(flagged, map_root, settings_identity(settings), settings_rows)
             for resource, edits in sorted(chest_flags.map_edits(records).items()):
                 raw_maps[resource] = patch_strings(raw_maps[resource] if resource in raw_maps
                                                    else decompress(read(resource), d), edits)

@@ -35,7 +35,8 @@ float sizes_card_width(void)
 float sizes_card_height(uint32_t key_count)
 {
   uint32_t rows = sizes_key_rows(key_count, CARD_KEY_COLUMNS);
-  return 2 * CARD_PAD_FP + CELLS_BLOCK_FP + (rows ? SECTION_GAP_FP + rows * KEYS_ROW_FP : 0);
+  return 2 * CARD_PAD_FP + CELLS_BLOCK_FP + (rows ? SECTION_GAP_FP + rows * KEYS_ROW_FP : 0) + SECTION_GAP_FP +
+         COUNTER_ROW_FP;
 }
 
 box_t sizes_card_box(const postcard_settings_t *settings, uint32_t key_count, float area_w)

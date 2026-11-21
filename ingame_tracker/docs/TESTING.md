@@ -1,6 +1,6 @@
 # Live test plan
 
-0.2.0's icons were seen in the game (13/11: upright, right colours, smooth); 0.2.1 to 0.4.0 (key rows, postcard, songs) were checked in the game on 1.1.1 in the Ryuchii emulator (14/11); 0.5.0's console was used in the game by two players in one room (items received and sent, hints, chat, notices), which is how other players' items were found missing. 0.6.0 (other players' items), 0.6.1 (a row per kind on the Console page), 0.6.2 (the postcard and the console hide while the game is paused), 0.6.3 (the panel reopens where it was closed) and 0.7.0 (show in the world, ticks by hand) are not yet tested in the game, nor is game 1.0.0. The PC tests (`make test`) cover the seed file's parser (versions 1 to 4, the checks' ids and places), show in the world's places, words and camera projection, the String64 and pause reads, what the pause hides, the ticks by hand and their file (read back, damaged, another seed's), the state, a
+0.2.0's icons were seen in the game (13/11: upright, right colours, smooth); 0.2.1 to 0.4.0 (key rows, postcard, songs) were checked in the game on 1.1.1 in the Ryuchii emulator (14/11); 0.5.0's console was used in the game by two players in one room (items received and sent, hints, chat, notices), which is how other players' items were found missing. 0.6.0 (other players' items), 0.6.1 (a row per kind on the Console page), 0.6.2 (the postcard and the console hide while the game is paused), 0.6.3 (the panel reopens where it was closed), 0.7.0 (show in the world, ticks by hand) and 0.7.2 (the Gold Skulltula count, the bottle count) are not yet tested in the game, nor is game 1.0.0. The PC tests (`make test`) cover the seed file's parser (versions 1 to 4, the checks' ids and places), show in the world's places, words and camera projection, the String64 and pause reads, what the pause hides, the ticks by hand and their file (read back, damaged, another seed's), the state, a
 region's list of checks, the game-data reader over a fake GameData, the controls (repeat, what the game doesn't see), the browsing, the
 icons file's index, the postcard's and the console's settings and files, the console's lines and fading, its mailbox (half-written
 writes, a full ring, the status line) and where the console goes next to every postcard. OotrR's `tests/test_console_bridge.py` covers
@@ -95,7 +95,7 @@ With a seed made or updated by 0.4.0, and `icons.bin` made from the game (`updat
   in its colour. Learn each of the twelve one at a time, or load a save that has some: exactly the learned ones are lit.
   This is also the check that `IsGet.Item_Melody_<name>` is set when a song is learned (the flags exist in the game's data; that the game
   sets them is read from its cutscenes, not seen).
-- The pictures: in the log, `the icons are in` still shows once, with 50 icons in; each song cell shows a white picture on its colour. Check each
+- The pictures: in the log, `the icons are in` still shows once, with 50 icons in (51 from 0.7.2); each song cell shows a white picture on its colour. Check each
   picture is the right song's (the numbering is the ocarina melody list's; decoded on the PC the pictures match: Epona's a horse, Sun's a
   sun, Storms' clouds, Minuet's a tree, Bolero's a flame, Serenade's a water drop): a wrong one means `ingame_icons.MELODY_ORDER` is off.
 - The panel with every song learned, two status lines (a save of another seed, then the goal reached) and the 35 regions fits the
@@ -203,6 +203,29 @@ Needs a seed made by OotrR with this module (or one updated with `update-tracker
 - Pick up a ticked check in the game: it shows collected (a filled box) and is counted once.
 - Compare with the desktop tracker: a check ticked there (`Done (manual)`) isn't ticked in the game, and the other way round (they
   are kept apart).
+
+## 3j. The Gold Skulltula count (0.7.2)
+
+With a seed whose `icons.bin` has the token's icon (51 icons: made by this version, or `update-tracker --nup GAME.nup`):
+
+- The panel's summary row (under the keys) shows the token's icon and `held/100` at its right, left of `Souls`, or at the right edge on a
+  seed without souls. `held` is the save's Gold Skulltula count: compare with the pause screen. Collect one: the count goes up within
+  half a second. A save with none shows `0/100`; a save with all of them `100/100`.
+- The postcard has a last row under the keys with the same icon and count, at all three sizes, in all four corners, at 720p and 1080p: nothing
+  cut off, and the console still keeps clear of the card.
+- In the log, `the icons are in` shows 51 icons. With an older `icons.bin` (50 icons) the icon is replaced by `GS` and everything else is as before.
+- Before the game's save data is attached the count is `?/100`.
+
+## 3k. The bottle count (0.7.2)
+
+With a seed made or updated (`update-tracker`) by this version:
+
+- The Bottle cell shows the number of bottles the save holds, 1 to 5, in the corner as a bomb bag's level shows; a save with none shows the
+  cell dim and with no number. Get a second bottle: it goes to 2 within half a second. Compare with the item screen's bottles.
+- The postcard shows the same number.
+- A seed file made before this version (one `IsGet.Item_Bottle` rule) shows `1` once that flag is set, whatever the number of bottles,
+  until `update-tracker`.
+- A module older than 0.7.2 reading a new seed file shows the Bottle owned, with no number: its grid has one level for the Bottle.
 
 ## 4. What it shows
 

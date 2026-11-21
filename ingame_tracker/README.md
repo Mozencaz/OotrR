@@ -9,13 +9,13 @@ An in-game tracker for the Ocarina of Time (Switch 2, program id `0400486024DEC0
 save has found:
 
 - the items (swords, shields, boots, bow, bombs, hookshot, magic, ocarina, bottles, stones, medallions), with the
-  game's own icons, owned ones lit in their colour and with their level (Hookshot / Longshot, wallet sizes, ...),
+  game's own icons, owned ones lit in their colour and with their level (Hookshot / Longshot, wallet sizes, the number of bottles, ...),
   and a `?` on any the game has no flag for;
 - the twelve ocarina songs under them, two rows of six (the warp songs, then the others), lit once learned;
 - each dungeon's small keys found out of the total and its boss key, with the temple's medallion, the small key and
   the boss key as icons;
 - the checks found, per region and in total, as `collected / trackable` (a check without a save flag can't be
-  observed, so it isn't counted), and the enemy souls if the seed has them;
+  observed, so it isn't counted), the Gold Skulltulas held out of 100, and the enemy souls if the seed has them;
 - each region's checks by name, ticked when collected, so you can see what's still missing there, with the highlighted
   check's internal key (the randomizer's id for it) under the list;
 - **ticks by hand**: A on a check of a region's list ticks it as done, as a double click does in the desktop tracker; it
@@ -30,7 +30,7 @@ save has found:
 The postcard and the console hide while the game is paused, so its menus are clear, and come back when it plays again. The panel
 works while the game is paused too.
 
-Version 0.7.1. Tested in the game (1.1.1, in the Ryuchii emulator): the panel, icons, postcard and songs, and 0.5.0's console with two players. Other players' items (0.6.0), the Console page's rows (0.6.1), hiding while paused (0.6.2), reopening where it was closed (0.6.3) and show in the world (0.7.0) are **not yet tested in the game**, nor is game 1.0.0. See [docs/TESTING.md](docs/TESTING.md).
+Version 0.7.2. Tested in the game (1.1.1, in the Ryuchii emulator): the panel, icons, postcard and songs, and 0.5.0's console with two players. Other players' items (0.6.0), the Console page's rows (0.6.1), hiding while paused (0.6.2), reopening where it was closed (0.6.3), show in the world (0.7.0), and the Gold Skulltula count and the bottle count (0.7.2) are **not yet tested in the game**, nor is game 1.0.0. See [docs/TESTING.md](docs/TESTING.md).
 
 ## Controls
 

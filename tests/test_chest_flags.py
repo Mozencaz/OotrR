@@ -65,6 +65,22 @@ class Units(unittest.TestCase):
         with self.assertRaises(ValueError):
             chest_flags.add_rows(chest_flags.add_rows(raw, records), records)
 
+    def test_chests_left_in_place_get_their_flag_too(self):
+        """The Kokiri Sword chest without its option, a dungeon's own map: tracked as well."""
+        matches = {'Kokiri#1': {'variants': [{'resource': 'A', 'index': 0}]},           # not shuffled
+                   'Dungeon#2': {'source': 'chest', 'variants': [{'resource': 'A', 'index': 1}]},
+                   'Shuffled#7': {'variants': [{'resource': 'B', 'index': 0}]},
+                   'Pot#4': {'source': 'pots', 'variants': [{'resource': 'A', 'index': 2}]},
+                   'npc#Gift': {'source': 'npc', 'variants': [{'resource': 'X', 'event': 'E'}]},
+                   'Empty#8': {'variants': []}}
+        placements = [placement('Shuffled#7', ('B', 0)), {'id': 'Pot#9', 'source': 'pots'}]
+        vanilla = chest_flags.vanilla_placements(matches, placements)
+        self.assertEqual(vanilla, [placement('Dungeon#2', ('A', 1)), placement('Kokiri#1', ('A', 0))])
+        records, skipped = chest_flags.plan_records(placements + vanilla, MAPS.__getitem__, 'f' * 64, ROWS)
+        self.assertEqual([r['id'] for r in records], ['Shuffled#7', 'Dungeon#2', 'Kokiri#1'])
+        self.assertEqual(skipped, {})
+        self.assertEqual(records[2]['flag'], chest_flags.flag_name('f' * 64, 'Kokiri#1'))
+
 
 @unittest.skipUnless(NUP, 'OOT_NUP not set')
 class GameFlow(unittest.TestCase):

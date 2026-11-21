@@ -114,6 +114,12 @@ also to the files of seeds made before it did. So are the twelve ocarina songs, 
 `..._SunSong`, `..._TimeSong` and `..._StormSong`. The format itself did not change: a module that doesn't know the songs ignores
 these items, and a file made before them leaves the songs unknown in the module.
 
+The `Bottle` item is counted by the module: its rules are the five bottle
+slots' Bools, `PlayerStatus.AssignableItem.BottleInfo.BottleA.IsValid` to `...BottleE.IsValid` (`0xf39ce410`, `0x000ff6ea`,
+`0xf63b1194`, `0xb7f052ce`, `0xe27b136d`), at levels 1 to 5, and the number of them that are true is shown, whichever slots they are
+(`tracking_metadata.BOTTLE_RULES`; the exporter drops the seed's own `IsGet.Item_Bottle` rule, also from seeds made before).
+A module older than 0.7.2 takes the highest level, and its Bottle cell has one level: it shows the Bottle owned, without a number.
+
 ### Keys (24 bytes each)
 
 One row per dungeon with small keys or a boss key to follow.
@@ -194,7 +200,7 @@ Everything is little-endian. The header, the index, then the pictures, each star
 
 | Offset | Type | Field |
 |---|---|---|
-| 0 | char[32] | the item, NUL-terminated, as the module's grid names it (`ingame_tracker/src/grid.c`), or `Small Key` / `Boss Key` for the keys row; at most one entry per name |
+| 0 | char[32] | the item, NUL-terminated, as the module's grid names it (`ingame_tracker/src/grid.c`), or `Small Key` / `Boss Key` for the keys row, or `Gold Skulltula Token` for the Skulltula count; at most one entry per name |
 | 32 | u32 | width (1 to 4096) |
 | 36 | u32 | height (1 to 4096) |
 | 40 | u32 | picture offset: 16-byte aligned, at or after the data offset |
@@ -203,8 +209,9 @@ Everything is little-endian. The header, the index, then the pictures, each star
 | 56 | u8[4] | the channels' sources (BRTI + 0x58), as NVN swizzle values: 0 zero, 1 one, 2 to 5 red, green, blue, alpha |
 | 60 | u32 | the BNTX's format: 0x2D01 ASTC 4x4 unorm, 0x2D06 ASTC 4x4 sRGB |
 
-The entries follow the panel's grid, then the songs, then the keys (`Item_Dungeon_SmallKey`, `Item_Dungeon_BossKey`): 38 with
-the game of 13/11 without the songs, 50 with them. The songs' pictures are the ocarina's melody list's
+The entries follow the panel's grid, then the songs, then the keys (`Item_Dungeon_SmallKey`, `Item_Dungeon_BossKey`), then the Gold
+Skulltula token (`Item_Token_Gold`, 341 pixels, ASTC 4x4 sRGB) beside the Skulltula count: 38 with
+the game of 13/11 without the songs, 50 with them, 51 with the token (module 0.7.2; an older file without it shows the count's letters `GS`). The songs' pictures are the ocarina's melody list's
 (`OcarinaMelodyIcon_00` to `_11` in the same archive, numbered as the game's melody scores list the songs: Zelda's Lullaby, Epona's,
 Saria's, Sun's, Time, Storms, then Minuet, Bolero, Serenade, Requiem, Nocturne, Prelude): 107 pixels, ASTC 4x4 sRGB, swizzled to grey
 with alpha. The count's limit was 40 before module 0.4.0 (it refused a longer file, and showed the letters); the format's version is
@@ -253,7 +260,7 @@ reader's `attach`, `read` and `write`, so it works wherever live memory does (Wi
 | 0x20 | char[64] | status text: the server and slot (`archipelago.gg:38281 as Link`), UTF-8, NUL-ended | client |
 | 0x60 | char[24] | seed id the module runs (as in `seed.trk`), NUL-ended; empty until it has read its seed | module |
 | 0x78 | u32 | read head: entries the module has taken | module |
-| 0x7C | u32 | module version: major << 16 \| minor << 8 \| patch (0x000701 for 0.7.1) | module |
+| 0x7C | u32 | module version: major << 16 \| minor << 8 \| patch (0x000702 for 0.7.2) | module |
 | 0x80 | entry[32] | the ring | client |
 
 Each entry: u8 kind (1 item received, 2 item sent, 3 hint, 4 chat, 5 server notice, 6 other players' item: neither

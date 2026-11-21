@@ -129,15 +129,17 @@ def pedestal_before_sages(raw):
     """``Market_Child_Prefab_e700``: the first sword pull no longer waits for ``Step06``.
 
     The child pulls the sword (event request, node 0) when he acts on the pedestal
-    and ``DoorOfTime`` is at ``Step06``; once ``AllSage`` has started a second request
-    (node 3) takes over. The first one now runs while ``AllSage`` is before ``Ready``
-    instead, so it works at any Door of Time step and both never run together.
-
-    A node only computes the outputs flagged ``Is Output`` (every link of the vanilla
-    modules reads one): node 5 flagged ``IsAfter`` alone, so ``IsBefore`` stayed false
-    and the sword could still not be pulled before the stones (20/11). It is flagged
-    too (several flagged outputs on one node are common in vanilla), and the gate's
-    ``Queries`` and plug follow its new source. Not validated in game."""
+    and ``DoorOfTime`` is at ``Step06``; a second request (node 3) takes over when
+    node 5 reports ``AllSage IsAfter Ready``. The first request now uses the exact
+    inverse of that same output. ``IsBefore Ready`` previously left a gap at Ready:
+    the prompt appeared, but neither event was requested on pressing the action.
+    Reusing node 2 as the native InvBool module makes both branches complementary,
+    including an inactive quest, without assuming strict/inclusive step semantics.
+    Physical in-game validation remains necessary."""
+    import copy
+    import ainb
+    from oot_rando.patching.ap_mailbox import ainb_to_binary
+    document = ainb.AINB.from_binary(raw).as_dict()
     def edit(nodes):
         gate = _node(nodes, 1, 'OperateAND')
         _node(nodes, 2, 'HoldChallengeCurrentStepCheckOrder')
@@ -153,12 +155,28 @@ def pedestal_before_sages(raw):
         plugs = gate.get('Plugs', {}).get('Generic', [])
         if [(p['Node Index'], p['Name']) for p in plugs] != [(2, 'BoolMulti')] or gate.get('Queries') != [2, 6]:
             raise ValueError('Unexpected pedestal module: gate plugs')
-        sources[0].update({'Node Index': 5, 'Output Index': 1})    # AllSage IsBefore Ready
-        outputs[1]['Is Output'] = True
-        # The node's query list and plug name the nodes it reads: node 5, no longer 2.
-        plugs[0]['Node Index'] = 5
-        gate['Queries'] = [5, 6]
-    return _ainb_edit(raw, edit)
+        repeat = _node(nodes, 4, 'OperateAND')
+        if [(s['Node Index'], s['Output Index']) for s in _bool_input(repeat, 'BoolMulti')['Sources']] != [
+                (5, 0), (6, 2)] or not outputs[0]['Is Output']:
+            raise ValueError('Unexpected repeat pedestal module wiring')
+        inverse = nodes[2]
+        inverse['Name'] = 'InvBool.module'
+        inverse['Flags'] = ['Is Query', 'Is Module']
+        inverse['Queries'] = [5]
+        inverse['Parameters'] = {
+            'Inputs': {'Bool': [
+                {'Name': 'BoolMulti', 'Default Value': False, 'Node Index': 5, 'Output Index': 0, 'Flags': []},
+                {'Name': 'UpdateOnce', 'Default Value': False, 'Node Index': -1, 'Output Index': 0,
+                 'Flags': ['Uses Default', 'Is Output']}]},
+            'Outputs': {'Bool': [{'Name': 'InvBool', 'Is Output': True}]}}
+        inverse['Plugs'] = {'Generic': [{'Node Index': 5, 'Name': 'BoolMulti'}]}
+        sources[0]['Output Index'] = 0
+    edit(document['Nodes'])
+    document['Modules'].append({'Path': 'InvBool.module.ainb', 'Category': 'Logic', 'Instance Count': 1})
+    result = ainb_to_binary(copy.deepcopy(document))
+    if ainb.AINB.from_binary(result).as_dict() != document:
+        raise ValueError('Child pedestal module wrongly rewritten.')
+    return result
 
 
 def door_of_time_open(read_flow, gamedata_raw, challenges_raw, read_module):

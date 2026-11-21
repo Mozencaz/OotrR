@@ -2,7 +2,8 @@
 
 Save tests (12/11, Hookshot): opening a chest writes no flag of its own to
 ``progress.sav`` (its ``Bool64bitKey`` hash never appears, even for an ordinary
-item); only the content's ``IsGet.*`` changes. So a chest gets its own saved Bool:
+item); only the content's ``IsGet.*`` changes. So every chest the randomizer knows,
+shuffled or left with its own content, gets its own saved Bool:
 
 * its ``Dynamic.GetEventName`` (the ``EventSetting`` row run on opening; default
   ``Dm_SY_TreasureboxSmall``, ``Dm_SY_Treasurebox`` for the big chests) is replaced
@@ -36,8 +37,22 @@ def flag_name(identity, gid):
     return 'RandoCheck.' + identity[:16] + '.' + gid
 
 
+def vanilla_placements(matches, placements):
+    """Placement-like records of the matched chests left in place, by id.
+
+    A chest keeps its content when its item is not shuffled (the Kokiri Sword without
+    its option, maps and compasses or keys kept in their dungeon): it gets its opening
+    flag all the same, or its tracker row could never be ticked.
+    """
+    placed = {p['id'] for p in placements}
+    return [{'id': gid, 'source': 'chest',
+             'variants': [(v['resource'], v['index']) for v in entry.get('variants', []) if 'index' in v]}
+            for gid, entry in sorted(matches.items())
+            if gid not in placed and entry.get('source', 'chest') == 'chest' and entry.get('variants')]
+
+
 def plan_records(placements, map_root, identity, settings_rows):
-    """One record per shuffled chest whose opening event can be wrapped.
+    """One record per chest (shuffled, or left in place) whose opening event can be wrapped.
 
     ``map_root(resource)`` → current map root; ``settings_rows``: EventSetting rows by id.
     Returns (records, skipped gids with a reason).

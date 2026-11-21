@@ -4,6 +4,7 @@
 #ifndef GRID_H
 #define GRID_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #define GRID_ROWS    4
@@ -20,6 +21,7 @@ typedef struct {
   const char *abbr;
   uint8_t levels; /* how many levels the item has (the Hookshot's two: Hookshot, Longshot); 1 for a song */
   uint32_t colour; /* 0xRRGGBB when owned */
+  bool counted; /* its level is how many of its rules' flags are set, not the highest (the bottles: one flag a slot) */
 } grid_cell_t;
 
 const grid_cell_t *grid_cell(int index);

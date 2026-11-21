@@ -88,14 +88,24 @@ EXTRA_INVENTORY = (
     ('Fire Arrows', 'Item_Arrow_Fire', 1),
 ) + tuple((item, flag, 1) for item, flag in SONGS)
 
+# The Bottle item is counted, not looked up: the game has five bottle slots, A to E, each with a saved Bool that says
+# it holds a bottle (sloperinaGZ's "Bottle X / available"; the first is 0xf39ce410). The item's rules are those five
+# flags, at levels 1 to 5 (a module that takes the highest set one, as the Bottle's cell once did, shows it owned; the
+# current one counts them). The seed's own rule for it (IsGet.Item_Bottle, one bottle's pickup) is dropped: it says nothing of the others.
+BOTTLE_ITEM = 'Bottle'
+BOTTLE_SLOT_FLAGS = tuple(f'PlayerStatus.AssignableItem.BottleInfo.Bottle{slot}.IsValid' for slot in 'ABCDE')
+BOTTLE_RULES = tuple((BOTTLE_ITEM, flag, level) for level, flag in enumerate(BOTTLE_SLOT_FLAGS, 1))
+
 
 def inventory_rules(inventory, known=None):
-    """A seed's inventory rules plus the EXTRA_INVENTORY ones it lacks (seeds made before they were
-    known get them when read). ``known``: the saved Bool hashes, to add only flags the game has."""
-    rules = list(inventory or ())
+    """A seed's inventory rules, with its Bottle rules replaced by the slots', plus the EXTRA_INVENTORY ones it lacks
+    (seeds made before they were known get them when read). ``known``: the saved Bool hashes, to add only flags the
+    game has."""
+    rules = [rule for rule in inventory or () if rule['item'] != BOTTLE_ITEM]
     have = {(rule['item'], str(rule['hash'])) for rule in rules}
-    for item, name, level in EXTRA_INVENTORY:
-        key = murmur3('IsGet.' + name)
+    extra = [(item, 'IsGet.' + name, level) for item, name, level in EXTRA_INVENTORY]
+    for item, name, level in extra + list(BOTTLE_RULES):
+        key = murmur3(name)
         if (item, str(key)) not in have and (known is None or key in known):
             rules.append({'item': item, 'hash': str(key), 'count': level})
     return rules

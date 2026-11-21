@@ -47,6 +47,21 @@ STATE_COLORS = {'done': '#9aa197', 'available': '#2f7a55', 'partial': '#9a7412',
 
 
 # ------------------------------------------------------------------ images
+# Tk on X11 (Linux, the Steam Deck) reports the wheel as buttons 4 and 5, not <MouseWheel>.
+WHEEL_EVENTS = ('<MouseWheel>', '<Button-4>', '<Button-5>')
+
+
+def wheel_units(num, delta):
+    """Lines to scroll for a wheel event: button 4 up, 5 down; else 120 a notch, at least one."""
+    if num == 4:
+        return -1
+    if num == 5:
+        return 1
+    if not delta:
+        return 0
+    return int(-delta / 120) or (-1 if delta > 0 else 1)
+
+
 def _png(width, height, pixels):
     """Encode RGBA rows (list of bytearrays) as a PNG, base64 for tk.PhotoImage."""
     raw = b''.join(b'\x00' + bytes(row) for row in pixels)
