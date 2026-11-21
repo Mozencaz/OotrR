@@ -9,11 +9,11 @@ version 3 or later (the text is in `LICENSE` here), built from [ocarinaMIDI](htt
 [sloperinaGZ](https://github.com/PracticeROM/sloperina)'s GPL-3 code.
 
 - Source: the `ingame_tracker/` folder of this repository (GPL-3, with its own `LICENSE`)
-- Commit: `dc06542` of [waze3174/OotrR](https://github.com/waze3174/OotrR), where the module was built (version 0.6.1);
+- Commit: `6f976fd` of [waze3174/OotrR](https://github.com/waze3174/OotrR), where the module was built (version 0.7.2);
   the sources in `ingame_tracker/` here are the same as there
-- Built with devkitA64: `make ship` in `ingame_tracker/` at that commit (it embeds `0.6.1 (v0.6.0-8-gdc06542)`); the build is
-  the same from any folder, so `make PACKAGE_VERSION="0.6.1 (v0.6.0-8-gdc06542)"` there gives this binary again
-- sha256 of `subsdk7`: `12920b448f5840bc8b6355aad49b89389d915ed38ab1788a21dcdc7d0a67caaa` (93,171 bytes)
+- Built with devkitA64: `make ship` in `ingame_tracker/` at that commit (it embeds `0.7.2 (v0.7.4-25-g6f976fd)`); the build is
+  the same from any folder, so `make PACKAGE_VERSION="0.7.2 (v0.7.4-25-g6f976fd)"` there gives this binary again
+- sha256 of `subsdk7`: `532e7bcfb1de48acf5c77c1d922fc16cd80aa8694ccb125a4a27c9544a944148` (110,355 bytes)
 
 The source of this exact binary is that folder at the commit above. To change the module, change it there, run `make ship` in that
 folder (it copies the new build here and prints its checksum and size), and update this file's commit and checksum (the tests check
