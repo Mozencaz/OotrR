@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import threading
 
-from oot_rando.game.tracking_metadata import inventory_rules
+from oot_rando.game.tracking_metadata import BOTTLE_ITEM, inventory_rules
 from oot_rando.logic.rules import split_age_member
 from oot_rando.randomizer.randomizer_services import ManualTracker, read_artifact
 from oot_rando.tracker.save_reader import load_snapshot
@@ -224,7 +224,9 @@ class TrackerSession:
             key, item = int(rule['hash']), rule['item']
             if key in snapshot['bool']:
                 known.add(item)
-                if snapshot['bool'][key]:
+                if snapshot['bool'][key] and item == BOTTLE_ITEM:
+                    counts[item] += 1  # one flag a slot: the slots set, not the highest
+                elif snapshot['bool'][key]:
                     counts[item] = max(counts[item], rule.get('count', 1))
         return counts, known
 
