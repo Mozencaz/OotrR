@@ -112,7 +112,7 @@ RomFS through `gamefile.c` the first time the panel is opened (a pause), rasteri
 per quad (a glyph or a rectangle), blended over the picture just before the game's present, with no read-back. The sizes are
 sloperinaGZ's: a font pixel is a 360th of the picture's height, so the panel scales with the resolution (560 font pixels wide: 1,680 pixels
 at 1080p, 1,120 at 720p). Top to bottom: title and seed id; status lines (not this seed's save, goal reached); the items, 4 rows of 9, as
-their icons (below) or else their letters (owned: lit in the item's colour, with its level; missing and unknown: dim), and under them the 12 songs in two rows of six, drawn the same way across the box's width; the dungeons' keys; the checks' total and the souls; the regions in
+their icons (below) or else their letters (owned: lit in the item's colour, with its level; missing and unknown: dim), and under them the 12 songs in two rows of six, drawn the same way across the box's width; the dungeons' keys; the checks' total, the Gold Skulltulas and the souls; the regions in
 three columns, each `collected/trackable` (green when all, dim when none), the highlighted one on a gold band; a line of hints. With a
 region's list open, the grid and the regions give way to the region's name, its count and which checks are shown, then up to 18 checks:
 a filled green box and a green name when collected, an empty white box and a white name when missing, a dim question mark when the game
@@ -134,7 +134,7 @@ sampled as unorm whatever the BNTX says, as sloperinaGZ's `gameimage.c` does: no
 
 The pictures are large (up to 704 KB each, about 7.3 MB for the first 38; the songs' are 14 KB each) and the game's heap has little to spare (sloperinaGZ's NATIVE_UI.md and
 FINDINGS.md: it refused allocations past about 10 to 11 MB), so they are not kept. Each is shrunk once, on the GPU, into a 64-pixel slot
-of an icon atlas (512 x 448, 56 slots, RGBA16F: 1.75 MiB, kept; the game of 13/11 gives 38 icons, the 12 songs make 50), and only one picture's bytes
+of an icon atlas (512 x 448, 56 slots, RGBA16F: 1.75 MiB, kept; the game of 13/11 gives 38 icons, the 12 songs make 50, the Skulltula token 51), and only one picture's bytes
 are held at a time (688 KiB at most, freed once they are in):
 
 1. The first frame the panel is drawn (`trackerui.c`, `icons_start`), the file's header and index are read and checked (`iconfile.c`), the
@@ -156,7 +156,10 @@ melody list's was checked by decoding the 13 pictures on the PC with the emulato
 flame, a water drop and a scarecrow are 01, 03, 05, 06, 07, 08 and 12); it is not yet seen in the game. In the keys row each temple is
 labelled by its medallion's icon (Bottom of the Well, Gerudo Training Ground and Ganon's Castle, which have none, keep their letters),
 then the small key's icon and `found/total`, then the boss key's icon, dimmed until it is held; without the icons, the letters and a `B`
-as before. The atlas is a render target, so its rows run the window's way up: with the lower-left origin it is
+as before. The Gold Skulltula count (0.6.4) is the token's icon and `held/100` in the summary row, left of the souls, and in a last row of
+the postcard; the number is the Int `PouchData.Item_Token_Gold.StockNum` (0x04735978, sloperinaGZ's `data_skulltulas`), `?/100` if the
+game has no such field, and `GS` stands in for the icon without it. The hearts have no such count: the game keeps no container count
+(`PouchData.Obj_Heart_Container.StockNum` doesn't exist), only `PlayerStatus.MaxLife` and the pieces' count modulo 4, so they are not shown. The atlas is a render target, so its rows run the window's way up: with the lower-left origin it is
 sampled upside down, as sloperinaGZ samples its layer.
 
 ## Sizes
@@ -183,7 +186,7 @@ A small card with the items' grid, the songs under it and the dungeons' keys, dr
   place of a count. A opens `BROWSE_POSTCARD`: four rows (`browse_t.setting`); up and down move, left and right change the value
   (`app.c` calls `postcard_step`), B goes back. That page is a narrower panel (320 font pixels).
 - With the card on and the panel closed, `app_frame` publishes a `panel_t` with `menu` false twice a second, filled by
-  `tracker_compute_icons` (items, songs and keys only: not the 1,500 region flags), and the present hook draws the card from it every frame.
+  `tracker_compute_icons` (items, songs, keys and the Skulltula count only: not the 1,500 region flags), and the present hook draws the card from it every frame.
   While the settings page is open the card is drawn as a preview: the panel is drawn first, then the card
   over its corner, so a change is seen at once. On the regions and a region's list the card is hidden.
 - The game's pause: while the card or the console is on, `read_pause` in `app.c` reads it every 100 ms (`gamedata_paused`,
@@ -192,7 +195,7 @@ A small card with the items' grid, the songs under it and the dungeons' keys, dr
   at the next frame after the pause. The panel itself doesn't read the pause.
 - Drawing (`trackerui.c`): `layout_scaled` gives the fonts and hairline for a font pixel of any size, so the card is the panel's
   own `draw_grid` and `draw_keys` at the card's scale (`postcard_scale` of the picture's font pixel: 0.55, 0.75 or 1.0 of the full-size
-  card, items in 22 x 18 font-pixel cells, so the icons are nearly square, the songs in cells a sixth of the card's width and 14 tall) with the keys in 3 columns. The opacity is `gpuui_set_opacity`: each
+  card, items in 22 x 18 font-pixel cells, so the icons are nearly square, the songs in cells a sixth of the card's width and 14 tall) with the keys in 3 columns and the Skulltula count under them. The opacity is `gpuui_set_opacity`: each
   quad records the frame's opacity, and `write_element` multiplies its alpha by it (and a premultiplied icon's colour too), so
   the box, the glyphs and the icons fade together. Quads overlap as they do at full opacity (text over a fainter box), so it reads as one
   translucent card, not a flattened image.
