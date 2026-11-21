@@ -15,8 +15,11 @@ VILLAGE = [6.0, 110.0, 21.0]          # Kokiri Forest, next to Link's house
 KF_CHILD, KF_ADULT, KF_BOTH = 'KokiriForest#rocks#1', 'KokiriForest#rocks#2', 'KokiriForest#rocks#3'
 HF_CHILD, HF_ADULT = 'HyruleField#rocks#4', 'HyruleField#rocks#5'
 # The Door of Time opens with the Song of Time, which (with the Ocarina of Time) the child
-# gets in Hyrule Field for the three spiritual stones: vanilla songs and ocarinas.
-STONES = {'Kokiri Emerald': 1, 'Goron Ruby': 1, 'Zora Sapphire': 1}
+# gets in Hyrule Field for the stones Zelda's escape asks for: vanilla songs and ocarinas.
+# "Require all" (the default) asks for the three; "Vanilla" for the Goron Ruby and the Zora
+# Sapphire (the remake's own check never looks at the Kokiri Emerald).
+STONES = {'all': {'Kokiri Emerald': 1, 'Goron Ruby': 1, 'Zora Sapphire': 1},
+          'vanilla': {'Goron Ruby': 1, 'Zora Sapphire': 1}}
 # Remake: the Door of Time also waits for Zelda (DoorOfTime starts after her).
 DOOR_EVENTS = {'Met Zelda': 1}
 
@@ -38,17 +41,23 @@ class MapAgeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.data = World()
-        options = dict(rando_options.defaults(), shuffle_rocks=True)
-        cls.c = prepare(cls.data, options, {}, [], 'map-ages', True, extra=map_sources())
+        cls.c = cls.prepared()
+        cls.vanilla = cls.prepared(spiritual_stones='vanilla')
 
-    def collected(self, counts, time_travel=True):
+    @classmethod
+    def prepared(cls, **options):
+        options = dict(rando_options.defaults(), shuffle_rocks=True, **options)
+        return prepare(cls.data, options, {}, [], 'map-ages', True, extra=map_sources())
+
+    def collected(self, counts, time_travel=True, c=None):
         """Remake sources collected with ``counts``; without ``time_travel`` Link never becomes adult."""
-        placements = dict(self.c.base)
+        c = c or self.c
+        placements = dict(c.base)
         if not time_travel:
             placements['Master Sword Pedestal'] = None
-        for gid in self.c.logic_locations:
+        for gid in c.logic_locations:
             placements.setdefault(vname(gid), None)
-        _, found, _ = self.c.logic.sweep(placements, self.c.logic.new_state(Counter(counts) + self.c.starting))
+        _, found, _ = c.logic.sweep(placements, c.logic.new_state(Counter(counts) + c.starting))
         return {name[len('Remake|'):] for name in found if name.startswith('Remake|')}
 
     def everything(self):
@@ -76,14 +85,21 @@ class MapAgeTests(unittest.TestCase):
         self.assertTrue({KF_CHILD, KF_ADULT, KF_BOTH, HF_CHILD, HF_ADULT} <= self.collected(self.everything()))
 
     def test_adult_access_is_the_door_of_time(self):
-        door = dict(STONES, **DOOR_EVENTS)
-        self.assertIn(KF_ADULT, self.collected(door))
-        # (Zelda can be met with what the sweep finds: not a missing item here.)
-        for missing in [m for m in door if m != 'Met Zelda']:
-            with self.subTest(missing=missing):
-                counts = {item: n for item, n in door.items() if item != missing}
-                self.assertNotIn(KF_ADULT, self.collected(counts))
-                self.assertIn(KF_CHILD, self.collected(counts))
+        for value, c in (('all', self.c), ('vanilla', self.vanilla)):
+            door = dict(STONES[value], **DOOR_EVENTS)
+            with self.subTest(spiritual_stones=value):
+                self.assertIn(KF_ADULT, self.collected(door, c=c))
+                # (Zelda can be met with what the sweep finds: not a missing item here.)
+                for missing in [m for m in door if m != 'Met Zelda']:
+                    with self.subTest(missing=missing):
+                        counts = {item: n for item, n in door.items() if item != missing}
+                        self.assertNotIn(KF_ADULT, self.collected(counts, c=c))
+                        self.assertIn(KF_CHILD, self.collected(counts, c=c))
+
+    def test_the_emerald_only_opens_the_door_when_required(self):
+        counts = dict(STONES['vanilla'], **DOOR_EVENTS)
+        self.assertIn(KF_ADULT, self.collected(counts, c=self.vanilla))
+        self.assertNotIn(KF_ADULT, self.collected(counts, c=self.c))
 
     def test_tracker_names_show_the_age(self):
         names = {c['id']: c['name'] for c in tracker_checks(self.data, self.c.matches, self.c.shuffled)}

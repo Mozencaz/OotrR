@@ -299,6 +299,14 @@ class Integration(unittest.TestCase):
                 with self.subTest(overrides=overrides, seed=seed):
                     self.assert_valid(self.run_plan(overrides, seed), overrides)
 
+    def test_both_stone_options_are_beatable(self):
+        # Rewards shuffled: the stones sit anywhere, so what the escape asks for matters.
+        for value in rando_options.BY_NAME['spiritual_stones'].allowed():
+            for seed in ('s1', 's2'):
+                overrides = dict(rando_options.PRESETS['everything']['values'], spiritual_stones=value)
+                with self.subTest(spiritual_stones=value, seed=seed):
+                    self.assert_valid(self.run_plan(overrides, seed), overrides)
+
     def test_hookshot_copies_are_tokens(self):
         # Issue #23: no copy carries a fixed level; the first one found gives the hookshot.
         for seed in ('h1', 'h2'):

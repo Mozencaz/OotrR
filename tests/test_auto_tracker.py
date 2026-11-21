@@ -95,6 +95,15 @@ class AutoTrackerTests(unittest.TestCase):
         self.assertIsNone(TrackerSession._collected({'type': 'bool64', 'hash': '123'},
                           self.snapshot(), {'known_bool64': ['10']}))
 
+    def test_rows_without_a_saved_flag_are_marked_not_tracked(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = self.make_session(Path(directory))
+            session.metadata['checks']['future']['collection'] = None   # e.g. a vanilla NPC gift
+            self.assertFalse(session.check_state('chest')['untracked'])
+            self.assertTrue(session.check_state('future')['untracked'])
+            session.metadata = None   # a seed without tracking data: nothing is known to be untracked
+            self.assertFalse(session.check_state('future')['untracked'])
+
     def test_access_search_never_receives_future_rewards(self):
         class Logic:
             referenced = set()

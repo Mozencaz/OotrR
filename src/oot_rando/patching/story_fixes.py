@@ -46,6 +46,7 @@ edit of one resource, checked by re-reading it (Discord reports of 15/11):
 Bool switches: case 0 = true, case 1 = false (as the vanilla flows). Not validated in game.
 """
 import io
+from functools import partial
 
 from oot_rando.patching.event_patch import GAMEDATA_ACTOR_PARAMS, _flow, _snapshot
 
@@ -480,14 +481,18 @@ def lake_tree_wall_edits(root):
     return edits, found[0]
 
 
-# --- Zelda's escape (DoorOfTime) on the three stones ---------------------------
+# --- Zelda's escape (DoorOfTime) on the stones held ----------------------------
 # ``DoorOfTime/DoorOfTime_CheckStoneNum`` runs only at the end of Dodongo's Cavern and
 # Jabu-Jabu's Belly and reads both dungeon *quests*: with the stones found elsewhere,
 # Zelda never fled (15/11, Discord report). Its Step03 branch moves DoorOfTime to
 # ``Step03``, raises the Hyrule Field drawbridge (``IsHyruleFieldBridgeClose``) and
 # sets ``DoorOfTime_GetStoneCount`` to 0; the drawbridge area then starts
 # ``HyruleField_DoorOfTime_Escape`` (Step04), then the moat ``..._GetOcarinaOfTime``.
-# The same branch now also runs on the three stones held, checked at every item get
+# It reads only ``Get_StoneOfFire`` and ``Get_StoneOfWater`` (both done: Step03, one:
+# Step2_1 or Step2_2, none: 2 stones left); the Kokiri Emerald and the Deku Tree are
+# never checked. The ``spiritual_stones`` option picks what the escape asks for (STONE_SETS):
+# every stone (default) or, as the native check, the Goron Ruby and the Zora Sapphire.
+# The same branch now also runs on those stones held, checked at every item get
 # (``ActionGuide/ActionGuide``), at the end of Impa's send-off and at every dungeon end
 # (before the native check), once DoorOfTime is past ``Step01`` (send-off done) and not
 # past ``Step2_2`` (before Step03; ``IsAfter`` is strict, as Darunia's vanilla gift
@@ -512,7 +517,9 @@ def lake_tree_wall_edits(root):
 # (:func:`zelda_escape_on_talk`).
 DOOR_FLOW = 'Event/EventFlow/DoorOfTime.bfevfl.zs'
 ACTION_GUIDE_FLOW = 'Event/EventFlow/ActionGuide.bfevfl.zs'
-STONES = ('Item_Stone_Forest', 'Item_Stone_Fire', 'Item_Stone_Water')
+# The ``spiritual_stones`` option's values: the stones the escape asks for.
+STONE_SETS = {'all': ('Item_Stone_Forest', 'Item_Stone_Fire', 'Item_Stone_Water'),
+              'vanilla': ('Item_Stone_Fire', 'Item_Stone_Water')}   # the native check's two quests
 STONE_FLAG_PREFIX = 'IsGet.'   # saved when the stone is obtained, however it is given
 DOOR_STARTED = 'DoorOfTime_IsAfter_Step01_Exp'
 DOOR_BEFORE_ESCAPE = 'DoorOfTime_IsAfter_Step2_2_Exp'
@@ -523,8 +530,14 @@ DOOR_STEP03_PARAMS = {'IsIgnoreCompletedChallenge': False, 'IsIgnoreChallengePro
                       'ChallengeName': 'DoorOfTime', 'IsWaitEnd': True, 'StepName': 'Step03'}
 
 
-def _stone_check(flow, prefix, following, done=...):
-    """Events: DoorOfTime to Step03 when started, before Step03, and the stones held.
+def escape_stones(full):
+    """The stones Zelda's escape asks for, from the (stored) full randomizer options."""
+    from oot_rando.logic import rando_options
+    return STONE_SETS[rando_options.stored_value(full, 'spiritual_stones')]
+
+
+def _stone_check(flow, prefix, stones, following, done=...):
+    """Events: DoorOfTime to Step03 when started, before Step03, and the ``stones`` held.
 
     ``following``: where the flow goes on when the check does not pass; ``done``: after
     Step03 (``following`` by default)."""
@@ -537,7 +550,7 @@ def _stone_check(flow, prefix, following, done=...):
                         {'GameDataName': 'DoorOfTime_GetStoneCount', 'Value': 0, 'Index': -1}, done)
     step.data.nxt, bridge.data.nxt = make_index(bridge), make_index(count)
     check = step
-    for index, stone in reversed(list(enumerate(STONES))):
+    for index, stone in reversed(list(enumerate(stones))):
         # The saved ``IsGet.<actor>`` flag: the pouch only answers to pouch names, never
         # to the actor name (EventQueryIsExistInPouch on Item_Stone_* was always false,
         # so Zelda still waited for the bosses; 15/11 report).
@@ -549,7 +562,7 @@ def _stone_check(flow, prefix, following, done=...):
                        {'GameDataName': DOOR_STARTED}, before, following)
 
 
-def zelda_escape_on_item_get(raw):
+def zelda_escape_on_item_get(raw, stones):
     """``ActionGuide/ActionGuide``: the stone check first, at every item get. Returns (bytes, report)."""
     from evfl.util import make_index
     flow = _Chart(raw)
@@ -557,15 +570,15 @@ def zelda_escape_on_item_get(raw):
     if entry is None or entry.main_event.v is None:
         raise ValueError('Unexpected ActionGuide flow.')
     first = entry.main_event.v
-    entry.main_event = make_index(_stone_check(flow, 'RandoDoorStones', first))
+    entry.main_event = make_index(_stone_check(flow, 'RandoDoorStones', stones, first))
     result, events = flow.write()
     start = {e.name: e for e in _flow(result).flowchart.entry_points}['ActionGuide'].main_event.v
     if start.name != 'RandoDoorStonesStarted' or events['RandoDoorStonesCount'].data.nxt.v.name != first.name:
         raise ValueError('Stone check wrongly chained in ActionGuide.')
-    return result, {'flow': ACTION_GUIDE_FLOW, 'start': start.name, 'stones': list(STONES)}
+    return result, {'flow': ACTION_GUIDE_FLOW, 'start': start.name, 'stones': list(stones)}
 
 
-def zelda_escape_door_flow(raw):
+def zelda_escape_door_flow(raw, stones=STONE_SETS['all']):
     """``DoorOfTime``: stone check after the send-off, native check never backwards.
 
     Returns (bytes, report)."""
@@ -577,7 +590,7 @@ def zelda_escape_door_flow(raw):
     if native is None or native.main_event.v is None or native.main_event.v.name != 'Event38':
         raise ValueError('Unexpected DoorOfTime stone check.')
     # Dungeon end: the stones first (Step03 and done), else the native check (vanilla).
-    dungeon_end = _stone_check(flow, 'RandoDungeonEndStones', native.main_event.v, done=None)
+    dungeon_end = _stone_check(flow, 'RandoDungeonEndStones', stones, native.main_event.v, done=None)
     guard = flow.switch('RandoDoorCheckForward', 'EventQueryIsGameDataBoolExp',
                         {'GameDataName': DOOR_BEFORE_ESCAPE}, None, dungeon_end)
     native.main_event = make_index(guard)
@@ -597,10 +610,10 @@ def zelda_escape_door_flow(raw):
             or _params(fire).get('StepName') != 'KakarikoVillageNpc'
             or getattr(fire.data.nxt, 'v', None) is not None or len(_predecessors(flow.chart, fire)) != 1):
         raise ValueError('Unexpected Impa send-off end.')
-    stones = _stone_check(flow, 'RandoSendOffStones', None)
-    fire.data.nxt = make_index(stones)
+    send_off = _stone_check(flow, 'RandoSendOffStones', stones, None)
+    fire.data.nxt = make_index(send_off)
     started = flow.switch('RandoFireQuestStarted', 'EventQueryIsGameDataBoolExp',
-                          {'GameDataName': FIRE_QUEST_STARTED}, stones, fire)
+                          {'GameDataName': FIRE_QUEST_STARTED}, send_off, fire)
     step02.data.nxt = make_index(started)
     result, events = flow.write()
     if (events['Event7'].data.nxt.v.name != 'RandoFireQuestStarted'
@@ -613,7 +626,7 @@ def zelda_escape_door_flow(raw):
                     'dungeon_end': 'RandoDungeonEndStones'}
 
 
-def zelda_escape_on_talk(raw):
+def zelda_escape_on_talk(raw, stones=STONE_SETS['all']):
     """``Npc_Hylia_Zelda_Child/Talk``: the stone check first, at every talk to Zelda.
 
     17/11 (Discord, 0.6.5): the last stone got after the send-off (from a Great Fairy)
@@ -626,12 +639,12 @@ def zelda_escape_on_talk(raw):
     if entry is None or entry.main_event.v is None or entry.main_event.v.name != 'Event99':
         raise ValueError('Unexpected Zelda talk flow.')
     first = entry.main_event.v
-    entry.main_event = make_index(_stone_check(flow, 'RandoTalkStones', first))
+    entry.main_event = make_index(_stone_check(flow, 'RandoTalkStones', stones, first))
     result, events = flow.write()
     start = {e.name: e for e in _flow(result).flowchart.entry_points}['Talk'].main_event.v
     if start.name != 'RandoTalkStonesStarted' or events['RandoTalkStonesCount'].data.nxt.v.name != first.name:
         raise ValueError('Stone check wrongly chained in the Zelda talk.')
-    return result, {'flow': ZELDA_FLOW, 'start': start.name, 'stones': list(STONES)}
+    return result, {'flow': ZELDA_FLOW, 'start': start.name, 'stones': list(stones)}
 
 
 # --- Stones in the menu after Gohma ---------------------------------------------
@@ -1348,6 +1361,11 @@ SAGE_OF_WATER_STEPS = ('Ready', 'Step00', 'Step01', 'Step03', 'Step04', 'Step05'
 SERENADE_STEPS = ('Step04', 'Step05')
 DOOR_MODULE = 'Logic/Market_Common_f252.logic.module.ainb'
 DOOR_OPENED = 'Market_Child_TimeTempleDoor_Opened'
+# The altar's ReplaceEventParam rejects the ocarina BEFORE DoorOfTime_OpenDoor
+# runs when this expression is true. Vanilla requires the quest to equal Step05;
+# bypassing Event60 in that flow alone therefore did not free the song (0.7.3).
+DOOR_SONG_INVALID = 'Market_Child_TimeTempleDoor_OcarinaReacts'
+DOOR_SONG_NATIVE = [[1, 931730378], [2, 1558058783], [5], [0, 1920740541], [4]]
 DOOR_SONG_STEP = 'DoorOfTime_IsAfter_Step04_Exp'
 DOOR_SONG_PREFIX = 'RandoDoorSongStep06_'
 DOOR_COMPLETE_ONLY_AFTER = 'DoorOfTime_IsAfter_Step05_Exp'
@@ -1361,6 +1379,57 @@ ALL_SAGE_FLOW = 'Event/EventFlow/AllSage.bfevfl.zs'
 DEFEAT_GANON_STEPS = ('Ready', 'Step01', 'Step02', 'Step03', 'Step04', 'Step05', 'Step06', 'Step07',
                       'Step08', 'Step09')
 GANON_PAST_REVELATION = 'Defeat_Ganon_IsAfter_Step01_Exp'
+
+
+def _door_song_program(requirement):
+    """The native ocarina invalid-condition: already opened OR missing stones.
+
+    The ocarina point itself recognises the Song of Time; this gate only adds
+    the chosen stones, independently of Zelda's escape and its quest enum.
+    """
+    from oot_rando.patching.soul_adapter import murmur3
+    if requirement not in ('song', 'vanilla', 'all'):
+        raise ValueError('Unknown Door of Time requirement: ' + str(requirement))
+    program = [[0, murmur3(DOOR_OPENED)]]
+    if requirement != 'song':
+        stones = STONE_SETS[requirement]
+        program.append([0, murmur3(STONE_FLAG_PREFIX + stones[0])])
+        for stone in stones[1:]:
+            program.extend([[0, murmur3(STONE_FLAG_PREFIX + stone)], [3]])
+        program.extend([[5], [4]])
+    return program
+
+
+def door_song_condition(gamedata_raw, requirement='song'):
+    """Free the native altar reaction from Step05 and apply the door's stones.
+
+    Returns (GameData bytes, report). Does not alter the separate escape rules.
+    """
+    from oot_rando.formats import byml_codec
+    from oot_rando.patching.soul_adapter import murmur3
+    program = _door_song_program(requirement)
+    document = byml_codec.load(gamedata_raw)
+    data = document['root']['Data']
+    entries = [e for e in data['BoolExp'] if int(e['Hash']) == murmur3(DOOR_SONG_INVALID)]
+    if len(entries) != 1 or [[int(v) for v in x] for x in entries[0]['Values']] != DOOR_SONG_NATIVE:
+        raise ValueError('Unexpected Door of Time ocarina invalid-condition (already patched?).')
+    bools = {int(e['Hash']) for e in data['Bool']}
+    if any(x[1] not in bools for x in program if x[0] == 0):
+        raise ValueError('Door of Time ocarina condition: flag missing from game data.')
+    entries[0]['Values'] = [[byml_codec.U64(v) for v in step] for step in program]
+    result = byml_codec.dump(document)
+    if not door_song_condition_applied(result, requirement):
+        raise ValueError('Door of Time ocarina condition wrongly rewritten.')
+    return result, {'expression': DOOR_SONG_INVALID, 'requirement': requirement}
+
+
+def door_song_condition_applied(gamedata_raw, requirement='song'):
+    from oot_rando.formats import byml_codec
+    from oot_rando.patching.soul_adapter import murmur3
+    entries = [e for e in byml_codec.load(gamedata_raw)['root']['Data']['BoolExp']
+               if int(e['Hash']) == murmur3(DOOR_SONG_INVALID)]
+    return (len(entries) == 1 and [[int(v) for v in x] for x in entries[0]['Values']]
+            == _door_song_program(requirement))
 
 
 def _scene_programs():
@@ -1562,25 +1631,27 @@ def scene_module_fixes():
             (BRIDGE_MODULE, 'bridge_medallions', bridge_on_medallions))
 
 
-FLOW_FIXES = (
-    *OWL_FLOW_FIXES,
-    ('Event/EventFlow/AllSage.bfevfl.zs', 'prelude_quest_forward', prelude_keeps_later_sage_progress),
-    (FIRE_STONE_FLOW, 'darunia_gift', darunia_gift_after_dungeon),
-    (DARUNIA_GIFT_FLOW, 'fire_quest_forward', keep_fire_quest_forward),
-    (EPONA_FLOW, 'second_malon', second_malon_after_talon),
-    (BOWLING_FLOW, 'bombchu_bowling', open_bombchu_bowling),
-    (FAIRY_CALL_FLOW, 'great_fairies', open_and_count_great_fairies),
-    *((fairy_flow(name), 'great_fairy_' + name.lower(), _fairy_reward_flag(name, reward, actor))
-      for name, reward, actor in GREAT_FAIRIES),
-    (DOOR_FLOW, 'zelda_escape', zelda_escape_door_flow),
-    (ZELDA_FLOW, 'zelda_talk_forward', door_of_time_forward),
-    (ZELDA_FLOW, 'zelda_talk_stones', zelda_escape_on_talk),
-    (GOHMA_STONE_FLOW, 'gohma_stone_menu', skip_stone_menu_presentation),
-    (KOKIRI_EXIT_FLOW, 'kokiri_exit_guard', kokiri_exit_guard_steps_aside),
-    (DAMPE_FLOW, 'dampe_first_race', dampe_first_race_until_prize),
-    (SARIA_SONG_FLOW, 'saria_song_forward', door_of_time_forward),
-    (LINK_GORON_FLOW, 'link_goron_tunic', link_goron_gives_tunic),
-    (SAGE_OF_WATER_FLOW, 'serenade_forward', serenade_keeps_water_temple),
-    (DOOR_FLOW, 'door_song_before_escape', door_song_before_escape),
-    (ALL_SAGE_FLOW, 'revelation_forward', revelation_keeps_ganon_quest),
-)
+def flow_fixes(stones):
+    """``(flow, report key, fix)`` of every story fix; the escape checks ask for ``stones``."""
+    return (
+        *OWL_FLOW_FIXES,
+        ('Event/EventFlow/AllSage.bfevfl.zs', 'prelude_quest_forward', prelude_keeps_later_sage_progress),
+        (FIRE_STONE_FLOW, 'darunia_gift', darunia_gift_after_dungeon),
+        (DARUNIA_GIFT_FLOW, 'fire_quest_forward', keep_fire_quest_forward),
+        (EPONA_FLOW, 'second_malon', second_malon_after_talon),
+        (BOWLING_FLOW, 'bombchu_bowling', open_bombchu_bowling),
+        (FAIRY_CALL_FLOW, 'great_fairies', open_and_count_great_fairies),
+        *((fairy_flow(name), 'great_fairy_' + name.lower(), _fairy_reward_flag(name, reward, actor))
+          for name, reward, actor in GREAT_FAIRIES),
+        (DOOR_FLOW, 'zelda_escape', partial(zelda_escape_door_flow, stones=stones)),
+        (ZELDA_FLOW, 'zelda_talk_forward', door_of_time_forward),
+        (ZELDA_FLOW, 'zelda_talk_stones', partial(zelda_escape_on_talk, stones=stones)),
+        (GOHMA_STONE_FLOW, 'gohma_stone_menu', skip_stone_menu_presentation),
+        (KOKIRI_EXIT_FLOW, 'kokiri_exit_guard', kokiri_exit_guard_steps_aside),
+        (DAMPE_FLOW, 'dampe_first_race', dampe_first_race_until_prize),
+        (SARIA_SONG_FLOW, 'saria_song_forward', door_of_time_forward),
+        (LINK_GORON_FLOW, 'link_goron_tunic', link_goron_gives_tunic),
+        (SAGE_OF_WATER_FLOW, 'serenade_forward', serenade_keeps_water_temple),
+        (DOOR_FLOW, 'door_song_before_escape', door_song_before_escape),
+        (ALL_SAGE_FLOW, 'revelation_forward', revelation_keeps_ganon_quest),
+    )

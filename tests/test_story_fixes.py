@@ -7,6 +7,7 @@ from unittest import mock
 from oot_rando.formats import byml_codec
 from oot_rando.formats.byml_writer import patch_strings
 from oot_rando.formats.inspect_resources import Byml
+from oot_rando.logic import rando_options
 from oot_rando.patching import story_fixes as s
 
 NUP = os.environ.get('OOT_NUP')
@@ -82,6 +83,28 @@ class KakarikoBurningUnits(unittest.TestCase):
             s.kakariko_burning_on_medallions(patched)
         with self.assertRaises(ValueError):    # a medallion flag missing
             s.kakariko_burning_on_medallions(self.gamedata(vanilla, s.KAKARIKO_MEDALS[:2]))
+
+
+class EscapeStoneUnits(unittest.TestCase):
+    def test_the_option_picks_the_stones_zelda_asks_for(self):
+        self.assertEqual(s.STONE_SETS['all'], ('Item_Stone_Forest', 'Item_Stone_Fire', 'Item_Stone_Water'))
+        self.assertEqual(s.STONE_SETS['vanilla'], ('Item_Stone_Fire', 'Item_Stone_Water'))   # the native check's
+        self.assertEqual(set(s.STONE_SETS), {v for v, _, _ in rando_options.BY_NAME['spiritual_stones'].values})
+        for value, stones in s.STONE_SETS.items():
+            self.assertEqual(s.escape_stones({'spiritual_stones': value}), stones)
+
+    def test_stored_options_without_the_option_ask_for_every_stone(self):
+        # Seeds made before the option (upstream's) asked for the three stones.
+        self.assertEqual(s.escape_stones({}), s.STONE_SETS['all'])
+        self.assertEqual(s.escape_stones(rando_options.recorded(rando_options.defaults())), s.STONE_SETS['all'])
+
+    def test_the_story_fixes_carry_the_chosen_stones(self):
+        for value, stones in s.STONE_SETS.items():
+            fixes = {key: fix for _, key, fix in s.flow_fixes(stones)}
+            for key in ('zelda_escape', 'zelda_talk_stones'):
+                self.assertEqual(fixes[key].keywords, {'stones': stones}, (value, key))
+        self.assertEqual([key for _, key, _ in s.flow_fixes(s.STONE_SETS['all'])],
+                         [key for _, key, _ in s.flow_fixes(s.STONE_SETS['vanilla'])])
 
 
 @unittest.skipUnless(NUP, 'OOT_NUP not set')
@@ -389,10 +412,19 @@ class GameFlows(unittest.TestCase):
         with self.assertRaises(ValueError):
             s.light_arrows_on_medallions(patched)
 
+    def for_each_stone_set(self, check):
+        for value, stones in s.STONE_SETS.items():
+            with self.subTest(spiritual_stones=value):
+                check(stones)
+
     def test_zelda_escape_on_stones_at_item_get(self):
+        self.for_each_stone_set(self.check_escape_at_item_get)
+
+    def check_escape_at_item_get(self, stones):
         from oot_rando.patching.qol_patches import ocarina_guide_on_get
         source = ocarina_guide_on_get(self.read(s.ACTION_GUIDE_FLOW))[0]
-        raw, _ = s.zelda_escape_on_item_get(source)
+        raw, report = s.zelda_escape_on_item_get(source, stones)
+        self.assertEqual(report['stones'], list(stones))
         events = self.chart(raw)
         started = events['RandoDoorStonesStarted'].data
         self.assertEqual(started.params.data, {'GameDataName': s.DOOR_STARTED})
@@ -404,7 +436,7 @@ class GameFlows(unittest.TestCase):
             self.assertEqual(params['Index'], -1)
             held.append(params['GameDataName'].removeprefix(s.STONE_FLAG_PREFIX))
             check = check.data.cases[0].v
-        self.assertEqual(held, list(s.STONES))
+        self.assertEqual(held, list(stones))
         native_step03 = self.chart(self.read(s.DOOR_FLOW))['Event37'].data.params.data
         self.assertEqual(check.data.params.data, native_step03)       # the native request, IsWaitEnd too
         bridge = check.data.nxt.v
@@ -413,25 +445,32 @@ class GameFlows(unittest.TestCase):
         self.check_kept(source, raw)
 
     def test_door_flow_send_off_and_native_check(self):
+        self.for_each_stone_set(self.check_door_flow)
+
+    def check_door_flow(self, stones):
         source = self.read(s.DOOR_FLOW)
-        raw, _ = s.zelda_escape_door_flow(source)
+        raw, _ = s.zelda_escape_door_flow(source, stones)
         events = self.chart(raw)
         guard = events['RandoDoorCheckForward'].data
         self.assertEqual(set(guard.cases), {1})                # Step03 reached: nothing
         # Dungeon end: the stones first, then the native dungeon check.
-        stones = guard.cases[1].v
-        self.assertEqual(stones.name, 'RandoDungeonEndStonesStarted')
-        self.assertEqual(stones.data.cases[1].v.name, 'Event38')          # send-off not done: native
-        check = stones.data.cases[0].v.data.cases[1].v                     # before Step03: the stones
+        dungeon_end = guard.cases[1].v
+        self.assertEqual(dungeon_end.name, 'RandoDungeonEndStonesStarted')
+        self.assertEqual(dungeon_end.data.cases[1].v.name, 'Event38')     # send-off not done: native
+        check = dungeon_end.data.cases[0].v.data.cases[1].v                # before Step03: the stones
         while check.name.startswith('RandoDungeonEndStonesStone'):
             self.assertEqual(check.data.cases[1].v.name, 'Event38')        # one missing: native
             check = check.data.cases[0].v
         self.assertEqual(check.data.params.data, events['Event37'].data.params.data)
         self.assertIsNone(events['RandoDungeonEndStonesCount'].data.nxt.v)  # Step03: native skipped
-        # 17/11: both dungeon quests done no longer give Step03 without the stones.
-        both = events['Event39'].data
-        self.assertEqual(both.params.data, {'GameDataName': 'Get_StoneOfWater_IsCompleted_Exp'})
-        self.assertEqual({k: v.v.name for k, v in both.cases.items()}, {1: 'Event147'})
+        self.assertEqual(sum(name.startswith('RandoSendOffStonesStone') for name in events), len(stones))
+        # The native check reads the Fire and Water quests alone (never the Kokiri Emerald)...
+        fire, both = events['Event38'], events['Event39']
+        self.assertEqual(fire.data.params.data, {'GameDataName': 'Get_StoneOfFire_IsCompleted_Exp'})
+        self.assertIs(fire.data.cases[0].v, both)
+        # ...and, 17/11: both dungeon quests done no longer give Step03 without the stones.
+        self.assertEqual(both.data.params.data, {'GameDataName': 'Get_StoneOfWater_IsCompleted_Exp'})
+        self.assertEqual({k: v.v.name for k, v in both.data.cases.items()}, {1: 'Event147'})
         started = events['Event7'].data.nxt.v.data             # after Step02 of the send-off
         self.assertEqual(started.params.data, {'GameDataName': s.FIRE_QUEST_STARTED})
         self.assertEqual(started.cases[1].v.name, 'Event62')   # fire quest moved only if not started
@@ -440,9 +479,12 @@ class GameFlows(unittest.TestCase):
         self.check_kept(source, raw)
 
     def test_zelda_escape_on_stones_at_zelda_talk(self):
+        self.for_each_stone_set(self.check_escape_at_zelda_talk)
+
+    def check_escape_at_zelda_talk(self, stones):
         # 17/11: the last stone got after the send-off; talking to Zelda checks them again.
         source, _ = s.door_of_time_forward(self.read(s.ZELDA_FLOW))
-        raw, report = s.zelda_escape_on_talk(source)
+        raw, report = s.zelda_escape_on_talk(source, stones)
         self.assertEqual(report['start'], 'RandoTalkStonesStarted')
         events = self.chart(raw)
         started = events['RandoTalkStonesStarted'].data
@@ -456,12 +498,12 @@ class GameFlows(unittest.TestCase):
             self.assertEqual(check.data.cases[1].v.name, 'Event99')           # one missing: vanilla talk
             held.append(check.data.params.data['GameDataName'].removeprefix(s.STONE_FLAG_PREFIX))
             check = check.data.cases[0].v
-        self.assertEqual(held, list(s.STONES))
+        self.assertEqual(held, list(stones))
         self.assertEqual(check.data.params.data, self.chart(self.read(s.DOOR_FLOW))['Event37'].data.params.data)
         self.assertEqual(events['RandoTalkStonesCount'].data.nxt.v.name, 'Event99')   # then the talk
         self.check_kept(source, raw)
         with self.assertRaises(ValueError):
-            s.zelda_escape_on_talk(raw)
+            s.zelda_escape_on_talk(raw, stones)
 
     def test_gohma_scene_skips_stone_menu_presentation(self):
         # 15/11: the first-stone menu presentation showed the stones, then none.
@@ -660,7 +702,7 @@ class GameFlows(unittest.TestCase):
         data = Byml(self.read(GAMEDATA)).root['Data']
         bools = {e['Hash'] for e in data['Bool']}
         exps = {e['Hash'] for e in data['BoolExp']}
-        stone_flags = tuple(s.STONE_FLAG_PREFIX + stone for stone in s.STONES)
+        stone_flags = tuple(s.STONE_FLAG_PREFIX + stone for stone in s.STONE_SETS['all'])
         for name in (s.DARUNIA_GIFT_PLAYED, s.TALON_AWAKE, s.SECOND_MALON, s.BRIDGE_CLOSED, s.CLOCK_FLAG,
                      s.LIGHT_ARROWS_PLAYED, s.PRELUDE_MEDAL) + stone_flags + s.LIGHT_ARROWS_MEDALS:
             self.assertIn(murmur3(name), bools, name)

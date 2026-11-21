@@ -194,14 +194,76 @@ class ZoraFountain(unittest.TestCase):
         files = {w.PEDESTAL_MODULE: w.pedestal_before_sages(raw(w.PEDESTAL_MODULE))}
         nodes = ainb.AINB.from_binary(files[w.PEDESTAL_MODULE]).as_dict()['Nodes']
         gate = nodes[1]['Parameters']['Inputs']['Bool']
-        self.assertEqual([(s['Node Index'], s['Output Index']) for s in gate[0]['Sources']], [(5, 1), (6, 2)])
-        # 20/11: a node only computes its flagged outputs; the gate's query list follows.
-        self.assertTrue(nodes[5]['Parameters']['Outputs']['Bool'][1]['Is Output'])
-        self.assertEqual(nodes[1]['Queries'], [5, 6])
-        self.assertEqual(nodes[1]['Plugs']['Generic'][0]['Node Index'], 5)
+        self.assertEqual([(s['Node Index'], s['Output Index']) for s in gate[0]['Sources']], [(2, 0), (6, 2)])
+        # First and later requests use complementary readings of the SAME output.
+        self.assertEqual(nodes[2]['Name'], 'InvBool.module')
+        self.assertEqual(nodes[2]['Queries'], [5])
+        self.assertEqual(nodes[2]['Parameters']['Inputs']['Bool'][0]['Node Index'], 5)
+        self.assertEqual(nodes[2]['Parameters']['Inputs']['Bool'][0]['Output Index'], 0)
+        self.assertTrue(nodes[2]['Parameters']['Outputs']['Bool'][0]['Is Output'])
+        self.assertEqual(nodes[2]['Plugs']['Generic'], [{'Node Index': 5, 'Name': 'BoolMulti'}])
+        self.assertEqual(nodes[1]['Queries'], [2, 6])
+        self.assertEqual(nodes[1]['Plugs']['Generic'][0]['Node Index'], 2)
         self.assertEqual(unflagged_links(nodes), [])
         with self.assertRaises(ValueError):    # never applied twice
             w.pedestal_before_sages(files[w.PEDESTAL_MODULE])
+
+    def test_child_pedestal_action_has_no_ready_step_gap(self):
+        """The prompt may exist while BOTH event requests are disabled at Ready."""
+        import ainb
+        source = self.nup.read(self.nup.latest('romfs/' + w.PEDESTAL_MODULE))
+        document = ainb.AINB.from_binary(w.pedestal_before_sages(source)).as_dict()
+        nodes = document['Nodes']
+        steps = quest_guard.challenge_steps(self.read(quest_guard.CHALLENGES))
+        orders = {name: ('NotReady',) + tuple(steps[name]) for name in ('AllSage', 'DoorOfTime')}
+        # The inserted inversion follows the game's own module call schema exactly.
+        adult = self.nup.read(self.nup.latest('romfs/Logic/Market_Adult_Prefab_89da.logic.module.ainb'))
+        native_inverse = ainb.AINB.from_binary(adult).as_dict()['Nodes'][1]
+        for key in ('Name', 'Flags', 'Attachments', 'Properties', 'XLink Actions'):
+            self.assertEqual(nodes[2][key], native_inverse[key])
+        self.assertEqual(nodes[2]['Parameters']['Outputs'], native_inverse['Parameters']['Outputs'])
+        self.assertEqual(document['Modules'], [{'Path': 'InvBool.module.ainb', 'Category': 'Logic', 'Instance Count': 1}])
+
+        def requests(sage_step, door_step, pressed, after=None):
+            current = {'AllSage': sage_step, 'DoorOfTime': door_step}
+            def output(index, position):
+                node = nodes[index]
+                field = node['Parameters']['Outputs']['Bool'][position]
+                if not field['Is Output']:
+                    return False
+                if node['Name'] == 'HoldChallengeCurrentStepCheckOrder':
+                    if index == 5 and after is not None:
+                        return after
+                    strings = {x['Name']: x['Default Value'] for x in node['Parameters']['Inputs']['String']}
+                    challenge = strings['ChallengeName'].split('/')[-1].split('.')[0]
+                    order = orders[challenge]
+                    a, b = order.index(current[challenge]), order.index(strings['ChallengeStepName'])
+                    return {'IsAfter': a > b, 'IsBefore': a < b, 'IsEqual': a == b}[field['Name']]
+                if node['Name'] == 'ActorLogicAttentionActor':
+                    self.assertEqual(field['Name'], 'ReceiveDoAction')
+                    return pressed
+                if node['Name'] == 'InvBool.module':
+                    source = node['Parameters']['Inputs']['Bool'][0]
+                    return not output(source['Node Index'], source['Output Index'])
+                self.assertEqual(node['Name'], 'OperateAND')
+                sources = node['Parameters']['Inputs']['Bool'][0]['Sources']
+                value = all(output(s['Node Index'], s['Output Index']) for s in sources)
+                return value if field['Name'] == 'True' else not value
+            triggers = [nodes[i]['Parameters']['Inputs']['Bool'][0] for i in (0, 3)]
+            return [output(x['Node Index'], x['Output Index']) for x in triggers]
+
+        # Ready is a real pre-first-arrival state, not "strictly before Ready".
+        self.assertEqual(requests('Ready', 'Step05', True), [True, False])
+        for step in orders['AllSage']:
+            for door in orders['DoorOfTime']:
+                with self.subTest(sages=step, door=door):
+                    self.assertEqual(sum(requests(step, door, True)), 1)
+                    self.assertEqual(requests(step, door, False), [False, False])
+        # Partition also holds for either actual engine result, including inactive
+        # quests where before/after comparisons need not be complementary.
+        for after in (False, True):
+            self.assertEqual(requests('NotReady', 'NotReady', True, after), [not after, after])
+            self.assertEqual(requests('NotReady', 'NotReady', False, after), [False, False])
 
     def test_all_openings_together(self):
         raw = lambda path: self.nup.read(self.nup.latest('romfs/' + path))

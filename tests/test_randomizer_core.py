@@ -5,7 +5,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from oot_rando.logic import rando_options
 from oot_rando.randomizer.randomizer_core import Settings, settings_identity, placements_for, generate, CHESTS
+
+# Identity of the settings below, made by the release before the ``spiritual_stones`` option (generator 0.12.0).
+BEFORE_SPIRITUAL_STONES = 'e8e5d7d3189491d841fbf79c3618318f456ea443a7755c5544c238466fc1df02'
+
+
+def full_settings(**options):
+    full = dict(rando_options.preset('ap_defaults'), shuffle_rocks=True, open_kakariko='open', **options)
+    return Settings.from_dict({'seed': 'golden-seed', 'randomize_chests': False, 'full': full})
 
 
 class SettingsTests(unittest.TestCase):
@@ -25,6 +34,26 @@ class SettingsTests(unittest.TestCase):
         self.assertNotEqual(settings_identity(a), settings_identity(Settings('text é 124')))
         self.assertNotEqual(settings_identity(a), settings_identity(Settings(a.seed, open_forest=False)))
         self.assertTrue(all(placements_for(a)[h] != old for h, old in CHESTS.items()))
+
+    def test_require_all_keeps_the_identity_of_seeds_made_before_the_option(self):
+        settings = full_settings()
+        self.assertEqual(settings.full['spiritual_stones'], 'all')
+        self.assertNotIn('spiritual_stones', settings.to_dict()['full'])
+        self.assertEqual(settings_identity(settings, generator_version='0.12.0'), BEFORE_SPIRITUAL_STONES)
+        stored = settings.to_dict()                 # what such a seed stored: no ``spiritual_stones``
+        restored = Settings.from_dict(json.loads(json.dumps(stored)))
+        self.assertEqual(restored.full['spiritual_stones'], 'all')
+        self.assertEqual(settings_identity(restored, generator_version='0.12.0'), BEFORE_SPIRITUAL_STONES)
+
+    def test_vanilla_stones_are_stored_and_make_another_seed(self):
+        vanilla = full_settings(spiritual_stones='vanilla')
+        self.assertEqual(vanilla.to_dict()['full']['spiritual_stones'], 'vanilla')
+        self.assertNotEqual(settings_identity(vanilla, generator_version='0.12.0'), BEFORE_SPIRITUAL_STONES)
+        restored = Settings.from_dict(json.loads(json.dumps(vanilla.to_dict())))
+        self.assertEqual(restored.full['spiritual_stones'], 'vanilla')
+        self.assertEqual(settings_identity(restored), settings_identity(vanilla))
+        with self.assertRaises(ValueError):
+            full_settings(spiritual_stones='emerald')
 
     def test_exclusions_and_disabled_randomization(self):
         ident = next(iter(CHESTS))
