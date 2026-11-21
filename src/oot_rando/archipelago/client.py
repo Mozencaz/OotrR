@@ -4,6 +4,8 @@ Sends the checks the tracker observes (save + running game) as ``LocationChecks`
 the goal as ``StatusUpdate``. Items of this game found in other worlds are handed to
 the running game one at a time (``archipelago.receive``: a Bool written in its memory
 starts the item get the mod prepared). Starting items are given by the mod itself.
+The server's messages and the connection's status also go to the in-game console
+(``archipelago.console_bridge``) of the running game, when it runs this seed.
 
 Protocol: https://github.com/ArchipelagoMW/Archipelago/blob/main/docs/network%20protocol.md
 The connection runs in one thread; ``update`` and ``say`` only queue work for it.
@@ -116,7 +118,8 @@ def render(parts, names):
 class ArchipelagoClient:
     """One connection to one slot. ``on_change()`` is called from the network thread."""
 
-    def __init__(self, manifest, address, password='', slot=None, on_change=None, connect=None, delivery=None):
+    def __init__(self, manifest, address, password='', slot=None, on_change=None, connect=None, delivery=None,
+                 console=None):
         self.slot_name, location_ids, self.seed_key = archipelago_info(manifest)
         if slot:
             self.slot_name = slot
@@ -148,6 +151,13 @@ class ArchipelagoClient:
             from oot_rando.archipelago.receive import LiveDelivery
             self.delivery = LiveDelivery(manifest)
         self._delivery_thread = None
+        # The in-game console's mailbox (None: not on this system, or no seed id; False: left out).
+        self.console = console or None
+        if console is None and __import__('os').name == 'nt' and manifest.get('seed_id'):
+            from oot_rando.archipelago.console_bridge import ConsoleMailbox
+            self.console = ConsoleMailbox(manifest['seed_id'][:16])
+        self._connecting = False
+        self._console_thread = None
 
     # --------------------------------------------------------------- public
     def start(self):
@@ -158,6 +168,10 @@ class ArchipelagoClient:
             self._delivery_thread = threading.Thread(target=self._deliver_loop, name='archipelago-items',
                                                      daemon=True)
             self._delivery_thread.start()
+        if self.console is not None and self._console_thread is None:
+            self._console_thread = threading.Thread(target=self._console_loop, name='archipelago-console',
+                                                    daemon=True)
+            self._console_thread.start()
 
     def stop(self):
         self._stop.set()
@@ -235,6 +249,31 @@ class ArchipelagoClient:
                         self._log(f'Handing over {record["item"]} (from {record["player"]}) in game...')
             self.on_change()
 
+    def console_status(self):
+        """(console_bridge STATUS_*, text) of the connection, for the in-game console."""
+        from oot_rando.archipelago import console_bridge as console
+        server = self.urls[0].split('://', 1)[-1]
+        if self._stop.is_set():
+            return console.STATUS_DISCONNECTED, ''
+        if self.connected:
+            return console.STATUS_CONNECTED, f'{server} as {self.slot_name}'
+        if self._connecting:
+            return console.STATUS_CONNECTING, f'{server} as {self.slot_name}'
+        return console.STATUS_DISCONNECTED, ''
+
+    def _console_loop(self):
+        """About once a second: the status, the new lines and the heartbeat into the game; a last
+        write when the client stops (its heartbeat then stops too)."""
+        while True:
+            stopping = self._stop.wait(1.0)
+            self.console.set_status(*self.console_status())
+            try:
+                self.console.step()
+            except Exception:  # noqa: BLE001 - never stop the client for the game side
+                pass
+            if stopping:
+                return
+
     # -------------------------------------------------------------- network
     def _run(self):
         while not self._stop.is_set():
@@ -282,7 +321,12 @@ class ArchipelagoClient:
         return socket
 
     def _session(self):
-        socket = self._open()
+        self._connecting = True
+        try:
+            socket = self._open()
+        except BaseException:
+            self._connecting = False
+            raise
         try:
             with self._lock:
                 self.reporter.reset_connection()
@@ -302,6 +346,7 @@ class ArchipelagoClient:
                 pass
             with self._lock:
                 self.connected = False
+                self._connecting = False
 
     def _send(self, socket, *packets):
         socket.send(json.dumps(list(packets)))
@@ -353,6 +398,7 @@ class ArchipelagoClient:
                 self.reporter.reset_connection(packet.get('checked_locations') or [])
                 self.received = []
                 self.connected = True
+                self._connecting = False
             self._set_status(f'Connected as {self.slot_name}'
                              + ('' if self.encrypted else ' (not encrypted)'), connected=True)
         elif cmd == 'ReceivedItems':
@@ -393,6 +439,11 @@ class ArchipelagoClient:
             if text:
                 with self._lock:
                     self._log(text)
+                if self.console is not None:
+                    from oot_rando.archipelago.console_bridge import classify
+                    kind = classify(packet, self.slot)
+                    if kind is not None:
+                        self.console.add(kind, text)
                 self.on_change()
         elif cmd == 'InvalidPacket':
             with self._lock:

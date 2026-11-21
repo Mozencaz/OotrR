@@ -6,16 +6,19 @@ from pathlib import Path
 import queue
 import secrets
 import threading
+import time
 import webbrowser
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 
 from oot_rando.randomizer.randomizer_core import Settings, CHECKS, GENERATOR_VERSION, generate
 from oot_rando.randomizer.randomizer_services import (read_artifact, generate_in_mods, qol_seed_warning,
-                                                      regeneration_settings, validate_mod_directory)
+                                                      regeneration_settings, validate_mod_directory,
+                                                      has_ingame_tracker, update_ingame_tracker)
 from oot_rando.randomizer.qol_install import install_qol
 from oot_rando.tracker.auto_tracker import TrackerSession, find_save_slots, newest_save
 from oot_rando.tracker import game_overlay
+from oot_rando.tracker.check_labels import check_labels
 from oot_rando.tracker import live_memory
 from oot_rando.randomizer import spoiler_report
 from oot_rando.randomizer import settings_string
@@ -308,6 +311,8 @@ class Application:
         self.nup.set(self.app_state.get('game_file') or '')
         self.mods.set(self.app_state.get('mods_dir') or default_mods_dir())
         self.nup.trace_add('write', lambda *args: self.write_app_state(game_file=self.nup.get()))
+        self.ingame_tracker = tk.BooleanVar(value=self.app_state.get('ingame_tracker', True))
+        self.ingame_tracker.trace_add('write', lambda *args: self.write_app_state(ingame_tracker=self.ingame_tracker.get()))
         self.mods.trace_add('write', lambda *args: self.write_app_state(mods_dir=self.mods.get()))
         self.check_updates = tk.BooleanVar(value=self.app_state.get('check_updates', True) is not False)
         self.check_updates.trace_add('write', lambda *args: self.write_app_state(check_updates=self.check_updates.get()))
@@ -326,6 +331,10 @@ class Application:
         self.ap_address = tk.StringVar(value=self.app_state.get('ap_address') or 'archipelago.gg:38281')
         self.ap_password, self.ap_slot, self.ap_chat = tk.StringVar(), tk.StringVar(), tk.StringVar()
         self.ap_status = tk.StringVar(value='Open a seed generated from an Archipelago patch to connect.')
+        # Connecting by itself (archipelago.json): paused after a manual disconnect or a fatal error until
+        # the seed is opened again or the box ticked again; the probe looks for the game running this seed.
+        self.ap_auto = tk.BooleanVar(value=False)
+        self.ap_folder, self.ap_auto_paused, self.ap_probe, self.ap_probing, self.ap_probe_at = None, False, None, False, 0.0
         self.slot = tk.StringVar(value='My game')
         self.status = tk.StringVar(value='Choose your game, then prepare your run.')
         self.result = tk.StringVar(value='No seed open. Generate a game or open an existing folder.')
@@ -515,6 +524,7 @@ class Application:
         row = self.buttons(box, pady=(5, 12))
         ttk.Entry(row, textvariable=self.slot, width=22).pack(side='left')
         ttk.Button(row, text='Reload the tracker', command=self.load_tracker).pack(side='left', padx=(8, 0))
+        ttk.Button(row, text='Update the in-game tracker', command=self.update_seed_tracker).pack(side='left', padx=(8, 0))
         ttk.Label(box, textvariable=self.connection_status, style='Small.TLabel', wraplength=780).pack(anchor='w')
         ttk.Label(box, textvariable=self.turbo_status, style='Small.TLabel').pack(anchor='w')
         box = self.card(parent, 'Application updates', f'Installed version: {APP_VERSION}'
@@ -782,6 +792,12 @@ class Application:
                     self.option_row(rows, index, visible[name])
         self.card(details, 'Always on', 'Skippable cutscenes (hold X, or Plus), chests without cutscene, '
                                        'turbo A (hold A in a dialogue).')
+        box = self.card(details, 'In-game tracker')
+        rows = ttk.Frame(box)
+        rows.pack(fill='x')
+        rows.columnconfigure(0, weight=1)
+        self.switch_row(rows, 0, 'In-game tracker: R + right stick up shows the items and checks found (GPL-3 module, '
+                        'runs only while this seed is enabled)', self.ingame_tracker)
         box = self.card(details, 'Share these settings')
         row = self.buttons(box)
         ttk.Button(row, text='Import…', command=self.import_settings).pack(side='left')
@@ -961,6 +977,8 @@ class Application:
             ttk.Entry(field, textvariable=variable, width=width, **extra).pack(fill='x', pady=(5, 0))
         self.ap_button = ttk.Button(row, text='Connect', style='Accent.TButton', command=self.toggle_archipelago)
         self.ap_button.pack(side='left', anchor='s')
+        ttk.Checkbutton(body, text='Connect automatically when the game runs this seed (kept in the seed folder)',
+                        variable=self.ap_auto, command=self.toggle_archipelago_auto).pack(anchor='w', pady=(10, 0))
         ttk.Label(body, textvariable=self.ap_status, style='Small.TLabel', wraplength=640).pack(anchor='w', pady=(10, 8))
         self.ap_log = tk.Text(body, height=8, wrap='word', state='disabled', padx=12, pady=10)
         self.ap_log.pack(fill='x')
@@ -987,6 +1005,9 @@ class Application:
         """A seed was opened: the client follows it only when it comes from an Archipelago patch."""
         from oot_rando.archipelago.client import ClientError, archipelago_info
         self.stop_archipelago()
+        from oot_rando.archipelago import autoconnect
+        self.ap_folder, self.ap_auto_paused, self.ap_probe = None, False, None
+        self.ap_auto.set(False)
         try:
             slot, _, _ = archipelago_info(manifest)
             self.ap_manifest = manifest
@@ -995,13 +1016,65 @@ class Application:
         except ClientError as error:
             self.ap_manifest = None
             self.ap_status.set(str(error))
+        if self.ap_manifest and self.artifact:
+            self.ap_folder = self.artifact
+            saved = autoconnect.read(self.ap_folder)
+            if saved:
+                for variable, name in ((self.ap_address, 'server'), (self.ap_slot, 'slot')):
+                    if saved[name]:
+                        variable.set(saved[name])
+                self.ap_password.set(saved['password'])
+                self.ap_auto.set(saved['auto_connect'])
+            if os.name == 'nt':
+                from oot_rando.archipelago.console_bridge import ConsoleMailbox
+                self.ap_probe = ConsoleMailbox(manifest['seed_id'][:16])
+            if self.ap_auto.get():
+                self.ap_status.set('Connects automatically when the game runs this seed.')
         self.update_archipelago_controls()
+
+    def save_archipelago_connection(self):
+        """The page's fields into the seed's archipelago.json (the password is never shown in a message)."""
+        from oot_rando.archipelago import autoconnect
+        if not self.ap_folder:
+            return
+        try:
+            autoconnect.write(self.ap_folder, self.ap_address.get(), self.ap_slot.get(), self.ap_password.get(),
+                              self.ap_auto.get())
+        except OSError as error:
+            self.ap_status.set(f'{autoconnect.FILE_NAME} could not be written in the seed folder ({error.strerror}).')
+
+    def toggle_archipelago_auto(self):
+        if not self.ap_folder:
+            self.ap_auto.set(False)
+            return
+        self.ap_auto_paused = False
+        self.save_archipelago_connection()
+        if self.ap_auto.get() and not self.ap_client:
+            self.ap_status.set('Connects automatically when the game runs this seed.')
+
+    def auto_connect_archipelago(self):
+        """Every 5 s while it may: is the game running this seed (its console's mailbox says so)? Off the
+        Tk thread: finding the game scans the processes."""
+        if (not self.ap_auto.get() or not self.ap_manifest or not self.ap_probe or self.ap_client
+                or self.ap_auto_paused or self.ap_probing or time.monotonic() < self.ap_probe_at):
+            return
+        self.ap_probe_at, self.ap_probing, probe = time.monotonic() + 5, True, self.ap_probe
+
+        def run():
+            try:
+                found = probe.running_seed()
+            except Exception:  # noqa: BLE001 - the next probe tries again
+                found = False
+            self.events.put(('ap-seed-running', (probe, found)))
+        threading.Thread(target=run, name='archipelago-probe', daemon=True).start()
 
     def toggle_archipelago(self):
         from oot_rando.archipelago.client import ArchipelagoClient, ClientError
         if self.ap_client:
             self.stop_archipelago()
-            self.ap_status.set('Disconnected.')
+            self.ap_auto_paused = True
+            self.ap_status.set('Disconnected.' + (' Automatic connection paused until the seed is opened again.'
+                                                  if self.ap_auto.get() else ''))
             return
         if not self.ap_manifest:
             return
@@ -1013,6 +1086,8 @@ class Application:
             self.ap_status.set(str(error))
             return
         self.write_app_state(ap_address=self.ap_address.get().strip())
+        if self.ap_auto.get():
+            self.save_archipelago_connection()
         self.ap_client, self.ap_log_seen = client, 0
         self.ap_log.configure(state='normal')
         self.ap_log.delete('1.0', 'end')
@@ -1045,6 +1120,8 @@ class Application:
                 text += f' • in game: {info["delivery"]}'
         if info['goal']:
             text += ' • goal sent'
+        if client.console is not None and info['connected']:
+            text += ' • in-game console: ' + client.console.state
         self.ap_status.set(text)
         lines, count = list(client.log), client.log_count
         new = lines[max(0, len(lines) - (count - self.ap_log_seen)):]
@@ -1057,6 +1134,7 @@ class Application:
             self.ap_log.configure(state='disabled')
         if client.fatal:
             self.ap_client = None
+            self.ap_auto_paused = True
             self.update_archipelago_controls()
 
     # ------------------------------------------------------- app state
@@ -1155,6 +1233,7 @@ class Application:
             self.refresh_tracker()
         if self.turbo and self.turbo.last_hold:
             self.turbo_status.set(self.turbo.status + ' — last: ' + self.turbo.last_hold)
+        self.auto_connect_archipelago()
         self.root.after(1000, self.tracker_tick)   # live memory: ~1 s; the save path is cheap to stat
 
     def refresh_tracker(self):
@@ -1323,9 +1402,11 @@ class Application:
             if not nup.is_file():
                 raise ValueError('Select the local NUP file.')
             mods = validate_mod_directory(self.mods.get())
+            ingame_tracker = self.ingame_tracker.get()
 
             def job(progress):
-                installed = generate_in_mods(nup, mods, settings, progress, archive=ARCHIVE, generate=generate)
+                installed = generate_in_mods(nup, mods, settings, progress, archive=ARCHIVE, generate=generate,
+                                             ingame_tracker=ingame_tracker)
                 return installed, installed
             self.run_job(job, self.generated_and_installed)
         except Exception as error:
@@ -1438,8 +1519,10 @@ class Application:
             if not nup.is_file():
                 raise ValueError('Select the local NUP file.')
             mods = validate_mod_directory(self.mods.get())
+            ingame_tracker = self.ingame_tracker.get()
             def job(progress):
-                installed = generate_in_mods(nup, mods, settings, progress, archive=ARCHIVE, generate=generate)
+                installed = generate_in_mods(nup, mods, settings, progress, archive=ARCHIVE, generate=generate,
+                                             ingame_tracker=ingame_tracker)
                 return installed, installed
             self.run_job(job, self.generated_and_installed)
         except Exception as error:
@@ -1745,6 +1828,28 @@ class Application:
         except Exception as error:
             self.error(error)
 
+    def update_seed_tracker(self):
+        """Give the open seed this version's in-game tracker (its data file and module, and the icons from the game
+        file when it's set; nothing else)."""
+        if not self.artifact:
+            self.status.set('Open a seed first.')
+            return
+        try:
+            manifest, _ = read_artifact(self.artifact)
+            add = not has_ingame_tracker(manifest)
+            if add and not messagebox.askyesno('In-game tracker', 'This seed was made without the in-game tracker. Add it?'):
+                return
+            directory, nup = self.artifact, Path(self.nup.get())
+            nup = nup if self.nup.get() and nup.is_file() else None   # the icons come from the game, when it's set
+            self.run_job(lambda progress: update_ingame_tracker(directory, add=add, nup=nup), self.ingame_tracker_updated)
+        except Exception as error:
+            self.error(error)
+
+    def ingame_tracker_updated(self, written):
+        self.status.set('In-game tracker updated (' + ', '.join(written) + '): it applies the next time the game starts.'
+                        if written else 'The in-game tracker is already up to date.')
+        self.load_tracker()
+
     def render_tracker(self):
         if not hasattr(self, 'tracker_rows') or not hasattr(self, 'home_list'):
             return
@@ -1797,12 +1902,11 @@ class Application:
             tree.configure(yscrollcommand=scrollbar.set)
             scrollbar.pack(side='right', fill='y')
             tree.pack(side='left', fill='both', expand=True)
-            zones, visible, region_numbers = {}, 0, {}
+            zones, visible, labels = {}, 0, check_labels(self.current_checks)
             for check in self.current_checks:
                 state = states[check['id']]
                 completed, access = state.get('completed', False), state.get('access', 'unknown')
                 region = check.get('region') or 'Other'
-                region_numbers[region] = region_numbers.get(region, 0) + 1
                 bucket = 'done' if completed else 'available' if access == 'available' else 'blocked'
                 if self.tracker_filter != 'all' and bucket != self.tracker_filter:
                     continue
@@ -1810,7 +1914,7 @@ class Application:
                     continue
                 if not completed and access == 'blocked' and not self.show_blocked.get():
                     continue
-                name = check['name'] if check.get('category') != 'world_chests' else f'Chest {region_numbers[region]}'
+                name = labels[check['id']]
                 reward = state.get('reward', '') if completed else ''
                 kind = TRACKER_KINDS.get(check.get('category', ''), check.get('category', ''))
                 if query and query not in (region + ' ' + name + ' ' + kind + ' ' + reward).casefold():
@@ -2130,6 +2234,12 @@ class Application:
                         messagebox.showerror('Update', str(payload[0]))
                 elif kind == 'ap-change':
                     self.render_archipelago()
+                elif kind == 'ap-seed-running':
+                    probe, found = payload
+                    self.ap_probing = False
+                    if (found and probe is self.ap_probe and self.ap_auto.get() and not self.ap_client
+                            and not self.ap_auto_paused):
+                        self.toggle_archipelago()
                 elif kind == 'progress':
                     self.status.set(payload)
                     self.log.configure(state='normal')

@@ -11,6 +11,8 @@ PKG = SRC / 'oot_rando'
 
 datas = [
     (str(PKG / 'logic' / 'world'), 'oot_rando/logic/world'),
+    # Prebuilt in-game tracker module (GPL-3, with its licence and source link), copied into each seed.
+    (str(PKG / 'resources' / 'ingame_tracker'), 'oot_rando/resources/ingame_tracker'),
     # Title screen badge image (patching/title_badge.py).
     (str(PKG / 'patching' / 'title_badge.rgba.zlib'), 'oot_rando/patching'),
     # Icon extraction: in process (Pillow and texture2ddecoder are bundled), or by path with

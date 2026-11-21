@@ -1,12 +1,28 @@
 """Local artifact verification, conservative installation and manual tracker storage."""
+import copy
 import hashlib
 import json
+import os
 import shutil
+import tempfile
 from pathlib import Path, PurePosixPath
 
 from oot_rando.randomizer.randomizer_core import Settings, settings_identity
 from oot_rando.patching.randomize_kokiri import TITLE, BUILD
 from oot_rando.pc_port import is_port_folder
+from oot_rando.tracker import check_places, ingame_bundle, ingame_format, ingame_icons
+from oot_rando.tracker.ingame_bundle import MODULE_FILE, SEED_FILE
+from oot_rando.tracker.ingame_icons import ICON_FILE
+
+
+def _verify_exefs(directory, manifest):
+    """Check the code modules the seed ships (``exefs/<name>``) against the manifest."""
+    for name, info in (manifest.get('exefs') or {}).items():
+        if name != MODULE_FILE:
+            raise ValueError('Unknown code module: ' + name)
+        data = (directory / 'exefs' / name).read_bytes()
+        if len(data) != info['size'] or hashlib.sha256(data).hexdigest() != info['sha256']:
+            raise ValueError('Modified or incomplete code module: ' + name)
 
 
 # (generator_version, adapter_version) of the seeds this version still opens.
@@ -64,6 +80,7 @@ def read_artifact(directory):
         data = seed_original(directory, name, data)
         if len(data) != info['size'] or hashlib.sha256(data).hexdigest() != info['sha256']:
             raise ValueError('Modified or incomplete resource: ' + name)
+    _verify_exefs(directory, manifest)
     checks = json.loads((directory / 'checks.json').read_text(encoding='utf-8'))
     if checks.get('seed_id') != manifest['seed_id']:
         raise ValueError('The check catalogue belongs to another seed.')
@@ -189,12 +206,8 @@ def _move_to_archive(directory, archive, suffix):
     return target
 
 
-def continued_save(title_directory, settings):
-    """Seed id that saves of the same Archipelago slot are bound to, from a seed installed
-    in ``title_directory``, or None.
-
-    A newer version of the application gives the same patch a new seed id. The placements
-    come from the patch, so the new seed keeps the old binding and those saves go on."""
+def _same_slot_seed(title_directory, settings):
+    """(folder, manifest) of a seed installed in ``title_directory`` from the same Archipelago patch, or None."""
     if settings.archipelago is None or not Path(title_directory).is_dir():
         return None
     patch = settings.to_dict()['archipelago']
@@ -203,8 +216,28 @@ def continued_save(title_directory, settings):
             continue
         manifest = json.loads((other / 'manifest.json').read_text(encoding='utf-8'))
         if manifest.get('settings', {}).get('archipelago') == patch:
-            return manifest.get('save_seed_id') or manifest['seed_id']
+            return other, manifest
     return None
+
+
+def continued_save(title_directory, settings):
+    """Seed id that saves of the same Archipelago slot are bound to, from a seed installed
+    in ``title_directory``, or None.
+
+    A newer version of the application gives the same patch a new seed id. The placements
+    come from the patch, so the new seed keeps the old binding and those saves go on."""
+    found = _same_slot_seed(title_directory, settings)
+    return (found[1].get('save_seed_id') or found[1]['seed_id']) if found else None
+
+
+def _connection_file(destination, title_directory, settings):
+    """The ``archipelago.json`` a seed generated again keeps: the replaced copy's, else that of the
+    seed of the same slot it replaces (bytes, or None)."""
+    from oot_rando.archipelago import autoconnect
+    if destination.exists():
+        return autoconnect.raw(destination)
+    found = _same_slot_seed(title_directory, settings)
+    return autoconnect.raw(found[0]) if found else None
 
 
 def saves_origin(title_directory, destination, settings):
@@ -241,7 +274,8 @@ def _manifest(directory):
     return manifest if isinstance(manifest, dict) else {}
 
 
-def generate_in_mods(nup, title_directory, settings, progress=None, archive=None, generate=None):
+def generate_in_mods(nup, title_directory, settings, progress=None, archive=None, generate=None,
+                     ingame_tracker=True):
     """Generate a seed straight into the mods folder (no separate output folder).
 
     The seed folder ``OoT_Randomizer_<id>`` is written in ``title_directory``. It is
@@ -250,7 +284,9 @@ def generate_in_mods(nup, title_directory, settings, progress=None, archive=None
     to ``archive`` first (never deleted). Earlier seeds of this application are then
     archived too. A seed sharing resources with another mod is moved to the archive
     and installation stops. An Archipelago seed keeps the saves of the seed of the same
-    slot it replaces (:func:`continued_save`). Returns the seed folder.
+    slot it replaces (:func:`continued_save`), and its ``archipelago.json`` (how to connect,
+    ``archipelago.autoconnect``). ``ingame_tracker=False`` leaves the in-game
+    tracker module and its data out of the seed. Returns the seed folder.
     """
     if generate is None:
         from oot_rando.randomizer.randomizer_core import generate
@@ -259,8 +295,11 @@ def generate_in_mods(nup, title_directory, settings, progress=None, archive=None
     name = 'OoT_Randomizer_' + settings_identity(settings)[:16]
     destination = title_directory / name
     save_seed_id = continued_save(title_directory, settings)
+    connection = _connection_file(destination, title_directory, settings)
     origin = saves_origin(title_directory, destination, settings)
     options = {'saves_from': origin} if origin else {}
+    if not ingame_tracker:
+        options['ingame_tracker'] = False
     if destination.exists():
         if archive is None or not is_randomizer_seed(destination):
             raise ValueError('Folder ' + name + ' already exists in the mods.')
@@ -278,6 +317,10 @@ def generate_in_mods(nup, title_directory, settings, progress=None, archive=None
             _move_to_archive(destination, Path(archive), '')
         raise ValueError('Resources shared with: ' + ', '.join(conflicts)
                          + '. Move these mods out of the title folder, then generate again.')
+    if connection is not None:
+        from oot_rando.archipelago.autoconnect import FILE_NAME
+        if not (destination / FILE_NAME).exists():
+            (destination / FILE_NAME).write_bytes(connection)
     if archive is not None:
         archive_previous_seeds(title_directory, Path(archive), keep=name)
     warning = qol_seed_warning(title_directory)
@@ -295,6 +338,131 @@ def qol_seed_warning(title_directory):
         return (QOL_FOLDER + " is installed in this mods folder. Turn it off in your emulator's add-ons, "
                 'or move it out of the mods folder, while playing this seed.')
     return None
+
+
+def has_ingame_tracker(manifest):
+    return SEED_FILE in manifest['files'] or MODULE_FILE in (manifest.get('exefs') or {})
+
+
+def _replace_files(directory, contents):
+    """Put ``contents`` ({relative path: bytes}) in ``directory``, in order: all staged first, then each
+    moved into place; if a move fails, the files already moved are put back."""
+    with tempfile.TemporaryDirectory(prefix='.oot-tracker-', dir=directory) as temporary:
+        stage, staged, created, moved = Path(temporary), [], [], []
+        for index, (relative, data) in enumerate(contents.items()):
+            (stage / f'new-{index}').write_bytes(data)
+            staged.append((directory / relative, stage / f'new-{index}', stage / f'old-{index}'))
+        try:
+            for target, new, old in staged:
+                for folder in reversed(target.parents):
+                    if folder.is_relative_to(directory) and not folder.exists():
+                        folder.mkdir()
+                        created.append(folder)
+                backup = None
+                if target.exists():
+                    os.replace(target, old)
+                    backup = old
+                moved.append((target, backup))
+                os.replace(new, target)
+        except OSError as error:
+            for target, backup in reversed(moved):
+                if backup is not None:
+                    os.replace(backup, target)
+                else:
+                    target.unlink(missing_ok=True)
+            for folder in reversed(created):
+                folder.rmdir()
+            if isinstance(error, PermissionError):
+                raise ValueError('A file of the seed is in use: close the game, then update the in-game tracker again.') from error
+            raise
+
+
+def update_ingame_tracker(directory, add=False, nup=None):
+    """Bring a seed's in-game tracker to this version of the application: ``romfs/RandoTracker/seed.trk``,
+    ``exefs/subsdk7`` and their entries in ``manifest.json``; with the game's ``nup``, the items' icons too
+    (``romfs/RandoTracker/icons.bin``) and where the checks are in its maps (without it, the seed file keeps the
+    places it has). Nothing else in the folder changes. A seed made without the tracker gets it only with ``add``.
+    Returns the files written (none when already up to date)."""
+    directory = Path(directory).resolve()
+    if not (directory / 'manifest.json').is_file():
+        raise ValueError('Not a seed folder (no manifest.json): ' + str(directory))
+    raw = (directory / 'manifest.json').read_bytes()
+    try:
+        manifest, catalogue = read_artifact(directory)
+    except (OSError, KeyError, TypeError) as error:
+        raise ValueError('This seed folder is damaged or incomplete (' + str(error) + '): generate it again.') from error
+    if not manifest.get('tracking'):
+        raise ValueError('This seed has no tracking data, so it can\'t have the in-game tracker: generate it again.')
+    if not has_ingame_tracker(manifest) and not add:
+        raise ValueError('This seed was made without the in-game tracker. Ask to add it to update it.')
+    tracking = json.loads((directory / 'tracking.json').read_bytes())
+    ids = [check['id'] for check in catalogue['checks']]
+    icons, places = _from_game(nup, ids) if nup is not None else (None, _seed_places(directory))
+    updated, files, exefs = copy.deepcopy(manifest), {}, {}
+    try:
+        ingame_bundle.attach(updated, files, exefs, catalogue['checks'], tracking, icons, _key_actors(directory),
+                             places)
+    except (KeyError, TypeError) as error:
+        raise ValueError('This seed\'s tracking data is too old for the in-game tracker: generate it again.') from error
+    contents = {}
+    written = [(Path('romfs', name), files[name]) for name in (SEED_FILE, ICON_FILE) if name in files]
+    for relative, data in written + [(Path('exefs', MODULE_FILE), exefs[MODULE_FILE])]:
+        path = directory / relative
+        if not path.is_file() or path.read_bytes() != data:
+            contents[relative] = data
+    if updated != manifest:
+        newline = '\r\n' if b'\r\n' in raw else '\n'
+        text = json.dumps(updated, ensure_ascii=False, indent=2).replace('\n', newline)
+        contents[Path('manifest.json')] = text.encode('utf-8')
+    if contents:
+        _replace_files(directory, contents)
+        read_artifact(directory)
+    return [relative.as_posix() for relative in contents]
+
+
+def _key_actors(directory):
+    """The key ring and boss key actors a seed folder adds (``romfs/Pack/Actor/Item_KeyRing_*``…)."""
+    folder = Path(directory) / 'romfs' / 'Pack' / 'Actor'
+    return {path.name.split('.')[0] for pattern in ('Item_KeyRing_*.pack.zs', 'Item_BossKey_*.pack.zs')
+            for path in folder.glob(pattern)} if folder.is_dir() else set()
+
+
+def _from_game(nup, check_ids):
+    """From the game file at ``nup`` (a path): icons.bin (None if it has none of the icons), and where the checks
+    are in its maps (check_places.places)."""
+    from oot_rando.formats.inspect_nup import Nup
+    from oot_rando.formats.inspect_resources import dictionaries
+    try:
+        game = Nup(nup)
+    except OSError as error:
+        raise ValueError('Can\'t read the game file: ' + str(error)) from error
+    try:
+        dicts = dictionaries(game)
+        maps = check_places.nup_maps(game, dicts, check_places.folders(check_ids))
+        return ingame_icons.nup_icons(game, dicts), check_places.places(check_ids, maps)
+    finally:
+        game.stream.close()
+
+
+def _seed_places(directory):
+    """The places the seed's seed.trk has (none if it is older than version 4, or unreadable)."""
+    path = Path(directory) / 'romfs' / SEED_FILE
+    try:
+        return ingame_format.places_by_id(path.read_bytes()) if path.is_file() else {}
+    except ValueError:
+        return {}
+
+
+def update_ingame_trackers(folder, add=False, nup=None):
+    """:func:`update_ingame_tracker` on a seed folder, or on each seed of this application in a mods folder.
+    Returns ``[(seed folder, files written)]``."""
+    folder = Path(folder)
+    if (folder / 'manifest.json').is_file():
+        return [(folder, update_ingame_tracker(folder, add, nup))]
+    seeds = sorted(other for other in folder.iterdir() if is_randomizer_seed(other)) if folder.is_dir() else []
+    if not seeds:
+        raise ValueError('Neither a seed folder (no manifest.json) nor a mods folder holding a seed: ' + str(folder))
+    return [(seed, update_ingame_tracker(seed, add, nup)) for seed in seeds]
 
 
 class ManualTracker:
