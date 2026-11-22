@@ -76,7 +76,7 @@ class WithGame(unittest.TestCase):
         import ainb
         from oot_rando.patching.ap_mailbox import MAIN_UPDATE, patch_main_update, records
         items = records(self.REMOTE)
-        nodes = ainb.AINB.from_binary(patch_main_update(self.read(MAIN_UPDATE, False), items)).as_dict()['Nodes']
+        nodes = ainb.AINB.from_binary(patch_main_update(self.read(MAIN_UPDATE, False), items, dispatch=False)).as_dict()['Nodes']
         group = nodes[nodes[0]['Plugs']['Child'][-1]['Node Index']]   # one group: 2 watchers
         self.assertEqual(group['Node Type'], 'Element_Simultaneous')
         for index, record in enumerate(items):
@@ -136,10 +136,66 @@ class WithGame(unittest.TestCase):
         items = records([{'item': 'Rupees (5)', 'location': f'L{i}', 'player': 'Ami'} for i in range(300)])
         raw = self.read(MAIN_UPDATE, False)
         root_before = len(ainb.AINB.from_binary(raw).as_dict()['Nodes'][0]['Plugs']['Child'])
-        nodes = ainb.AINB.from_binary(patch_main_update(raw, items)).as_dict()['Nodes']
+        nodes = ainb.AINB.from_binary(patch_main_update(raw, items, dispatch=False)).as_dict()['Nodes']
         groups = -(-300 // WATCHER_GROUP)
         self.assertEqual(len(nodes[0]['Plugs']['Child']), root_before + groups)
         self.assertTrue(all(len(n['Plugs'].get('Child', [])) <= 255 for n in nodes))
+
+    def test_large_mailbox_has_bounded_global_sequence(self):
+        import ainb
+        from oot_rando.patching.ap_mailbox import MAIN_UPDATE, patch_main_update, records
+        raw = self.read(MAIN_UPDATE, False)
+        baseline = len(ainb.AINB.from_binary(raw).as_dict()['Nodes'])
+        items = records([{'item': 'Rupees (5)', 'location': f'L{i}', 'player': 'Ami'}
+                         for i in range(300)])
+        nodes = ainb.AINB.from_binary(patch_main_update(raw, items, dispatch=True)).as_dict()['Nodes']
+        self.assertLessEqual(len(nodes) - baseline, 8,
+                             'Remote item count must not expand the per-frame sequence')
+
+    def test_dispatch_routes_last_item_once_and_lists_every_dependency(self):
+        from oot_rando.patching import ap_mailbox
+        from oot_rando.patching.event_patch import _flow
+        from oot_rando.patching.event_info import closure, flow_path
+        from oot_rando.formats.byml_codec import load
+        remote = [{'item': 'Rupees (5)', 'location': f'L{i}', 'player': 'Ami'} for i in range(300)]
+        remote[-1]['item'] = 'Ocarina'
+        items = ap_mailbox.records(remote)
+        flow = ap_mailbox.add_entries(self.read(ap_mailbox.FLOW_PATH), items, dispatch=True)
+        chart = _flow(flow).flowchart
+        entry = next(e for e in chart.entry_points if e.name == ap_mailbox.DISPATCH)
+        target = items[-1]
+
+        def dispatch(held):
+            flags = {target['recv']: True, target['got']: held}
+            event = entry.main_event.v
+            calls = []
+            while event is not None:
+                data = event.data
+                if hasattr(data, 'cases'):
+                    branch = 0 if flags.get(data.params.data['GameDataName'], False) else 1
+                    edge = data.cases.get(branch)
+                    event = edge.v if edge is not None else None
+                elif hasattr(data, 'entry_point_name'):
+                    calls.append(data.entry_point_name)
+                    event = data.nxt.v
+                else:
+                    flags[data.params.data['GameDataName']] = data.params.data['Value']
+                    event = data.nxt.v
+            self.assertFalse(flags[target['recv']])
+            return calls
+
+        self.assertEqual(dispatch(False), [target['event']])
+        self.assertEqual(dispatch(True), [])
+        settings = load(ap_mailbox.add_event_rows(self.read(ap_mailbox.EVENT_SETTINGS), items, dispatch=True))['root']
+        self.assertEqual([r['__RowId'] for r in settings if r['__RowId'].startswith(ap_mailbox.PREFIX)],
+                         [ap_mailbox.DISPATCH])
+        current = lambda name: flow if name == ap_mailbox.FLOW else (
+            self.read(flow_path(name)) if flow_path(name) in self.m else None)
+        info, report = ap_mailbox.add_analyzed_rows(self.read(ap_mailbox.ANALYZED), items, current, dispatch=True)
+        row = next(r for r in load(info)['root'] if r['__RowId'] == ap_mailbox.DISPATCH)
+        expected = closure({(ap_mailbox.FLOW, target['event'])}, current) - {ap_mailbox.FLOW}
+        self.assertTrue(expected <= set(row['SubFlowList']))
+        self.assertIn('GetPouchContent', report['subflows'])
 
     def test_entries_and_rows(self):
         from oot_rando.formats.inspect_resources import Byml

@@ -89,9 +89,9 @@ class EscapeStoneUnits(unittest.TestCase):
     def test_the_option_picks_the_stones_zelda_asks_for(self):
         self.assertEqual(s.STONE_SETS['all'], ('Item_Stone_Forest', 'Item_Stone_Fire', 'Item_Stone_Water'))
         self.assertEqual(s.STONE_SETS['vanilla'], ('Item_Stone_Fire', 'Item_Stone_Water'))   # the native check's
-        self.assertEqual(set(s.STONE_SETS), {v for v, _, _ in rando_options.BY_NAME['spiritual_stones'].values})
+        self.assertEqual(set(s.STONE_SETS), set(rando_options.BY_NAME['door_of_time_requirement'].allowed()))
         for value, stones in s.STONE_SETS.items():
-            self.assertEqual(s.escape_stones({'spiritual_stones': value}), stones)
+            self.assertEqual(s.escape_stones({'spiritual_stones': 'door', 'door_of_time_requirement': value}), stones)
 
     def test_stored_options_without_the_option_ask_for_every_stone(self):
         # Seeds made before the option (upstream's) asked for the three stones.
@@ -756,6 +756,49 @@ class GameFlows(unittest.TestCase):
         self.assertEqual(unflagged_links(nodes), [])
         with self.assertRaises(ValueError):
             s.water_gate_for_adult(raw)
+
+    def test_bombchu_shop_ignores_the_fire_stone_quest(self):
+        from test_world_openings import unflagged_links
+        raw, _ = s.bombchu_shop_open_from_start(self.module(s.BOMBCHU_SHOP_MODULE))
+        nodes = self.nodes(raw)
+        door = {(n['Node Index'], n['Output Index']) for n in nodes[3]['Parameters']['Inputs']['Bool']
+                if 'Node Index' in n and n['Name'] in ('EnableDo', 'EnableOpen')}
+        self.assertEqual(door, {(4, 1), (0, 1)})
+        for node, time in ((0, (2, 1)), (4, (5, 1))):
+            sources = [(x['Node Index'], x['Output Index']) for x in nodes[node]['Parameters']['Inputs']['Bool'][0]['Sources']]
+            self.assertEqual(sources, [time, time])
+        self.assertEqual(s._links_to(nodes, 1), [])
+        self.assertEqual(unflagged_links(nodes), [])
+        with self.assertRaises(ValueError):
+            s.bombchu_shop_open_from_start(raw)
+
+    def test_bombchu_shop_vendor_music_and_closed_sign_before_dodongo(self):
+        import copy
+        for path, targets in s.BOMBCHU_SHOP_ACTORS.items():
+            source = self.read(path)
+            original = Byml(source).root
+            edits, report = s.bombchu_shop_actor_edits(original, path)
+            patched = Byml(patch_strings(source, edits)).root
+            expected = copy.deepcopy(original)
+            self.assertEqual(len(report['actors']), len(targets))
+            for index, (ident, gyaml, negated) in zip(report['actors'], targets):
+                actor = patched['Actors'][index]
+                self.assertEqual((actor['Hash'], actor['Gyaml']), (ident, gyaml))
+                expected['Actors'][index]['Presence']['FlagName'] = s.CHILDHOOD
+                # Child Link, before and after Dodongo, sees the vendor/music
+                # but never the closed sign. Adult map and day/night door stay separate.
+                for completed in (False, True):
+                    values = {s.BOMBCHU_SHOP_QUEST: completed, s.CHILDHOOD: True}
+                    presence = actor['Presence']
+                    visible = values[presence['FlagName']] != presence['IsNegation']
+                    self.assertEqual(visible, not negated, (path, gyaml, completed))
+            self.assertEqual(patched, expected)  # stock, links, all other actors unchanged
+            with self.assertRaises(ValueError):
+                s.bombchu_shop_actor_edits(patched, path)
+            missing = copy.deepcopy(original)
+            missing['Actors'].pop(report['actors'][0])
+            with self.assertRaises(ValueError):
+                s.bombchu_shop_actor_edits(missing, path)
 
     def test_serenade_never_moves_the_water_quest_back(self):
         source = self.read(s.SAGE_OF_WATER_FLOW)

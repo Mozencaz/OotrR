@@ -45,6 +45,20 @@ class NupTests(unittest.TestCase):
         path = flow_path(name)
         return self.raw(path) if path in self.members else None
 
+    def test_dependency_diff_decodes_each_version_once(self):
+        from unittest.mock import patch
+        from oot_rando.patching import event_info, event_patch, qol_patches
+        original = self.flow('ActionGuide')
+        changed, _ = qol_patches.ocarina_guide_on_get(original)
+        for diff in (event_info.new_subflows, event_info.new_transitions):
+            with self.subTest(diff=diff.__name__), patch.object(
+                    event_patch, '_flow', wraps=event_patch._flow) as decode:
+                diff({'ActionGuide': changed}, self.flow)
+                from collections import Counter
+                counts = Counter(call.args[0] for call in decode.call_args_list)
+                self.assertTrue(all(count <= 2 for count in counts.values()),
+                                'Flow parsing must not grow with the number of entries')
+
     def test_deku_tree_gift_lists_the_item_get_for_warp_kokiri(self):
         from oot_rando.formats.byml_codec import load
         from oot_rando.formats.inspect_resources import Byml

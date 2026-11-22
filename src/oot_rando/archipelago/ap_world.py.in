@@ -107,9 +107,8 @@ class OoTRemakeWorld(World):
         for gid in sorted(remake.names):
             name = remake.names[gid]
             location = RemakeLocation(player, name, self.location_name_to_id[name], menu)
-            if remake.in_logic[gid]:
-                location.access_rule = lambda state, gid=gid: remake.reachable(gid, state.prog_items[player])
-            else:
+            location.access_rule = lambda state, gid=gid: remake.reachable(gid, state.prog_items[player])
+            if not remake.in_logic[gid]:
                 # Outside the remake logic (no reliable AP match): filler only.
                 location.progress_type = LocationProgressType.EXCLUDED
             location.item_rule = lambda item, gid=gid: remake.can_hold(

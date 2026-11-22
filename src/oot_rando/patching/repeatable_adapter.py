@@ -2,8 +2,8 @@
 
 Generated pickups retain the real item's PouchActor. Their private event AINB
 sets a saved check flag only after the native add-to-pouch action. The source
-itself is left as in the game, but for its drop, so it breaks and respawns like
-the vanilla one (on a scene change). Once the check is collected, the pickup it
+keeps its native destruction and respawn settings; the texture adapter can
+give its map instance a private appearance actor. Once the check is collected, the pickup it
 drops is not a reward any more: its own AI (a clone of the native ``DropItem``
 one) checks the flag when it spawns and hands over to the source's vanilla drop
 (:func:`vanilla_drop_files`). A minor reward (rupees, ammunition, hearts) keeps
@@ -13,9 +13,14 @@ take the reward then. Gameplay validation remains required.
 
 Shop shelves holding a shuffled item (``Shop_Rando_*``) are bought once the same
 way: each gets its own actor whose shop AI writes the check flag when the item is
-bought, and reads that flag as its "sold out" state: the item at rest then
-deletes itself. The map is unchanged (no Presence: some shelves, like the Kokiri
+bought, and restores the native sold counter from that flag on re-entry. Bought
+shelves stay hidden but present so the cursor can navigate through their slots.
+The map is unchanged (no Presence: some shelves, like the Kokiri
 shop's, already have one).
+
+The shuffled Lake Hylia letter uses the same saved check because its native
+placement has no persistent hash key. This placed reward always runs its get
+event, including for minor items, and is recorded only after the pouch push.
 """
 import copy
 import hashlib
@@ -57,6 +62,7 @@ MINOR_PREFIXES = ('TBox_Rupee_', 'TBox_ArrowBundle_', 'TBox_DekuNutBundle', 'TBo
 MINOR_ACTORS = frozenset(('Obj_Heart',))   # recovery heart (not a piece nor a container)
 SHOP_ONCE_PREFIX = 'Shop_RandoOnce_'
 SHOP_AI_MEMBER = 'AI/Shop_Item_Base.root.ainb'
+SHOP_EVENT_MEMBER = 'AI/NpcCommon.event.root.ainb'
 
 
 def is_minor_reward(canonical):
@@ -243,7 +249,57 @@ def as_command(node):
     return next((p.get('Default Value') for p in values if p['Name'] == 'ASCommand'), None)
 
 
-def instrument_shop_ai(raw, flag, filename):
+def _shop_stock_restore(raw, nodes, flag, seller, slot):
+    """Reuse the native sold-counter increment, addressed by this shelf's seller/slot.
+
+    NpcCommon normally uses its own actor and Shop_SelectItemIndex. A shelf uses
+    its ForSale source and blackboard index instead; nothing depends on which
+    item the player is currently looking at.
+    """
+    import ainb
+    source = ainb.AINB.from_binary(raw).as_dict()['Nodes']
+    entry, = [n for n in source if n['Name'] == 'EventTriggerAddShopItemSoldNum']
+    action, = entry['Plugs']['Child']
+    replacements = {}
+    # Follow only the increment's dependency tree, not other event commands.
+    pending, reachable = [action['Node Index']], {}
+    while pending:
+        index = pending.pop()
+        if index in reachable or index in replacements:
+            continue
+        node = source[index]
+        if node['Name'] == 'QueryGenericGetOwnActorLink':
+            replacements[index] = seller
+        elif node['Name'] == 'QueryGetNonStructGameDataInt':
+            values = node['Parameters']['Inputs']['String']
+            if values[0]['Default Value'] != 'Shop_SelectItemIndex':
+                raise ValueError('Unexpected shop sold counter index.')
+            replacements[index] = slot
+        else:
+            reachable[index] = node
+            pending.extend(node.get('Queries', []))
+    if {n['Name'] for n in reachable.values()} != {
+            'OneShotAddGameDataInt', 'QueryFormatStringFromInt', 'QueryGetGameDataStruct',
+            'QueryGenericGetActorName', 'QueryGetNonStructGameDataStruct'} or len(replacements) != 2:
+        raise ValueError('Unexpected native shop sold counter graph.')
+    indices = {old: len(nodes) + i for i, old in enumerate(reachable)}
+    mapping = {**indices, **replacements}
+    for old, template in reachable.items():
+        node = copy.deepcopy(template)
+        # Discard outgoing metadata links to event nodes that are not cloned.
+        node['Plugs'] = {}
+        for part in ('Queries', 'Parameters'):
+            for before, after in mapping.items():
+                _retarget(node[part], before, -after - 1000)
+            for after in mapping.values():
+                _retarget(node[part], -after - 1000, after)
+        node['Node Index'] = indices[old]
+        node['GUID'] = _guid(f'{flag}/restore-stock/{old}')
+        nodes.append(node)
+    return indices[action['Node Index']]
+
+
+def instrument_shop_ai(raw, flag, filename, shop_event_raw):
     """Clone the shop item AI so that a shelf is bought once.
 
     * the saved ``flag`` is set by a node added to the two branches a bought item
@@ -252,10 +308,9 @@ def instrument_shop_ai(raw, flag, filename):
       ``ExecuteShopItemPutInPouch``;
     * every reader of the native ``QueryShopItemIsSoldOut`` (model hidden, sold
       out message to the linked ``Shop_Board_SoldOut``) reads ``flag`` instead;
-    * once bought, the hidden branch asks the native sold out state: sold out
-      (StockNum 1, see ``limit_shop_stock``), the shelf is only hidden and stays
-      selectable; not sold out (stock restored on reload), it deletes itself,
-      since the shop still sells a hidden shelf, not an absent one.
+    * once bought, the hidden branch restores the native sold counter if needed
+      (StockNum 1, see ``limit_shop_stock``). The shelf stays present and sold out,
+      including after reload: deleting it would break navigation between slots.
     """
     try:
         import ainb
@@ -310,10 +365,8 @@ def instrument_shop_ai(raw, flag, filename):
     query['Parameters']['Inputs']['String'] = [_default('GameDataFullName', flag)]
     for parent in parents:
         parent['Plugs']['Child'].append({'Node Index': setter_index, 'Name': ''})
-    # The shop sells a shelf as long as its actor exists, whatever the sold out
-    # message says (checked in game): once bought, the item at rest deletes itself.
-    # Its visibility selector is the "sold out" one; it no longer runs while the item
-    # is put in the pouch, so the deletion never cuts that short.
+    # Keep the visibility selector out of the pouch action so restoration cannot
+    # affect the sale in progress.
     selectors = [n for n in readers if n['Node Type'] == 'Element_BoolSelector']
     if len(selectors) != 1:
         raise ValueError('Shop item AI: sold out visibility ambiguous or missing.')
@@ -323,26 +376,29 @@ def instrument_shop_ai(raw, flag, filename):
         raise ValueError('Shop item AI: sold out branch not recognised.')
     put_parent = parents[1]
     put_parent['Plugs']['Child'] = [p for p in put_parent['Plugs']['Child'] if p['Node Index'] != selector['Node Index']]
-    delete_index, native_index = len(nodes) + 2, len(nodes) + 3
-    delete = {'Node Type': 'UserDefined', 'Node Index': delete_index, 'Name': 'OneShotGenericDeleteThisActor',
-              'GUID': _guid(flag + '/delete'), 'Flags': [], 'Queries': [], 'Attachments': [],
-              'Properties': {'Bool': [{'Name': 'ExecuteEveryFrame', 'Default Value': False, 'Flags': []},
-                                      {'Name': 'IsFade', 'Default Value': False, 'Flags': []}]},
-              'Parameters': {'Inputs': {}, 'Outputs': {}}, 'XLink Actions': [], 'Plugs': {}}
-    # Bought: while the shop's own stock (StockNum 1) says sold out, the shelf only
-    # hides its model and stays selectable (the native sold out state, the shop
-    # refuses a second sale). Only if that stock came back (not saved) is the
-    # shelf deleted, so that a hidden shelf is never sold again.
+    native_index = len(nodes) + 2
+    nodes.extend([setter, query])
     native = copy.deepcopy(selector)
     native.update({'Node Index': native_index, 'GUID': _guid(flag + '/native-sold-out'), 'Queries': [sold_out],
                    'Attachments': [], 'Flags': [], 'XLink Actions': []})
     native['Parameters'] = {'Inputs': {'Bool': [{'Name': 'Input', 'Default Value': False, 'Node Index': sold_out,
                                                  'Output Index': 0, 'Flags': []}]}, 'Outputs': {}}
-    native['Plugs'] = {'Generic': [{'Node Index': sold_out, 'Name': 'Input', 'Unknown 1': 0, 'Unknown 2': 0}],
-                       'Child': [{'Node Index': branch['Node Index'], 'Name': 'True'},
-                                 {'Node Index': delete_index, 'Name': 'False'}]}
+    hidden_index = branch['Node Index']
     branch['Node Index'] = native_index
-    nodes.extend([setter, query, delete, native])
+    nodes.append(native)
+    restore = _shop_stock_restore(shop_event_raw, nodes, flag,
+                                 only('QueryActorGetReferenceLinkSrcActor')['Node Index'],
+                                 only('QueryBlackboardGetS32')['Node Index'])
+    sequence_index = len(nodes)
+    sequence = {'Node Type': 'Element_Sequential', 'Node Index': sequence_index, 'Name': '',
+                'GUID': _guid(flag + '/restore-and-hide'), 'Flags': [], 'Queries': [], 'Attachments': [],
+                'Properties': {}, 'Parameters': {'Inputs': {}, 'Outputs': {}}, 'XLink Actions': [],
+                'Plugs': {'Child': [{'Node Index': restore, 'Name': ''},
+                                    {'Node Index': hidden_index, 'Name': ''}]}}
+    nodes.append(sequence)
+    native['Plugs'] = {'Generic': [{'Node Index': sold_out, 'Name': 'Input', 'Unknown 1': 0, 'Unknown 2': 0}],
+                       'Child': [{'Node Index': hidden_index, 'Name': 'True'},
+                                 {'Node Index': sequence_index, 'Name': 'False'}]}
     document['Filename'] = filename
     binary = build(document)
     result = ainb.AINB.from_binary(binary).as_dict()
@@ -371,7 +427,8 @@ def instrument_drop_ai(raw, flag, filename, event_raw, mark_on_spawn=None, resto
 
     The start-up sequence of the root (one frame of nothing, then the rotation AS)
     first asks the saved ``flag``: set, the pickup goes before it can be touched; not
-    set, nothing changes. The query only outputs on entering, and that sequence runs
+    set, it stays collectable with its own vanilla drop disabled. The query only
+    outputs on entering, and that sequence runs
     once, at spawn: the first pickup is never removed while its own get event writes
     the flag. The query and deletion are copies of the native nodes of the get event
     graph ``event_raw``.
@@ -380,6 +437,9 @@ def instrument_drop_ai(raw, flag, filename, event_raw, mark_on_spawn=None, resto
     (``Weapon_PoeCantera.root``). The collected pickup then hands over to its own
     ``DropRef`` (the source's vanilla drop, :func:`vanilla_drop_files`): it reserves
     that drop and requests its death, as that graph does, instead of deleting itself.
+    On the first reward only, ``OneShotDropSetDropValid(False)`` disables this
+    component before collection. Otherwise ordinary pickup death also emits the
+    attached vanilla drop. Later spawns keep it enabled for the hand-over.
 
     ``mark_on_spawn``: the canonical reward of a minor check, whose short pick-up runs
     no get event that could write ``flag``. The sequence then sets ``flag`` right
@@ -451,6 +511,15 @@ def instrument_drop_ai(raw, flag, filename, event_raw, mark_on_spawn=None, resto
     selector_template = next(n for n in nodes if n['Node Type'] == 'Element_BoolSelector')
     noop = copy.deepcopy(noop_template)
     noop.update({'Node Index': noop_index, 'GUID': _guid(flag + '/drop-keep')})
+    if restore_raw is not None:
+        # Native OneShotDropSetDropValid (Enemy_Leever.brain.root): the same
+        # one-shot properties as reserve, with a fixed IsValid Bool input.
+        # Do this only on the uncollected branch, before minor rewards mark the
+        # flag. The flag must never turn the vanilla drop back on during pickup.
+        noop = copy.deepcopy(reserve)
+        noop.update({'Node Index': noop_index, 'Name': 'OneShotDropSetDropValid',
+                     'GUID': _guid(flag + '/drop-disable'), 'Queries': [], 'Plugs': {}})
+        noop['Parameters'] = {'Inputs': {'Bool': [_default('IsValid', False)]}, 'Outputs': {}}
     selector = _bool_selector(selector_template, selector_index, _guid(flag + '/drop-once'),
                               query_index, gone_index, noop_index)
     starts[0]['Plugs']['Child'].insert(0, {'Node Index': selector_index, 'Name': ''})
@@ -477,7 +546,7 @@ def instrument_drop_ai(raw, flag, filename, event_raw, mark_on_spawn=None, resto
 
 
 def prepare_repeatables(plan, maps):
-    """Rename selected repeatable world rewards; return generation descriptors.
+    """Give repeatable rewards and the shuffled letter their own saved checks.
 
     Must run BEFORE the normal placement map patches are composed. Original
     placements keep their AP item/spoiler actor; only the physical pickup changes.
@@ -487,7 +556,10 @@ def prepare_repeatables(plan, maps):
         previous = placement['after']
         # A shelf holding a shuffled item (not a native shop refill) is bought once.
         shop = placement.get('source') == 'shop' and previous.startswith(SHOP_PREFIX)
-        if placement.get('source') not in REPEATABLE and not shop:
+        # The letter's native actor always respawns, and its placement hash has
+        # no saved Bool64bitKey. Its replacement needs an independent check flag.
+        placed = placement.get('source') == 'quest' and placement.get('before') == 'Obj_Bottle_Letter'
+        if placement.get('source') not in REPEATABLE and not shop and not placed:
             continue
         canonical = canonical_of(previous) if is_derived(previous) else WORLD_CANONICAL.get(previous)
         if canonical is None:
@@ -512,7 +584,8 @@ def prepare_repeatables(plan, maps):
             variants.append({'resource': resource, 'index': index, 'native_once': native_once,
                              'source': original.get('Gyaml'), 'drop_actor': dynamic.get('Drop__DropActor'),
                              'drop_table': dynamic.get('Drop__DropTable')})
-        record = {'id': placement['id'], 'actor': actor, 'canonical': canonical, 'kind': 'shop' if shop else 'pickup',
+        record = {'id': placement['id'], 'actor': actor, 'canonical': canonical,
+                  'kind': 'shop' if shop else ('placed' if placed else 'pickup'),
                   'underwater': bool(placement.get('underwater')) and not shop,
                   'original_reward_actor': previous, 'flag': flag, 'flag_hash': murmur3(flag),
                   'event_filename': 'RandoOnce_' + key + '.event.root', 'variants': variants}
@@ -587,7 +660,7 @@ def vanilla_drop_files(record, read_pack):
     return files, '?' + param
 
 
-def build_repeatable_packs(records, read_pack, read_raw, tables):
+def build_repeatable_packs(records, read_pack, read_raw, tables, progress=None):
     """Build unique pickups and event graphs, and append their RSDB rows.
 
     ``read_pack`` sees normal/generated soul packs. ``read_raw`` returns raw
@@ -597,9 +670,11 @@ def build_repeatable_packs(records, read_pack, read_raw, tables):
     """
     if not records:
         return {}
-    event = None
+    event = shop_event = None
     new = {}
-    for record in records:
+    for index, record in enumerate(records):
+        if progress and index % 20 == 0:
+            progress(f'Building first-collection actors: {index + 1}/{len(records)}')
         if record.get('kind') == 'shop':
             standard = record['original_reward_actor']
             raw, template = build_pack(standard, read_pack, byml_codec)
@@ -609,7 +684,9 @@ def build_repeatable_packs(records, read_pack, read_raw, tables):
                 raise ValueError('Shop item AI missing from the shop model.')
             root = record['actor'] + '.root'
             ai_info = f'AI/AIInfo/{record["actor"]}.engine__actor__AIInfo.bgyml'
-            files['AI/' + root + '.ainb'] = instrument_shop_ai(files[SHOP_AI_MEMBER], record['flag'], root)
+            if shop_event is None:
+                shop_event = sarc(read_raw(EVENT_PACK))[SHOP_EVENT_MEMBER]
+            files['AI/' + root + '.ainb'] = instrument_shop_ai(files[SHOP_AI_MEMBER], record['flag'], root, shop_event)
             files[ai_info] = byml_codec.dump({'endian': '<', 'version': 7,
                                               'root': {'RootAIRef': 'Work/AI/Root/' + root + '.ain'}})
             document['root']['Components']['AIInfoRef'] = '?' + ai_info
@@ -633,6 +710,11 @@ def build_repeatable_packs(records, read_pack, read_raw, tables):
         pouch_path = components['PouchContentRef'][1:]
         pouch = byml_codec.load(files[pouch_path])
         pouch['root'].update(pickup_pouch_settings(record['canonical']))
+        if record.get('kind') == 'placed':
+            # Like the original bottle, this check always plays its get event,
+            # even for a rupee. Record collection after the pouch push, never on
+            # spawning a reward the player has not reached underwater yet.
+            pouch['root'].update(PlayGetEventManyTimes=True, GetType=byml_codec.U32(LARGE_GET_TYPE))
         # The PouchActor remains the canonical reward: no unique inventory item
         # or duplicate bundle is introduced just to track a check.
         files[pouch_path] = byml_codec.dump(pouch)
@@ -648,7 +730,7 @@ def build_repeatable_packs(records, read_pack, read_raw, tables):
         # A minor reward's check is collected when it drops while the pouch can take it
         # (its short pick-up runs no get event); a key reward's once its get event put
         # it in the pouch.
-        minor = is_minor_reward(record['canonical'])
+        minor = is_minor_reward(record['canonical']) and record.get('kind') != 'placed'
         files[event_member] = instrument_pickup_event(event, record['flag'], event_name, record['canonical'], also,
                                                       skip_if_collected=not minor)
         # Once the check is collected, a respawned source drops what it drops in the
@@ -791,6 +873,7 @@ def patch_repeatable_sources(records, maps, raw_maps):
     their drop: no Presence and no vanilla copy. The game remembers a broken source
     by its hash (its Bool64bitKey) until the scene changes; a copy under another
     hash, or a source under a Presence condition, came back while the area stayed loaded.
+    The texture adapter later replaces Gyaml while preserving these native fields.
     """
     documents = {}
     for record in records:

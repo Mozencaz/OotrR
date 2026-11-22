@@ -59,6 +59,21 @@ class PcPortTest(unittest.TestCase):
             self.assertEqual(options_ini(root), root / 'longshot_options.ini')
             self.assertIsNone(game_folder(str(Path(directory) / 'bin' / 'other.exe')))
 
+    def test_native_linux_longshot(self):
+        # Recomp Library/longshot/Longshot/bin/longshot (ELF), plus a launcher script ./longshot.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'Longshot'
+            (root / 'bin').mkdir(parents=True)
+            (root / 'image.bin').touch()
+            (root / 'romfs').mkdir()
+            (root / 'bin' / 'longshot').touch()
+            self.assertTrue(is_port_process(str(root / 'bin' / 'longshot')))
+            self.assertEqual(game_folder(str(root / 'bin' / 'longshot')), root)
+            self.assertEqual(port_exe(root), root / 'bin' / 'longshot')
+            self.assertTrue(is_port_process('longshot'))
+            self.assertFalse(is_port_process('/usr/bin/python3.12'))
+            self.assertFalse(is_port_process('/usr/bin/bash'))
+
 
 if __name__ == '__main__':
     unittest.main()

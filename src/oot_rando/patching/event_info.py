@@ -50,7 +50,20 @@ def flow_name(path):
 
 def _chart(raw):
     from oot_rando.patching.event_patch import _flow
+    if raw is None or hasattr(raw, 'entry_points'):
+        return raw
     return _flow(raw).flowchart
+
+
+def _cached_charts(current):
+    """Decode each flow once for this analysis, without retaining seed data globally."""
+    charts = {}
+
+    def get(name):
+        if name not in charts:
+            charts[name] = _chart(current(name))
+        return charts[name]
+    return get
 
 
 def _successors(event):
@@ -146,9 +159,9 @@ def new_subflows(modified, original):
     """
     added = {}
     for name, raw in modified.items():
-        before = original(name)
-        for entry in entry_names(raw):
-            calls = entry_calls(raw, entry) - entry_calls(before, entry)
+        before, after = _chart(original(name)), _chart(raw)
+        for entry in entry_names(after):
+            calls = entry_calls(after, entry) - entry_calls(before, entry)
             if calls:
                 added[(name, entry)] = calls
     return added
@@ -200,6 +213,7 @@ def add_subflow_dependencies(info_raw, event_settings_root, added, current):
     from oot_rando.formats import byml_codec
     if not added:
         return info_raw, {}
+    current = _cached_charts(current)
     memo = {}
     by_entry = {key: closure(calls, current, memo) for key, calls in added.items()}
     for key, flows in by_entry.items():
@@ -209,7 +223,10 @@ def add_subflow_dependencies(info_raw, event_settings_root, added, current):
     for (flow, _), flows in by_entry.items():
         by_flow.setdefault(flow, set()).update(flows)
     names = {}
-    entries_of = lambda flow: names.setdefault(flow, entry_names(current(flow)))
+    def entries_of(flow):
+        if flow not in names:
+            names[flow] = entry_names(current(flow))
+        return names[flow]
     owners = event_entries(event_settings_root, entries_of)
     document = byml_codec.load(info_raw)
     expected = copy.deepcopy(document['root'])
@@ -258,10 +275,11 @@ def new_transitions(modified, original):
     ``modified``: {flow name: raw}; ``original(name)``: vanilla raw, or None. Through
     external sub-flows too.
     """
-    now = lambda name: modified[name] if name in modified else original(name)
+    original = _cached_charts(original)
+    now = _cached_charts(lambda name: modified[name] if name in modified else original(name))
     memo_now, memo_before, added = {}, {}, {}
     for name, raw in modified.items():
-        for entry in entry_names(raw):
+        for entry in entry_names(now(name)):
             events = (reachable_transitions((name, entry), now, memo_now)
                       - reachable_transitions((name, entry), original, memo_before))
             if events:
@@ -299,7 +317,10 @@ def add_child_events(info_raw, event_settings_root, added, current):
     for (flow, _), events in by_entry.items():
         by_flow.setdefault(flow, set()).update(events)
     names = {}
-    entries_of = lambda flow: names.setdefault(flow, entry_names(current(flow)))
+    def entries_of(flow):
+        if flow not in names:
+            names[flow] = entry_names(current(flow))
+        return names[flow]
     owners = event_entries(event_settings_root, entries_of)
     expected = copy.deepcopy(document['root'])
     report = {}

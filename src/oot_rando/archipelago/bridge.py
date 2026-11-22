@@ -224,7 +224,61 @@ class PlayerWorld:
         # the level above the one Link holds (patching.progressive, patching.ap_mailbox).
         self.restricted = set(self.c.restricted_dungeon) & set(self.pool)
         self.local_only = set(self.restricted)
+        self.tracker_members = self._tracker_members()
         self._cache = {}
+
+    def _tracker_members(self):
+        """Conservative area rules for filler-only checks, outside the fill logic.
+
+        These are tracker estimates, not new progression locations. Unknown areas
+        stay unreachable rather than inheriting Archipelago's always-true rule.
+        """
+        from oot_rando.game.extra_sources import area_locations
+        from oot_rando.game.remake_world import source_age
+        from oot_rando.logic.rules import age_member
+        from oot_rando.patching.soul_adapter import chest_requirements
+        if all(self.in_logic.values()):
+            return {}
+        logic = self.c.logic
+        # Use the actual maximum inventory, including native/starting rewards:
+        # arbitrary item counts can omit 100-token gates or invent missing items.
+        everything, available, _ = self.c.sweep({}, Counter(self.pool))
+        areas, result = {}, {}
+        for gid, inside in self.in_logic.items():
+            if inside:
+                continue
+            entry = self.c.shuffled[gid]
+            folder = entry['folder']
+            if folder == 'DreamWorld' and all('/BossRushIntervalRoom_' in v['resource']
+                                               for v in entry['variants']):
+                # These are the ten repeatable boss-rush interval chests, not
+                # checks in the enemy museum lobby. AP has no native museum
+                # kill records or boss-rush state. Require full supported-world
+                # access as a deliberately late estimate, never lobby access.
+                # Keep it outside the fill logic and use only achievable nodes
+                # so full accessibility does not require impossible locations.
+                if folder not in areas:
+                    areas[folder] = sorted(loc for loc in logic.location_names() if loc in available
+                                           and self.c.data.location_type(loc) not in
+                                           ('HintStone', 'Hint', 'Drop', 'Event'))
+            if folder not in areas:
+                areas[folder] = [loc for loc in area_locations(self.c.data, logic, folder) if loc in available]
+            members = list(areas[folder])
+            if not members:
+                continue
+            age = source_age(entry['variants'])
+            if age:
+                aged = [age_member(age, loc) if logic.accessible(everything, age_member(age, loc)) else loc
+                        for loc in members]
+                if aged == members:
+                    continue  # No proof this area's sources can be done at this age.
+                members = aged
+            members += list(entry.get('guards', ()))
+            souls = chest_requirements(self.c.souls, entry, areas[folder])
+            if souls:
+                members.append('Souls|' + '|'.join(sorted(souls)))
+            result[gid] = members
+        return result
 
     def starting_error(self, extra, from_pool):
         """Why these starting items (name → count) cannot be given, or None.
@@ -265,13 +319,23 @@ class PlayerWorld:
         return self.c.allowed(ap_item('?') if item is None else item, gid)
 
     def reach(self, counts):
-        """(reachable virtual locations, victory) for these collected items. Cached."""
+        """(reachable locations, victory), including conservative filler estimates. Cached."""
         key = frozenset((k, v) for k, v in counts.items() if v > 0 and k in self.progression)
         result = self._cache.get(key)
         if result is None:
             if len(self._cache) >= self.CACHE_SIZE:
                 self._cache.clear()
             state, collected, _ = self.c.sweep({}, Counter(dict(key)))
+            # Do not add these nodes to logic.virtual/base: filler must never
+            # supply progression or change the native-location sweep.
+            collected = set(collected)
+            access = {}
+            for gid, members in self.tracker_members.items():
+                for member in members:
+                    if member not in access:
+                        access[member] = self.c.logic.accessible(state, member)
+                if all(access[member] for member in members):
+                    collected.add(self.vnames[gid])
             result = (frozenset(collected), state.has('Triforce'))
             self._cache[key] = result
         return result
@@ -386,9 +450,12 @@ def settings_from_patch(patch, skulltulas_always_present=False):
     from oot_rando.randomizer.randomizer_core import SKIP_OPTIONS, Settings
     from oot_rando.game.randomizer_categories import CATEGORIES
     check_patch(patch)
+    from oot_rando.logic import rando_options
+    options = dict(patch['options'])
+    options.setdefault('spiritual_stones', rando_options.UNRECORDED['spiritual_stones'])
     seed = f'AP {patch.get("seed_name", "")} {patch.get("slot_name", "")}'.strip()[:256]
     return Settings(seed=seed, randomize_chests=False, open_forest=bool(patch['open_forest']),
-                    categories=dict.fromkeys(CATEGORIES, False), full=dict(patch['options']),
+                    categories=dict.fromkeys(CATEGORIES, False), full=options,
                     archipelago=patch, skulltulas_always_present=bool(skulltulas_always_present),
                     **dict.fromkeys(SKIP_OPTIONS, True)).validate()
 

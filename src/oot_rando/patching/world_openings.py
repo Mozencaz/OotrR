@@ -17,10 +17,14 @@ found and read, the quest scenes) and ``Dm_SY_BancChangeArrive`` (the first arri
 in Zora's Domain, ``Step03`` / ``Step03_Impa``). Later steps (Jabu-Jabu, the Zora
 Sapphire) are untouched. Ruto's Letter can no longer be delivered: the logic never
 counts it as a bottle.
+The invisible wall behind the king separately reads
+``HavePlayedEvent.Dm_Zora_0010`` (the moving-aside scene), so that saved flag also
+starts true. Moving the quest alone leaves the wall in place.
 
-**Kakariko gate open** (``open_kakariko`` = ``open``). The gate and its guard
-(``Npc_Hylia_Soldier_003``) read ``Npc_Hylia_Soldier_003_GateOpen``, set when the
-guard reads Zelda's Letter. The same scene moves ``Get_StoneOfFire`` to
+**Kakariko gate open** (``open_kakariko`` = ``open``). The guard
+(``Npc_Hylia_Soldier_003``) reads ``Npc_Hylia_Soldier_003_GateOpen``, set when the
+guard reads Zelda's Letter. Every seed patches the child gate to follow that flag
+too, so later Goron quest progress cannot open a closed gate. The same scene moves ``Get_StoneOfFire`` to
 ``KakarikoVillageLetter``, the step from which the Death Mountain Trail, Goron City,
 Darunia and Saria's Song steps follow: both start set. The quest is only requested
 back from ``DoorOfTime`` (``KakarikoVillageNpc`` after Impa's send-off). The castle
@@ -32,6 +36,7 @@ from oot_rando.patching import game_defaults, quest_guard
 ZORA_QUEST = 'Get_StoneOfWater'
 ZORA_STEP = 'Step_Get_StoneOfWater'
 ZORA_FLOOR = 'Step07'
+ZORA_MOVED = 'HavePlayedEvent.Dm_Zora_0010'
 ZORA_FLOWS = ('Event/EventFlow/Get_StoneOfWater.bfevfl.zs',
               'Event/EventFlow/Dm_SY_BancChangeArrive.bfevfl.zs')
 
@@ -45,11 +50,13 @@ def step_enum(challenge):
     return 'Step_' + challenge
 
 
-def open_quest(read_flow, gamedata_raw, challenges_raw, quest, floor, flows, defaults=None):
+def open_quest(read_flow, gamedata_raw, challenges_raw, quest, floor, flows, defaults=None,
+               prefix=quest_guard.PREFIX):
     """Start ``quest`` at ``floor`` (plus ``defaults``) and guard ``flows`` against going back.
 
     ``read_flow(path)`` returns the current bytes of a flow (an earlier edit or the
     game's). Returns (gamedata bytes, {flow path: bytes}, report).
+    A custom ``prefix`` is recorded so verification can reconstruct the same guards.
     """
     steps = quest_guard.challenge_steps(challenges_raw)
     values = dict(defaults or {}, **{step_enum(quest): floor})
@@ -57,23 +64,81 @@ def open_quest(read_flow, gamedata_raw, challenges_raw, quest, floor, flows, def
     edited, guarded = {}, {}
     for path in flows:
         edited[path], report = quest_guard.guard_regressions(read_flow(path), quest, steps, floor,
-                                                             gamedata_raw=gamedata)
+                                                             gamedata_raw=gamedata, prefix=prefix)
         if not report['guarded']:
             raise ValueError(f'{quest} guard: no request to guard in {path}')
         guarded[path] = report['guarded']
     expression = quest_guard.floor_expression(steps, quest, floor)
-    return gamedata, edited, {'defaults': values, 'expression': expression, 'guarded': guarded}
+    report = {'defaults': values, 'expression': expression, 'guarded': guarded}
+    if prefix != quest_guard.PREFIX:
+        report['prefix'] = prefix
+    return gamedata, edited, report
 
 
 def zora_fountain_open(read_flow, gamedata_raw, challenges_raw):
     """King Zora moved from the start (see module doc)."""
-    return open_quest(read_flow, gamedata_raw, challenges_raw, ZORA_QUEST, ZORA_FLOOR, ZORA_FLOWS)
+    return open_quest(read_flow, gamedata_raw, challenges_raw, ZORA_QUEST, ZORA_FLOOR,
+                      ZORA_FLOWS, {ZORA_MOVED: True})
 
 
 def kakariko_gate_open(read_flow, gamedata_raw, challenges_raw):
     """The Kakariko gate open from the start (see module doc)."""
     return open_quest(read_flow, gamedata_raw, challenges_raw, KAKARIKO_QUEST, KAKARIKO_FLOOR,
                       KAKARIKO_FLOWS, {KAKARIKO_GATE: True})
+
+
+KAKARIKO_CLOSED_MODULE = 'Logic/KakarikoVillage_Child_OpenGate_Prefab_1fcc.logic.module.ainb'
+KAKARIKO_OPEN_MODULE = 'Logic/KakarikoVillage_Child_GateClose_Prefab_6b8b.logic.module.ainb'
+
+
+def kakariko_gate_on_letter(raw, opened):
+    """Choose the child gate's position by letter delivery, independently of quest steps.
+
+    Despite the prefab names, OpenGate contains the initially closed, moving gate;
+    GateClose contains the gate at its open position. Keep their movement logic.
+    The guard and Dm_Kakariko_0010 already set KAKARIKO_GATE during delivery.
+    """
+    import copy
+    import uuid
+
+    def edit(nodes):
+        if len(nodes) != 3:
+            raise ValueError('Unexpected Kakariko gate node count')
+        check = _node(nodes, 2, 'HoldChallengeCurrentStepCheckOrder')
+        strings = {i['Name']: i['Default Value'] for i in check['Parameters']['Inputs']['String']}
+        step = 'KakarikoVillageLetter' if opened else 'DeathMtTrailIn'
+        if strings != {'ChallengeName': 'Work/Challenge/Get_StoneOfFire.game__challenge__Challenge.gyml',
+                       'ChallengeStepName': step}:
+            raise ValueError('Unexpected Kakariko gate quest condition')
+        actor = _node(nodes, 1, 'ActorLogicAttackBootUpActor')
+        entry = _bool_input(actor, 'Logic_Create')
+        if (entry['Node Index'], entry['Output Index']) != (2, 0 if opened else 1):
+            raise ValueError('Unexpected Kakariko gate wiring')
+        flag = copy.deepcopy(check)
+        flag.update({'Node Index': 3, 'Name': 'HoldGameDataGetBoolSimple',
+                     'GUID': str(uuid.uuid5(uuid.NAMESPACE_URL, 'oot-rando/kakariko-gate/' + step)),
+                     'Queries': [], 'Plugs': {},
+                     'Parameters': {
+                         'Inputs': {
+                             'Int': [{'Name': 'GameDataArrayIndex', 'Default Value': -1, 'Node Index': -1,
+                                      'Output Index': 0, 'Flags': ['Uses Default', 'Is Output']}],
+                             'String': [{'Name': 'GameDataNameBool', 'Default Value': KAKARIKO_GATE,
+                                         'Node Index': -1, 'Output Index': 0, 'Flags': ['Uses Default']}]},
+                         'Outputs': {'Bool': [{'Name': 'Bool', 'Is Output': True}]}}})
+        nodes.append(flag)
+        check.update({'Name': 'OperateAND', 'Queries': [3],
+                      'Plugs': {'Generic': [{'Node Index': 3, 'Name': 'BoolMulti'}]},
+                      'Parameters': {
+                          'Inputs': {'Bool': [
+                              {'Name': 'BoolMulti', 'Default Value': False, 'Node Index': 3,
+                               'Output Index': 0, 'Flags': []},
+                              {'Name': 'UpdateOnce', 'Default Value': False, 'Node Index': -1,
+                               'Output Index': 0, 'Flags': ['Uses Default', 'Is Output']}]},
+                          'Outputs': {'Bool': [{'Name': 'False', 'Is Output': not opened},
+                                               {'Name': 'True', 'Is Output': opened}]}}})
+        entry['Output Index'] = 1 if opened else 0
+    result = _ainb_edit(raw, edit)
+    return result, {'flag': KAKARIKO_GATE, 'opened_position': opened}
 
 
 DOOR_MODULE = 'Logic/Market_Common_f252.logic.module.ainb'
@@ -200,32 +265,72 @@ CARPENTERS_HELPED = 'GerudoFortress_Meet_FourCarpenter_NumOfCarpenterHelped'
 CARPENTERS_LEFT = 'GerudoFortress_Meet_FourCarpenter_NumOfCarpenterHelped_02'
 
 
-def gerudo_fortress_fast(read_flow, gamedata_raw, challenges_raw):
+def gerudo_fortress_fast(read_flow, gamedata_raw, challenges_raw, read_module=None):
     """One carpenter to rescue (``gerudo_fortress`` = ``fast``).
 
     ``SageOfSpirit_RescueCarpenter`` adds one to ``…_NumOfCarpenterHelped`` at each
     rescue and plays ``Meet_FourCarpenter_ClearEvent`` (the Gerudo Membership Card,
     the fortress at peace) once it passes 3; ``…_Helped_02`` counts the carpenters
     left. A new game starts with three helped and one left, so the first rescue,
-    whichever cell, ends the fortress. No flow is changed."""
+    whichever cell, ends the fortress. Completion releases the other carpenters
+    and opens all cell locks so their jars remain reachable."""
+    from oot_rando.patching import gerudo_fortress as g
     values = {CARPENTERS_HELPED: 3, CARPENTERS_LEFT: 1}
-    return game_defaults.set_new_game_defaults(gamedata_raw, values), {}, {'defaults': values, 'guarded': {}}
+    flow, freed = g.free_remaining_carpenters(read_flow(g.SPIRIT_FLOW))
+    files = {g.SPIRIT_FLOW: flow, g.CELL_MODULE: g.open_completed_cells((read_module or read_flow)(g.CELL_MODULE))}
+    return game_defaults.set_new_game_defaults(gamedata_raw, values), files, {
+        'defaults': values, 'guarded': {}, 'freed': freed, 'modules': [g.CELL_MODULE]}
 
 
-SPIRIT_QUEST = 'SageOfSpirit'
 BRIDGE_MODULE = 'Logic/GerudoValley_Adult_Prefab_9e43.logic.module.ainb'
-BRIDGE_FLOOR = 'Step01'
 
 
-def gerudo_valley_bridge(read_flow, gamedata_raw, challenges_raw):
+def gerudo_valley_bridge(read_flow, gamedata_raw, challenges_raw, read_module):
     """The Gerudo Valley bridge repaired from the start (``open_gerudo_valley_bridge``).
 
-    ``GerudoValley_Adult_Prefab_9e43`` shows the repaired bridge (and removes the two
-    horse jumps) once ``SageOfSpirit`` is past ``Ready``: the head carpenter moves it
-    to ``Step01`` when he stops the adult in front of the fortress, a talk with no
-    item. A new game starts there. The carpenters, their cells and the card are not
-    touched. No flow requests ``Ready``, so there is nothing to guard."""
-    return open_quest(read_flow, gamedata_raw, challenges_raw, SPIRIT_QUEST, BRIDGE_FLOOR, ())
+    Select the repaired actor and disable the broken actor and horse jumps directly.
+    A quest default alone does not repair existing saves, and Step01 is the very
+    threshold tested by the native bridge. Leave the carpenter quest unchanged.
+    """
+    def edit(nodes):
+        query = _node(nodes, 2, 'HoldGameDataGetBoolExpSimple')
+        if query['Parameters']['Inputs']['String'][0]['Default Value'] != 'SageOfSpirit_IsAfter_Step01_Exp':
+            raise ValueError('Unexpected Gerudo bridge quest condition')
+        selector = _node(nodes, 3, 'OperateAND')
+        entry = _bool_input(selector, 'BoolMulti')
+        if (entry['Node Index'], entry['Output Index']) != (2, 0):
+            raise ValueError('Unexpected Gerudo bridge selector')
+        for index, output in ((0, 0), (1, 1), (4, 0), (5, 0)):
+            actor = _node(nodes, index, 'ActorLogicSimpleActor')
+            if (_bool_input(actor, 'Logic_Create')['Node Index'],
+                    _bool_input(actor, 'Logic_Create')['Output Index']) != (3, output):
+                raise ValueError('Unexpected Gerudo bridge actor wiring')
+        entry.update({'Default Value': True, 'Node Index': -1, 'Output Index': 0,
+                      'Flags': ['Uses Default', 'Is Output']})
+        selector['Queries'] = []
+        selector['Plugs'] = {}
+    raw = _ainb_edit(read_module(BRIDGE_MODULE), edit)
+    return gamedata_raw, {BRIDGE_MODULE: raw}, {'modules': [BRIDGE_MODULE], 'defaults': {}, 'guarded': {}}
+
+
+# The native castle-bridge area exists exactly at DoorOfTime Step03. No-stone
+# seeds start there; later castle visits must not move the quest backwards.
+ESCAPE_QUEST = 'DoorOfTime'
+ESCAPE_FLOOR = 'Step03'
+# DoorOfTime also carries the Kakariko floor guards. Keep their names distinct.
+ESCAPE_PREFIX = 'RandoZeldaEscapeFloor_'
+ESCAPE_FLOWS = ('Event/EventFlow/Goto_HyruleCastle.bfevfl.zs',
+                'Event/EventFlow/DoorOfTime.bfevfl.zs',
+                'Event/EventFlow/Npc_Hylia_Zelda_Child.bfevfl.zs',
+                'Event/EventFlow/Dm_SY_Ocarina_SariaSong.bfevfl.zs')
+
+
+def zelda_escape_ready(read_flow, gamedata_raw, challenges_raw):
+    """Make the native bridge escape available on a new game's first visit."""
+    from oot_rando.patching.story_fixes import BRIDGE_CLOSED
+    return open_quest(read_flow, gamedata_raw, challenges_raw, ESCAPE_QUEST, ESCAPE_FLOOR,
+                      ESCAPE_FLOWS, {BRIDGE_CLOSED: True, 'DoorOfTime_GetStoneCount': 0},
+                      prefix=ESCAPE_PREFIX)
 
 
 # option name, value -> opening (applied in this order by the seed build).
@@ -246,7 +351,13 @@ def apply_openings(options, read_flow, gamedata_raw, challenges_raw, read_module
         if options.get(option) != value:
             continue
         current = lambda p: files.get(p) or read_flow(p)
-        extra = (lambda p: files.get(p) or read_module(p),) if opening is door_of_time_open else ()
+        extra = ((lambda p: files.get(p) or read_module(p),)
+                 if opening in (door_of_time_open, gerudo_valley_bridge, gerudo_fortress_fast) else ())
         gamedata, edited, reports[option] = opening(current, gamedata, challenges_raw, *extra)
+        files.update(edited)
+    from oot_rando.logic.rando_options import escape_requirement
+    if escape_requirement(options) == 'song':
+        current = lambda p: files.get(p) or read_flow(p)
+        gamedata, edited, reports['zelda_escape'] = zelda_escape_ready(current, gamedata, challenges_raw)
         files.update(edited)
     return gamedata, files, reports

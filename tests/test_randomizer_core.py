@@ -36,7 +36,7 @@ class SettingsTests(unittest.TestCase):
         self.assertTrue(all(placements_for(a)[h] != old for h, old in CHESTS.items()))
 
     def test_require_all_keeps_the_identity_of_seeds_made_before_the_option(self):
-        settings = full_settings()
+        settings = full_settings(spiritual_stones='all')
         self.assertEqual(settings.full['spiritual_stones'], 'all')
         self.assertNotIn('spiritual_stones', settings.to_dict()['full'])
         self.assertEqual(settings_identity(settings, generator_version='0.12.0'), BEFORE_SPIRITUAL_STONES)

@@ -1,6 +1,7 @@
 """Master Sword shuffle: separate possession from the native time travel scenes.
 
-Only used with shuffle_master_sword. Pedestal animation equipment in 0070/0088
+The era replacement also protects shuffled Kokiri Sword ownership.
+Pedestal animation equipment in 0070/0088
 is deliberately retained: those scenes wait for it, then era replacement restores
 PlayerWeaponBeforeForceEquipMasterSword. No ownership is added by those scenes.
 These resource checks are not an in-game validation of swordless time travel.
@@ -12,6 +13,7 @@ from oot_rando.patching.qol_patches import _predecessors
 from oot_rando.patching.story_fixes import _Chart, _params
 
 SWORD = 'Weapon_Sword_Master'
+KOKIRI_SWORD = 'Weapon_Sword_Kokiri'
 PREFIX = 'Event/EventFlow/'
 STEMS = ('DoorOfTime', 'Dm_TimeTemple_0030', 'ReplaceEquipmentForEraChange',
          'AllSage', 'Dm_SY_BancChangeArrive', 'Defeat_Ganon', 'Dm_TimeTemple_0085')
@@ -20,12 +22,16 @@ FLOWS = tuple(PREFIX + stem + '.bfevfl.zs' for stem in STEMS)
 
 def flow_paths(options, members=None):
     """Required flows, with existing update variants; off requires no reads."""
-    if not options.get('shuffle_master_sword'):
+    if options.get('shuffle_master_sword'):
+        required = FLOWS
+    elif options.get('shuffle_kokiri_sword'):
+        required = (FLOWS[2],)
+    else:
         return ()
     if members is None:
-        return FLOWS
+        return required
     paths = []
-    for path in FLOWS:
+    for path in required:
         if path not in members:
             raise ValueError('Master Sword shuffle missing flow: ' + path)
         paths.append(path)
@@ -62,12 +68,12 @@ def _action(chart, name, action, parameters=None, following=None):
     return event
 
 
-def _guard(chart, target, false, label):
+def _guard(chart, target, false, label, sword=SWORD):
     links = _predecessors(chart.chart, target)
     if not links:
         raise ValueError('Master Sword action is unreachable: ' + target.name)
     guard = chart.switch('RandoMasterSwordOwned_' + label, 'EventQueryIsExistInPouch',
-                         {'Actor': SWORD, 'Num': 1}, target, false, actor='PouchSystemActor')
+                         {'Actor': sword, 'Num': 1}, target, false, actor='PouchSystemActor')
     _redirect(links, guard)
     return guard.name
 
@@ -111,6 +117,11 @@ def patch_flow(path, raw):
         fallback = _action(chart, 'Event5', 'EventTriggerSetGameDataString64',
                            {'GameDataName': 'PlayerStatus.AnotherEraEquipWeapon', 'Value': SWORD}, 'Event13')
         report['guards'].append(_guard(chart, fallback, chart.events['Event13'], 'EraFallback'))
+        child_fallback = _action(chart, 'Event11', 'EventTriggerSetGameDataString64',
+                                {'GameDataName': 'PlayerStatus.AnotherEraEquipWeapon',
+                                 'Value': KOKIRI_SWORD}, 'Event13')
+        report['guards'].append(_guard(chart, child_fallback, chart.events['Event13'],
+                                       'KokiriEraFallback', KOKIRI_SWORD))
         # Put back without owning it, the pedestal's forced sword is what Event1 stores
         # as the adult weapon: the next pull then equips an unowned Master Sword (hand
         # only, lost on reload, 20/11). Drop that stored sword before it is restored.
@@ -131,6 +142,16 @@ def patch_flow(path, raw):
                                'Index': -1}, owned, start)
         _redirect(links, stored)
         report['guards'].append(owned.name)
+        # The child weapon uses the same storage slot. Do not restore a Kokiri
+        # Sword saved by an earlier transition unless it is actually owned.
+        child_owned = chart.switch('RandoMasterSwordOwned_KokiriEraStored', 'EventQueryIsExistInPouch',
+                                   {'Actor': KOKIRI_SWORD, 'Num': 1}, stored, clear,
+                                   actor='PouchSystemActor')
+        child_stored = chart.switch('RandoMasterSwordStored_KokiriEraStored', 'EventQueryIsGameDataString64',
+                                    {'GameDataName': 'PlayerStatus.AnotherEraEquipWeapon',
+                                     'Value': KOKIRI_SWORD, 'Index': -1}, child_owned, stored)
+        _redirect(links, child_stored)
+        report['guards'].append(child_owned.name)
     elif normalized == FLOWS[3]:
         _action(chart, 'Event175', 'EventTriggerEquipmentUserRequestCreateStaticEquipment',
                 {'EquipmentActorName': SWORD, 'DynamicEquipmentState': 2, 'IsActive': True}, 'Event12')
@@ -160,6 +181,7 @@ def patch_flow(path, raw):
             # Event66 loops until the forced sword exists: missing ownership must
             # skip that wait and its RemoveWeaponKeepSheath as well.
             report['guards'].append(_guard(chart, equip, chart.events[resume], label))
+    expected_guards = {name: _params(chart.events[name]) for name in report['guards']}
     result, _ = chart.write()
     # Ensure every newly inserted ownership query survives writing with the
     # correct true/false polarity (native bool cases 0=true, 1=false).
@@ -167,7 +189,7 @@ def patch_flow(path, raw):
     guards = {e.name: e for e in checked.flowchart.events if e.name in report['guards']}
     if set(guards) != set(report['guards']) or any(
             e.data.actor_query.v.v != 'EventQueryIsExistInPouch' or
-            _params(e) != {'Actor': SWORD, 'Num': 1} or 0 not in e.data.cases
+            _params(e) != expected_guards[e.name] or 0 not in e.data.cases
             or not set(e.data.cases) <= {0, 1}
             for e in guards.values()):
         raise ValueError('Master Sword ownership guard failed serialization.')

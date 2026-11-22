@@ -47,6 +47,7 @@ AP_VANILLA_SETTINGS = {
 # values replace them when the rules compile. The Master Sword pedestal no longer waits for the
 # escape (story_fixes.door_song_before_escape), so it is the same under both.
 ESCAPE_RULES = {
+    'song': {'HF Ocarina of Time Item': 'is_child', 'Song from Ocarina of Time': 'is_child'},
     'all': {'HF Ocarina of Time Item': 'is_child and has_all_stones',
             'Song from Ocarina of Time': "is_child and has_all_stones and 'Met Zelda'"},
     'vanilla': {'HF Ocarina of Time Item': "is_child and Goron_Ruby and Zora_Sapphire and 'Met Zelda'",
@@ -278,7 +279,7 @@ class Logic:
     # ------------------------------------------------------------------ rules
     def _escape_rule(self, location, rule):
         """``rule`` of a location behind Zelda's escape, as the ``spiritual_stones`` setting asks."""
-        return ESCAPE_RULES[self.settings['spiritual_stones']].get(location, rule)
+        return ESCAPE_RULES[rando_options.escape_requirement(self.settings)].get(location, rule)
 
     @staticmethod
     def _parse(text):

@@ -25,6 +25,15 @@ class Planning(unittest.TestCase):
         members.add(update)
         self.assertEqual(s.flow_paths(options, members), (s.FLOWS[0], update) + s.FLOWS[1:])
 
+    def test_kokiri_shuffle_alone_requires_era_replacement(self):
+        options = {'shuffle_kokiri_sword': True}
+        path = s.FLOWS[2]
+        update = path.replace('.bfevfl.zs', '.110.bfevfl.zs')
+        self.assertEqual(s.flow_paths(options), (path,))
+        self.assertEqual(s.flow_paths(options, {path, update}), (path, update))
+        with self.assertRaises(ValueError):
+            s.flow_paths(options, set())
+
 
 @unittest.skipUnless(NUP, 'OOT_NUP not set')
 class NativeFlows(unittest.TestCase):
@@ -124,7 +133,8 @@ class NativeFlows(unittest.TestCase):
         stored = events['RandoMasterSwordStored_EraStored']
         owned = events['RandoMasterSwordOwned_EraStored']
         clear = events['RandoMasterSwordClear_EraStored']
-        self.assertIs(entry.main_event.v, stored)
+        self.assertIs(entry.main_event.v, events['RandoMasterSwordStored_KokiriEraStored'])
+        self.assertIs(entry.main_event.v.data.cases[1].v, stored)
         self.assertEqual(stored.data.actor_query.v.v, 'EventQueryIsGameDataString64')
         self.assertEqual(stored.data.params.data, {
             'GameDataName': 'PlayerStatus.AnotherEraEquipWeapon', 'Value': s.SWORD, 'Index': -1})
@@ -138,6 +148,49 @@ class NativeFlows(unittest.TestCase):
             'GameDataName': 'PlayerStatus.AnotherEraEquipWeapon', 'Value': '', 'Index': -1})
         self.assertEqual(clear.data.nxt.v.name, 'Event4')
         self.assertIn(owned.name, report['guards'])
+
+    def test_child_return_equips_kokiri_only_when_owned(self):
+        source, _, chart, events, report = self.patched(2)
+
+        def restored_weapon(flowchart, stored, owns):
+            # Follow the actual native/patched weapon branch until shield
+            # replacement begins; Event0 later copies this slot into EquipWeapon.
+            event = flowchart.entry_points[0].main_event.v
+            for _ in range(20):
+                if event.name == 'Event13':
+                    return stored
+                params = event.data.params.data if event.data.params else {}
+                if hasattr(event.data, 'actor_query'):
+                    query = event.data.actor_query.v.v
+                    if query == 'EventQueryIsEmptyGameDataString64':
+                        result = not stored
+                    elif query == 'EventQueryIsGameDataString64':
+                        result = stored == params['Value']
+                    elif query == 'EventQueryIsExistInPouch':
+                        result = owns and params['Actor'] == s.KOKIRI_SWORD
+                    elif query == 'EventQueryPlayerIsChild':
+                        result = False  # Still adult before equipment is swapped.
+                    else:
+                        self.fail(query)
+                    event = event.data.cases[0 if result else 1].v
+                else:
+                    self.assertEqual(event.data.actor_action.v.v, 'EventTriggerSetGameDataString64')
+                    stored = params['Value']
+                    event = event.data.nxt.v
+            self.fail('Weapon replacement did not terminate')
+
+        for stored in ('', s.KOKIRI_SWORD):
+            with self.subTest(stored=stored):
+                # Native flow reproduces both the fallback and stale-storage bug.
+                self.assertEqual(restored_weapon(_flow(source).flowchart, stored, False), s.KOKIRI_SWORD)
+                self.assertEqual(restored_weapon(chart, stored, False), '')
+                self.assertEqual(restored_weapon(chart, stored, True), s.KOKIRI_SWORD)
+        self.assertIn('RandoMasterSwordOwned_KokiriEraFallback', report['guards'])
+        self.assertIn('RandoMasterSwordOwned_KokiriEraStored', report['guards'])
+        for label in ('KokiriEraFallback', 'KokiriEraStored'):
+            guard = events['RandoMasterSwordOwned_' + label]
+            self.assertEqual(str(guard.data.actor.v.identifier), 'PouchSystemActor')
+            self.assertEqual(guard.data.params.data, {'Actor': s.KOKIRI_SWORD, 'Num': 1})
 
     def test_later_arrival_creates_the_hand_sword_only_when_owned(self):
         _, _, chart, events, report = self.patched(6)

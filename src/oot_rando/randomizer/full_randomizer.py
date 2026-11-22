@@ -21,6 +21,9 @@ FILLER_PRIORITY = ('Rupee (1)', 'Rupees (5)', 'Deku Nuts (5)', 'Deku Stick (1)',
                    'Rupees (20)', 'Arrows (10)', 'Deku Seeds (30)', 'Bombchus (5)', 'Arrows (30)',
                    'Remake: Scrub Seed', 'Rupees (50)', 'Remake: Magic Jar', 'Rupees (200)')
 MAX_ATTEMPTS = int(__import__("os").environ.get("OOT_MAX_ATTEMPTS", "300"))
+# A crate deep under water (``underwater.mark_deep``): adult Link walks to it with
+# the Iron Boots and breaks it with the Hookshot (AP's "LH GS Lab Crate" rule).
+DEEP_GUARD = 'Souls|Iron Boots|Progressive Hookshot'
 SHOP_FILLER = 'Rupees (5)'
 POOL_FILLER = 'Rupees (5)'
 EMPTY_BOTTLES = ('Bottle', 'Bottle with Milk')
@@ -266,6 +269,8 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
                 entry['ap'] = area_locations(data, probe, entry['folder'])
                 if not entry['ap']:
                     entry.update(kind='junk', reason='no_reliable_ap_match')
+            if any(v.get('deep') for v in entry['variants']) and DEEP_GUARD not in entry['guards']:
+                entry['guards'] = list(entry['guards']) + [DEEP_GUARD]
         matches.update(chosen)
     souls = plan_souls(options['shuffle_enemy_spawns'], enemies, data.regions)
     location_requirements = {k: set(v) for k, v in souls['location_requirements'].items()}
@@ -480,6 +485,11 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             item = 'Rupees (5)'
         if entry['source'] == 'shop':
             item = SHOP_FILLER  # the displaced purchase stays sold in other slots
+            # Full shopsanity removes even the last tunic shelf. Move those
+            # equipment items into the pool instead of deleting their copies.
+            if options['shopsanity'] == 'all':
+                item = {'Buy Goron Tunic': 'Goron Tunic',
+                        'Buy Zora Tunic': 'Zora Tunic'}.get(entry['vanilla'], SHOP_FILLER)
         if item in ring_keys:
             item = 'Rupees (5)'
         if item == 'Zeldas Letter' and letter_removed(options):

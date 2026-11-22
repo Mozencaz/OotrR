@@ -1,4 +1,4 @@
-"""Archipelago item reception: global watchers that start item-get events.
+"""Archipelago reception through one global watcher and an event dispatcher.
 
 The game re-reads none of its files during a session (in-game test 12/11: a flow
 rewritten while the game runs is only taken at the next game start), so the only
@@ -12,15 +12,19 @@ one, a *record*:
 * ``RandoAP.Recv.<key>``: the client's signal (written in memory);
 * ``RandoAP.Got.<key>``: saved, set once the item was handed over. The client reads it
   to know what the game already has (a reload of an older save gives it again);
-* ``Sequence/MainUpdate.module.ainb`` (the global sequence, every frame of play) gets,
-  per record, the pattern of ``Sequence/AfterEvent.module.ainb`` (nodes 36→37→38):
-  Recv true → request the event ``RandoAP_<key>`` and set Recv back to false;
-* the ``EventSetting`` row ``RandoAP_<key>`` (copied from a sequence-requested one:
-  PlayerPos, FlowchartEvent) plays the entry point ``RandoAP_<key>`` added to
+* the client sets the record's Recv before setting shared ``RandoAP.Pending``;
+* ``Sequence/MainUpdate.module.ainb`` uses the native request-and-clear pattern
+  for Pending, adding seven nodes regardless of the number of remote items;
+* one ``EventSetting`` row requests ``RandoAP_Dispatch``, which finds the pending
+  record, clears Recv and calls its item entry only when Got is still false;
+* the entry point ``RandoAP_<key>`` added to
   ``Dm_SY_GetInEvent``: the vanilla item get with Link's pose
   (``GetInEvent_NotTurn_NotNpc``, as the Deku Tree gift) of the item's chest actor
   (one that is shown held up), then Got = true;
-* its ``GameAnalyzedEventInfo`` row lists every flow that entry calls.
+* the dispatcher's ``GameAnalyzedEventInfo`` row lists all reachable dependencies.
+
+Helpers retain a legacy mode to verify seeds with per-record watchers. New seeds
+need a client that understands their manifest's shared ``signal`` field.
 
 In-game test 12/11 (Hookshot): signal → pose and text at once. A consumable actor
 (``Item_DekuNut``) showed no model and played its use effect: chest actors are used.
@@ -39,6 +43,8 @@ EVENT_SETTINGS = 'RSDB/EventSetting.Product.111.rstbl.byml.zs'
 ANALYZED = 'RSDB/GameAnalyzedEventInfo.Product.111.rstbl.byml.zs'
 TEMPLATE_ROW = 'CrumblingGanonCastle_Arrive'     # PlayerPos + FlowchartEvent, started without an actor
 TEMPLATE_ANALYZED = 'NaviLockOnHint'             # requested by the sequence, no recorded camera
+DISPATCH = PREFIX + 'Dispatch'
+SIGNAL = 'RandoAP.Pending'
 
 
 def record_key(player, location):
@@ -132,7 +138,7 @@ def is_consumable(item):
     return item.startswith(CONSUMABLE_PREFIXES) or item in CONSUMABLES
 
 
-def add_entries(raw, items):
+def add_entries(raw, items, dispatch=False):
     """Entry point per record in Dm_SY_GetInEvent, then Got = true.
 
     ``get``: the item get of its actor (Link's pose, message). ``pickup``: the silent
@@ -195,6 +201,23 @@ def add_entries(raw, items):
             last, sub_flows = first, [first]
         link(last, got_event(record))
         add_entry(name, first, sub_flows)
+    if dispatch and items:
+        # Only the shared dispatcher is requested by MainUpdate. The per-item
+        # entries remain sub-flows, with the same saved receipts as older seeds.
+        first = None
+        calls = []
+        for record in reversed(items):
+            name = record['event']
+            give = editor.subflow(name + '_DispatchGive', '', name, None)
+            calls.append(give)
+            held = editor.switch(name + '_DispatchGot', 'GameDataActor', 'EventQueryIsGameDataBool',
+                                 {'GameDataName': record['got'], 'Index': -1}, None, give)
+            clear = editor.action(name + '_DispatchClear', 'GameDataActor', 'EventTriggerSetGameDataBool',
+                                  {'GameDataName': record['recv'], 'Index': -1, 'Value': False})
+            link(clear, held)
+            first = editor.switch(name + '_DispatchRecv', 'GameDataActor', 'EventQueryIsGameDataBool',
+                                  {'GameDataName': record['recv'], 'Index': -1}, clear, first)
+        add_entry(DISPATCH, first, calls)
     result, checked = editor.write('The reception entries')
     written = {e.name: e for e in checked.flowchart.entry_points}
     for record in items:
@@ -219,12 +242,14 @@ def _check_tiers(entry, record):
     check_tier_chain(entry.main_event.v, name, record['tiers'], given_actor, name + '_Got')
 
 
-def add_event_rows(settings_raw, items):
+def add_event_rows(settings_raw, items, dispatch=False):
     """EventSetting row per record, playing ``FLOW``/its entry."""
     from oot_rando.formats import byml_codec
     document = byml_codec.load(settings_raw)
     rows = document['root']
     by_id = {row['__RowId']: row for row in rows}
+    if dispatch:
+        items = [{'event': DISPATCH}] if items else []
     for record in items:
         if record['event'] in by_id:
             raise ValueError('EventSetting row already present: ' + record['event'])
@@ -239,7 +264,7 @@ def add_event_rows(settings_raw, items):
     return byml_codec.dump(document)
 
 
-def add_analyzed_rows(info_raw, items, current):
+def add_analyzed_rows(info_raw, items, current, dispatch=False):
     """GameAnalyzedEventInfo row per record: every flow its entry calls, transitively.
 
     ``current(name)``: the flow as written in the seed. Events the entry starts by
@@ -253,6 +278,10 @@ def add_analyzed_rows(info_raw, items, current):
     by_id = {row['__RowId']: row for row in rows}
     template = copy.deepcopy(by_id[TEMPLATE_ANALYZED])
     plain = copy.deepcopy(template)
+    if dispatch:
+        from oot_rando.patching.event_info import _cached_charts
+        current = _cached_charts(current)
+        items = [{'event': DISPATCH, 'style': 'get'}] if items else []
     gets = [record for record in items if record['style'] in ('get', 'progressive')]
     if gets:
         call = (FLOW, gets[0]['event'])
@@ -310,8 +339,13 @@ WATCHER = ['SeqQueryGetNonStructGameDataBool', 'Element_BoolSelector', 'Element_
            'SeqOneShotRequestEvent', 'SeqOneShotSetNonStructGameDataBool', 'SeqExecuteGenericDummyAction']
 
 
-def patch_main_update(raw, items):
-    """MainUpdate with one watcher per record: Recv → request its event, Recv = false."""
+def patch_main_update(raw, items, dispatch=False):
+    """One shared watcher; ``dispatch=False`` reproduces older per-record seeds."""
+    if dispatch:
+        # Seven additional nodes regardless of remote count. Keep the proven
+        # request-and-clear pattern; dispatch the item inside the event instead.
+        return patch_main_update(raw, [{'key': 'dispatch', 'recv': SIGNAL, 'event': DISPATCH}]
+                                 if items else [], dispatch=False)
     import ainb
     document = ainb.AINB.from_binary(raw).as_dict()
     nodes = document['Nodes']

@@ -19,8 +19,8 @@ logic world (`logic/world/`) is bundled.
   XWayland) with at least one installed font is required (any desktop has one).
 - A start-up error is written to `data/error.log` (the application has no console).
 - The in-game overlay and turbo A only exist on Windows (Hookshot). Live memory
-  reading (live tracking, Archipelago items) works on Linux with a native Linux
-  emulator such as Ryuchii, from this Linux build (not the Windows build under
+  reading (live tracking, Archipelago items) works on Linux with Longshot's native
+  Linux build or a native Linux emulator such as Ryuchii, from this Linux build (not the Windows build under
   Proton/Wine); everything else works on Linux too.
 
 ## Checking a build

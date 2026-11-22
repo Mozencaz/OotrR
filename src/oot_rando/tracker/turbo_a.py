@@ -185,7 +185,7 @@ class ATurbo:
         self.finished = []
         self.down = False
 
-    def step(self, a, stick, now, event=True):
+    def step(self, a, stick, now, event=True, enabled=True):
         """``event``: True / False / None (unreadable): the game plays an event."""
         if event is True:
             self.last_event = now
@@ -200,7 +200,7 @@ class ATurbo:
             self.hold['end'] = now
             self.finished.append(self.hold)
             self.hold = None
-        want = self.clock.a_down(a, now, turbo=not self.moved and in_event)
+        want = self.clock.a_down(a, now, turbo=enabled and not self.moved and in_event)
         if want and not self.down and self.hold is not None and now - self.hold['start'] > 0:
             self.hold['taps'] += 1
         self.down = want
@@ -315,6 +315,7 @@ class TurboA:
         self.root, self.poll = Path(hookshot_root), poll
         self.playing = playing   # () -> bool; default: the game's event state in memory
         self.thread, self.running = None, False
+        self.enabled = True
         self.status = 'Turbo A off'
         self.presses = 0
         self.last_hold = ''
@@ -499,7 +500,8 @@ class TurboA:
             self.playing = LiveEventState().playing
         self.gate = EventGate(self.playing)
         self.running = True
-        self.status = ('Turbo A on: hold A in a dialogue (events only); press X to skip a cutscene'
+        self.status = (('Turbo A on: hold A in a dialogue (events only)' if self.enabled else 'Turbo A off')
+                       + '; press X to skip a cutscene'
                        + (' (restart the game for turbo A)' if running_before else ''))
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
@@ -531,7 +533,7 @@ class TurboA:
                 y = front and (self._pad_held(pads, self.binds['pad_y']) or self._key_held(self.binds['key_y']))
                 # (memory read only while A is held or around an X press)
                 event = self.gate.open(now) if a or skip.needs_event(x, now) else False
-                want_a = turbo.step(a, stick, now, event)
+                want_a = turbo.step(a, stick, now, event, enabled=self.enabled)
                 want_plus = bool(self.plus) and skip.step(x, a or y, event, now, y=y)
                 if want_a != a_down:
                     self._send(VIRTUAL_A, want_a)

@@ -1,9 +1,4 @@
-"""Shuffled Gerudo card: membership also needs the carpenters freed.
-
-No native flow or logic module reads the card in the pouch: the fortress's
-peace may follow the carpenters' quest (SageOfSpirit) instead of the card. Until
-checked in game, the logic asks for both when the card is shuffled.
-"""
+"""Fortress membership follows the card independently of carpenter progress."""
 import unittest
 
 import _src_path  # noqa: F401
@@ -29,9 +24,9 @@ class GerudoCardLogicTests(unittest.TestCase):
         self.assertTrue(self.rule(self.vanilla, {'Gerudo Membership Card': 1}))
         self.assertFalse(self.rule(self.vanilla))
 
-    def test_shuffled_card_needs_the_carpenters_freed(self):
+    def test_shuffled_card_grants_membership_before_or_after_rescues(self):
         card = {'Gerudo Membership Card': 1}
-        self.assertFalse(self.rule(self.shuffled, card))
+        self.assertTrue(self.rule(self.shuffled, card))
         self.assertFalse(self.rule(self.shuffled, events=CARPENTERS))
         self.assertTrue(self.rule(self.shuffled, card, CARPENTERS))
 

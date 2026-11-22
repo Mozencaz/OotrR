@@ -131,6 +131,30 @@ class Units(unittest.TestCase):
         from oot_rando.patching.repeatable_adapter import REPEATABLE
         self.assertIn('trees', REPEATABLE)
 
+    def test_fire_arrows_are_a_quest_reward(self):
+        maps = {'Banc/HyruleField/HyruleField_Adult_Static.bcett.byml.zs': {'root': {'Actors': [
+            {'Gyaml': 'Obj_Arrow_Fire', 'Hash': 7, 'Name': 'Item', 'Translate': [-158.1, 131.5, 523.4]}]}}}
+        entry = scan_map_sources(maps)['HyruleField#firearrow#7']
+        self.assertEqual((entry['source'], entry['form'], entry['kind'], entry['ap'], entry['vanilla']),
+                         ('quest', 'world', 'exact', ['LH Sun'], 'Fire Arrows'))
+        self.assertEqual(entry['variants'][0]['field'], 'Gyaml')
+        self.assertIsNone(entry['reason'])
+        self.assertNotIn('LH Sun', EXCLUDED_NPC_LOCATIONS)
+        self.assertTrue(source_in_scope(entry, enabled_sources(
+            rando_options.validate({'shuffle_quest_rewards': True}, supported_only=True))))
+        from oot_rando.game.remake_world import actor_item, item_actor
+        # Both magic arrows can be placed anywhere (Fire Arrows had no remake actor).
+        for item, actor in (('Fire Arrows', 'Item_Arrow_Fire'), ('Ice Arrows', 'Item_Arrow_Ice')):
+            self.assertEqual(item_actor(item, ''), actor)
+            self.assertEqual(actor_item(actor, ''), item)
+            self.assertEqual(form_actor(actor, 'world'), 'Obj_Rando_' + actor)
+        self.assertIn('Fire Arrows', rando_options.STARTABLE_ITEMS)
+        from oot_rando.patching.fire_arrows import placed_actor
+        self.assertEqual(placed_actor([{'source': 'quest', 'before': 'Obj_Arrow_Fire',
+                                        'after': 'Obj_Rando_Item_Hookshot'}]), 'Obj_Rando_Item_Hookshot')
+        self.assertIsNone(placed_actor([{'source': 'quest', 'before': 'Obj_Arrow_Fire', 'after': 'Obj_Arrow_Fire'}]))
+        self.assertIsNone(placed_actor([]))
+
     def test_category_options(self):
         values = rando_options.defaults()
         self.assertFalse(rando_options.category_checked(values, 'rocks'))
@@ -317,6 +341,9 @@ class Integration(unittest.TestCase):
         self.assertLessEqual(len(kept), 11, kept)
         options, result = self.plan({'shopsanity': 'all'}, 'shops8')
         self.assertEqual(sum(p['source'] == 'shop' for p in result['placements']), len(shops))
+        rewards = Counter(p['item'] for p in result['placements'])
+        self.assertEqual(rewards['Goron Tunic'], 1)
+        self.assertEqual(rewards['Zora Tunic'], 1)
 
     def test_shopsanity_keeps_logic_purchases(self):
         options, result = self.plan({'shopsanity': '4'}, 'shops')

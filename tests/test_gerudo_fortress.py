@@ -1,0 +1,123 @@
+"""Native fortress resources: reduced rescues release every cell; card controls guards."""
+import os
+import unittest
+
+import _src_path  # noqa: F401
+from oot_rando.patching import game_defaults, quest_guard, world_openings
+from oot_rando.patching import gerudo_fortress as g
+from oot_rando.patching.story_fixes import _Chart, _params
+from oot_rando.formats import byml_codec
+from oot_rando.formats.inspect_resources import sarc
+
+
+@unittest.skipUnless(os.environ.get('OOT_NUP'), 'OOT_NUP not set')
+class Fortress(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from oot_rando.formats.inspect_nup import Nup
+        from oot_rando.formats.inspect_resources import decompress, dictionaries
+        cls.nup = Nup(os.environ['OOT_NUP'])
+        d = dictionaries(cls.nup)
+        cls.raw = staticmethod(lambda p: cls.nup.read(cls.nup.latest('romfs/' + p)))
+        cls.read = staticmethod(lambda p: decompress(cls.raw(p), d) if p.endswith('.zs') else cls.raw(p))
+
+    def test_fast_rescue_opens_remaining_cells(self):
+        data, files, report = world_openings.gerudo_fortress_fast(
+            self.read, self.read(game_defaults.GAMEDATA), self.read(quest_guard.CHALLENGES))
+        self.assertEqual(game_defaults.read_defaults(data, [world_openings.CARPENTERS_HELPED,
+                         world_openings.CARPENTERS_LEFT]), {world_openings.CARPENTERS_HELPED: 3,
+                                                          world_openings.CARPENTERS_LEFT: 1})
+        # Every last-rescue scene returns through this chain, whichever cell was rescued.
+        for first in range(1, 5):
+            flags = {f'GerudoFortress_WarpPoint{first:02}_ClearEvent': True}
+            events = _Chart(files[g.SPIRIT_FLOW]).events
+            event = events['Event192'].data.nxt.v
+            while event.name.startswith('RandoFreeCarpenters'):
+                params = _params(event)
+                self.assertEqual(event.data.actor_action.v.v, 'EventTriggerSetGameDataBool')
+                flags[params['GameDataName']] = params['Value']
+                event = event.data.nxt.v
+            self.assertEqual(event.name, 'Event146')
+            self.assertTrue(all(flags.get(flag) for flag in report['freed']['freed']))
+        self.assertNotIn(g.CARD, report['freed']['freed'])
+        with self.assertRaises(ValueError):
+            g.free_remaining_carpenters(files[g.SPIRIT_FLOW])
+
+    def test_cell_lock_graph_preserves_key_path_until_completion(self):
+        import ainb
+        from test_world_openings import unflagged_links
+        source = self.raw(g.CELL_MODULE)
+        raw = g.open_completed_cells(source)
+        nodes = ainb.AINB.from_binary(raw).as_dict()['Nodes']
+        original = ainb.AINB.from_binary(source).as_dict()['Nodes']
+        self.assertEqual(unflagged_links(nodes), [])
+        self.assertEqual(raw, g.open_completed_cells(source))
+        self.assertEqual(nodes[10]['Parameters']['Inputs']['String'][0]['Default Value'], g.CELLS_RELEASED)
+        self.assertNotEqual(g.CELLS_RELEASED, g.RESCUED)  # Requiem must not open unrescued cells.
+        for target, old_source, old_output in ((0, 3, 9), (3, 5, 1)):
+            link = next(p for p in nodes[target]['Parameters']['Inputs']['Bool'] if p['Name'] == 'OpenKey')
+            gate = nodes[link['Node Index']]
+            self.assertEqual((gate['Name'], link['Output Index']), ('OperateOR', 1))
+            self.assertEqual([(s['Node Index'], s['Output Index']) for s in
+                              gate['Parameters']['Inputs']['Bool'][0]['Sources']],
+                             [(old_source, old_output), (10, 0)])
+            for rescued in (False, True):
+                for native_key_signal in (False, True):
+                    signals = {old_source: native_key_signal, 10: rescued}
+                    actual = any(signals[s['Node Index']] for s in gate['Parameters']['Inputs']['Bool'][0]['Sources'])
+                    self.assertEqual(actual, rescued or native_key_signal)
+        for index in (1, 2, 4, 5, 6, 7, 8, 9):
+            self.assertEqual(nodes[index], original[index])
+        with self.assertRaises(ValueError):
+            g.open_completed_cells(raw)
+
+    def test_guard_schedules_follow_card_in_both_rescue_states(self):
+        for identifier in g.SCHEDULE_IDS:
+            raw = self.read(g.schedule_path(identifier))
+            before = byml_codec.load(raw)['root']
+            after = byml_codec.load(g.membership_schedule(raw)[0])['root']
+            for old, new in zip(before['ConditionalSchedule'], after['ConditionalSchedule']):
+                if old['ConditionFlag'] != g.RESCUED:
+                    self.assertEqual(old, new)
+                    continue
+                self.assertEqual(new, dict(old, ConditionFlag=g.CARD))
+                for rescued in (False, True):
+                    for card in (False, True):
+                        values = {g.CARD: card, g.RESCUED: rescued}
+                        selected = values[new['ConditionFlag']] != bool(new.get('IsReverseCondition'))
+                        self.assertEqual(selected, card != bool(old.get('IsReverseCondition')))
+            with self.assertRaises(ValueError):
+                g.membership_schedule(g.membership_schedule(raw)[0])
+
+    def test_guard_packs_preserve_ai_and_unrelated_resources(self):
+        for identifier in g.GUARD_IDS:
+            raw = self.read(f'Pack/Actor/Npc_Gerudo_{identifier}.pack.zs')
+            before, after = sarc(raw), sarc(g.guard_pack(raw)[0])
+            self.assertEqual(set(before), set(after))
+            changed = {p for p in before if before[p] != after[p]}
+            self.assertTrue(changed)
+            self.assertTrue(all('/SecurityGuardParam/' in p or '/InterestReceiveParam/' in p for p in changed))
+            for p in changed:
+                self.assertIn(g.CARD.encode(), after[p])
+            with self.assertRaises(ValueError):
+                g.guard_pack(g.guard_pack(raw)[0])
+
+    def test_prison_dialogue_and_compounds_read_card(self):
+        for path, names in ((g.SPIRIT_FLOW, ('Event123', 'Event99', 'Event389')),
+                            (g.GUARD_FLOW, ('Event20',))):
+            source = _Chart(self.read(path))
+            result = _Chart(g.membership_flow(self.read(path), names)[0])
+            for name, event in result.events.items():
+                if name in names:
+                    self.assertEqual(_params(event), {'GameDataName': g.CARD, 'Index': -1})
+                    self.assertEqual(event.data.actor_query.v.v, 'EventQueryIsGameDataBool')
+                    self.assertEqual({k: v.v.name for k, v in event.data.cases.items()},
+                                     {k: v.v.name for k, v in source.events[name].data.cases.items()})
+                elif hasattr(event.data, 'params'):
+                    self.assertEqual(_params(event), _params(source.events[name]))
+        raw = self.read(game_defaults.GAMEDATA)
+        self.assertFalse(g.expressions_applied(raw))
+        patched, _ = g.membership_expressions(raw)
+        self.assertTrue(g.expressions_applied(patched))
+        with self.assertRaises(ValueError):
+            g.membership_expressions(patched)

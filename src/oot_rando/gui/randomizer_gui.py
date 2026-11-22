@@ -11,8 +11,8 @@ import webbrowser
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 
-from oot_rando.randomizer.randomizer_core import Settings, CHECKS, GENERATOR_VERSION, generate
-from oot_rando.randomizer.randomizer_services import (read_artifact, generate_in_mods, qol_seed_warning,
+from oot_rando.randomizer.randomizer_core import Settings, CHECKS, GENERATOR_VERSION
+from oot_rando.randomizer.randomizer_services import (read_artifact, qol_seed_warning,
                                                       regeneration_settings, validate_mod_directory,
                                                       has_ingame_tracker, update_ingame_tracker)
 from oot_rando.randomizer.qol_install import install_qol
@@ -29,6 +29,7 @@ from oot_rando.game.world_maps import SAFE_CATEGORIES
 from oot_rando.logic import rando_options
 from oot_rando.paths import data_dir, seeds_dir, state_dir
 from oot_rando.gui import theme
+from oot_rando.gui.generation_worker import generate_isolated
 from oot_rando import __version__ as APP_VERSION, updater
 
 STATE = state_dir()
@@ -113,16 +114,16 @@ OPTION_TIPS = {
                                 'no stones. Door of Time open overrides this choice. The stones for Zelda\'s '
                                 'escape are a separate setting. To be confirmed in game.',
     'spiritual_stones': 'The stones Zelda\'s escape asks for to give the Ocarina of Time and the Song of Time. '
-                        'Door of Time requirements are separate. Require all: the Kokiri Emerald, the Goron Ruby and the '
-                        'Zora Sapphire. Vanilla: the Goron Ruby and the Zora Sapphire only, as in the original game '
-                        '(the game\'s own check, DoorOfTime_CheckStoneNum, only looks at those two).',
+                        'Require all: Kokiri Emerald, Goron Ruby and Zora Sapphire. Vanilla: Goron Ruby and '
+                        'Zora Sapphire only. Door of Time requirements are separate.',
     'zora_fountain': 'Ruto\'s Letter required: King Zora blocks the way to Zora\'s Fountain until he reads the '
                      'letter, as in the vanilla game. Always moved: he stands aside from the start and stays '
                      'there; the letter can no longer be delivered, so it never becomes a bottle. '
                      'To be confirmed in game.',
     'gerudo_fortress': 'Four carpenters: free the four carpenters to get the Gerudo Membership Card, as in the '
                        'vanilla game. One carpenter: the first one freed, in any cell, ends the fortress and '
-                       'gives the card. To be confirmed in game.',
+                       'gives the rescue reward, frees the remaining carpenters and opens all cells. '
+                       'To be confirmed in game.',
     'open_gerudo_valley_bridge': 'The broken bridge of Gerudo Valley is repaired from the start: the adult '
                                  'crosses it on foot without Epona or the Longshot. The carpenters stay in their '
                                  'cells; the last rescue still gives the Gerudo Membership Card. '
@@ -191,7 +192,7 @@ SETTING_GROUPS = (
      ['accessibility', 'logic_no_night_tokens_without_suns_song', 'game:skulltulas_always_present']),
     ('Item pool', 'What is shuffled and what you start with.',
      ['item_pool_value', 'start_inventory_from_pool', 'shuffle_kokiri_sword',
-      'shuffle_master_sword', 'shuffle_gerudo_card', 'shuffle_remake_items']),
+      'shuffle_master_sword', 'shuffle_gerudo_card', 'shuffle_remake_items', 'blue_fire_arrows']),
     ('Shuffled locations', 'Where items can be found.',
      ['shuffle_chests', 'chest_matching', 'tokensanity', 'shuffle_freestanding_items', 'shuffle_npc_gifts',
       'shuffle_quest_rewards', 'shuffle_boss_rewards', 'shuffle_great_fairies', 'shuffle_song_items',
@@ -203,7 +204,7 @@ SETTING_GROUPS = (
     ('Enemy souls', '', ['shuffle_enemy_spawns']),
     ('Minigames', '', ['big_poe_count', 'chicken_count']),
 )
-# Kept in the settings files (older seeds, AP YAML) but never shown: no effect any more.
+# Kept in settings files (older seeds, AP YAML), but never shown.
 HIDDEN_OPTIONS = ('progressive_order', 'progressive_strict', 'fast_chests')
 GAME_OPTION_COPY = {'open_forest': 'Open the way from Kokiri Forest to Hyrule Field',
                     'skulltulas_always_present': 'Night-only gold skulltulas present day and night'}
@@ -215,7 +216,8 @@ def option_tip(option, label, help_text):
     body = OPTION_TIPS.get(option.name) or help_text or ''
     parts = [body] if body else []
     if option.kind == 'choice':
-        supported = [(value, text) for value, text, reason in option.values if reason is None]
+        supported = [(value, text) for value, text, reason in option.values if reason is None
+                       and not (option.name == 'spiritual_stones' and value == 'door')]
         if len(supported) > 1:
             lines = []
             for value, text in supported:
@@ -302,6 +304,7 @@ class Application:
         self.tracker_search, self.save_path = tk.StringVar(), tk.StringVar()
         self.auto_save = tk.BooleanVar(value=True)
         self.app_state = self.read_app_state()
+        self.turbo_enabled = tk.BooleanVar(value=self.app_state.get('turbo_a', True) is not False)
         # Remembered between app starts (it was off again at every start: 15/11 report, issue #39).
         self.options['skulltulas_always_present'].set(self.app_state.get('skulltulas_always_present') is True)
         self.options['skulltulas_always_present'].trace_add(
@@ -790,8 +793,16 @@ class Application:
                     self.switch_row(rows, index, text, self.options[key], tip=text + '\n' + OPTION_TIPS[key])
                 else:
                     self.option_row(rows, index, visible[name])
-        self.card(details, 'Always on', 'Skippable cutscenes (hold X, or Plus), chests without cutscene, '
-                                       'turbo A (hold A in a dialogue).')
+        box = self.card(details, 'Quality of life', 'Choose each option for your game. Turbo A applies to this app.')
+        rows = ttk.Frame(box)
+        rows.pack(fill='x')
+        rows.columnconfigure(0, weight=1)
+        for index, (name, text) in enumerate(SKIP_OPTIONS):
+            self.switch_row(rows, index, text, self.options[name],
+                            tip='Applies when you generate a game. Turn off to keep the original behaviour.')
+        self.switch_row(rows, len(SKIP_OPTIONS), 'Turbo A: hold A in a dialogue', self.turbo_enabled,
+                        command=self.turbo_toggled,
+                        tip='PC port: repeat A while held in a dialogue. Remembered between app starts; takes effect immediately.')
         box = self.card(details, 'In-game tracker')
         rows = ttk.Frame(box)
         rows.pack(fill='x')
@@ -826,7 +837,8 @@ class Application:
         except Exception:
             return
         current = next((key for key in self.preset_cards
-                        if rando_options.validate(rando_options.preset(key)) == values), None)
+                        if dict(rando_options.validate(rando_options.preset(key)),
+                                fast_chests=values['fast_chests']) == values), None)
         for key, (box, art) in self.preset_cards.items():
             box.configure(style='CardSelected.TFrame' if key == current else 'Card.TFrame')
             art.configure(background=self.colors['gold_soft' if key == current else 'green_soft'])
@@ -1186,12 +1198,23 @@ class Application:
         return True
 
     def start_turbo(self):
-        """Turbo A is always on (no option): started once the window is up."""
+        """Keep the A forwarding service alive even when repetition is disabled."""
         if self.turbo:
             self.turbo.stop()
         self.turbo = turbo_a.TurboA(self.hookshot_root() or '')
+        self.turbo.enabled = self.turbo_enabled.get()
         self.turbo.start()
         self.turbo_status.set(self.turbo.status)
+
+    def turbo_toggled(self):
+        enabled = self.turbo_enabled.get()
+        self.write_app_state(turbo_a=enabled)
+        if self.turbo:
+            # Stopping the service would remove A from a running remapped game.
+            self.turbo.enabled = enabled
+            if self.turbo.running:
+                self.turbo.status = ('Turbo A on' if enabled else 'Turbo A off') + '; press X to skip a cutscene'
+        self.turbo_status.set('Turbo A on' if enabled else 'Turbo A off')
 
     def auto_save_toggled(self):
         self.write_app_state(auto_save=self.auto_save.get())
@@ -1277,7 +1300,8 @@ class Application:
             variable = tk.StringVar(value=option.default)
             display = tk.StringVar(value=labels[[v for v, label, reason in option.values].index(option.default)])
             variable.display, variable.labels = display, labels
-            allowed = [choice_label(value, text) for value, text, reason in option.values if reason is None]
+            allowed = [choice_label(value, text) for value, text, reason in option.values if reason is None
+                       and not (option.name == 'spiritual_stones' and value == 'door')]
             widget = ttk.Combobox(parent, state='readonly', values=allowed, textvariable=display, width=30) if parent else None
             if widget:
                 def selected(event=None):
@@ -1298,8 +1322,11 @@ class Application:
         return self.full_vars[option.name].get()
 
     def full_values(self):
-        return {option.name: self.full_value(option) for option in rando_options.OPTIONS
-                if option.name in self.full_vars}
+        values = {option.name: self.full_value(option) for option in rando_options.OPTIONS
+                  if option.name in self.full_vars}
+        if 'fast_chests' in values:
+            values['fast_chests'] = self.options['skip_chest_cutscenes'].get()
+        return values
 
     def apply_full(self, values, enable=None):
         values = rando_options.validate(values)
@@ -1331,6 +1358,7 @@ class Application:
                 values, ignored = rando_options.from_ap_yaml(Path(name).read_text(encoding='utf-8'))
                 supported = {k: (v if rando_options.BY_NAME[k].supported(v) else rando_options.BY_NAME[k].default)
                              for k, v in values.items()}
+                self.options['skip_chest_cutscenes'].set(supported['fast_chests'])
                 self.apply_full(supported, enable=True)
                 message = 'YAML imported.'
                 if ignored:
@@ -1404,18 +1432,13 @@ class Application:
             mods = validate_mod_directory(self.mods.get())
             ingame_tracker = self.ingame_tracker.get()
 
-            def job(progress):
-                installed = generate_in_mods(nup, mods, settings, progress, archive=ARCHIVE, generate=generate,
-                                             ingame_tracker=ingame_tracker)
-                return installed, installed
-            self.run_job(job, self.generated_and_installed)
+            self.start_generation(nup, mods, settings, ingame_tracker)
         except Exception as error:
             self.error(error)
 
     def get_settings(self):
         full = self.full_values() if self.full_enabled.get() else None
         options = {n: v.get() for n, v in self.options.items()}
-        options.update({name: True for name, _ in SKIP_OPTIONS})   # always on, no option
         categories = {n: v.get() for n, v in self.categories.items()}
         if full is not None:
             options['randomize_chests'] = False
@@ -1427,7 +1450,10 @@ class Application:
     def apply_settings(self, settings):
         self.seed.set(settings.seed)
         for name, variable in self.options.items():
-            variable.set(True if name in dict(SKIP_OPTIONS) else getattr(settings, name))
+            variable.set(getattr(settings, name))
+        # The old complete-mode alias and the general setting share one control.
+        self.options['skip_chest_cutscenes'].set(
+            settings.skip_chest_cutscenes or bool((settings.full or {}).get('fast_chests')))
         for name, variable in self.pool.items():
             variable.set(name in settings.pool and name.startswith('TBox_Rupee_'))
         for name, variable in self.excluded.items():
@@ -1519,12 +1545,7 @@ class Application:
             if not nup.is_file():
                 raise ValueError('Select the local NUP file.')
             mods = validate_mod_directory(self.mods.get())
-            ingame_tracker = self.ingame_tracker.get()
-            def job(progress):
-                installed = generate_in_mods(nup, mods, settings, progress, archive=ARCHIVE, generate=generate,
-                                             ingame_tracker=ingame_tracker)
-                return installed, installed
-            self.run_job(job, self.generated_and_installed)
+            self.start_generation(nup, mods, settings, self.ingame_tracker.get())
         except Exception as error:
             self.error(error)
 
@@ -1546,12 +1567,15 @@ class Application:
                     'place items differently: a new game may be needed.'):
                 return
 
-            def job(progress):
-                installed = generate_in_mods(nup, mods, settings, progress, archive=ARCHIVE, generate=generate)
-                return installed, installed
-            self.run_job(job, self.generated_and_installed)
+            self.start_generation(nup, mods, settings)
         except Exception as error:
             self.error(error)
+
+    def start_generation(self, nup, mods, settings, ingame_tracker=True):
+        def job(progress):
+            installed = generate_isolated(nup, mods, settings, ARCHIVE, progress, ingame_tracker)
+            return installed, installed
+        self.run_job(job, self.generated_and_installed)
 
     def generated_and_installed(self, result):
         directory, installed = result
@@ -2359,6 +2383,8 @@ class Application:
 
 
 def main(argv=None):
+    from multiprocessing import freeze_support
+    freeze_support()
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--open-mod', type=Path)

@@ -84,14 +84,17 @@ def step_event_names():
     return [f'{STEP_PREFIX}{index}' for index in range(len(START_STEPS))]
 
 
-def start_step_params(read_flow):
+def start_step_params(read_flow, door_ready=False):
     """[(event name, params)] of the requests replayed at the start (see module doc).
 
     ``read_flow(path)``: the game's bytes of a flow. Each params dict is the native
-    event's, with ``IsIgnoreChallengeProgressUI`` true."""
+    event's, with ``IsIgnoreChallengeProgressUI`` true. ``door_ready`` keeps the
+    no-stone escape at Step03 instead of replaying earlier DoorOfTime requests."""
     from oot_rando.patching.story_fixes import _Chart, _params
     charts, result = {}, []
     for name, (path, event, challenge, step) in zip(step_event_names(), START_STEPS):
+        if door_ready and challenge == 'DoorOfTime':
+            continue  # No-stone escape already starts at Step03; never reset it.
         if path not in charts:
             charts[path] = _Chart(read_flow(path))
         native = charts[path].event(event, 'ActionEvent')

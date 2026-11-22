@@ -1,5 +1,5 @@
-"""Real-time GameData bools from a running game: Hookshot (Windows), or a yuzu-family emulator
-(Windows, or native Linux).
+"""Real-time GameData bools from a running game: Hookshot / Longshot (Windows, or Longshot's native
+Linux build), or a yuzu-family emulator (Windows, or native Linux).
 
 Layout, as Hookshot v2.1.0's own cheat menu reads it (tools/host/hos_main.c, oot_gamedata_set_bool):
 - guest memory is one window at the fixed host address A64_HOST_BASE = 0x100000000000
@@ -29,9 +29,10 @@ The only write is ``LiveGameData.set_bool`` (the Archipelago
 client's reception signal, ``patching.ap_mailbox``): one value byte, as the cheat menu does.
 
 Process access: ``ProcessMemory`` (Windows: ReadProcessMemory / WriteProcessMemory) or
-``LinuxProcessMemory`` (a native Linux emulator such as Ryuchii's Linux build: its guest memory
-file, else ``/proc/<pid>/mem``); :func:`process_memory` picks the system's. Both list the process's regions and hand
-them to the same :func:`emulator_layout`. A Windows copy of this application under
+``LinuxProcessMemory`` (Longshot's Linux build, or a native Linux emulator such as Ryuchii's
+Linux build: its guest memory file, else ``/proc/<pid>/mem``); :func:`process_memory` picks the
+system's. A port keeps the fixed layout above; for an emulator both list the process's regions and
+hand them to the same :func:`emulator_layout`. A Windows copy of this application under
 Wine/Proton cannot read a native Linux process.
 """
 import bisect
@@ -43,7 +44,7 @@ import sys
 import time
 from pathlib import Path, PureWindowsPath
 
-from oot_rando.pc_port import is_port_process
+from oot_rando.pc_port import KNOWN_NAMES, is_port_process
 
 HOST_BASE = 0x100000000000
 GAMEDATA_SLOT = 0x84C9E180
@@ -96,7 +97,7 @@ def plain_name(name):
 
 
 def supported():
-    """True where the running game's memory can be read: Windows, and Linux (native emulators)."""
+    """True where the running game's memory can be read: Windows, and Linux (native Longshot, native emulators)."""
     return os.name == 'nt' or sys.platform.startswith('linux')
 
 
@@ -343,11 +344,29 @@ def readable_regions(rows):
 
 
 MEMFD_NAME = '/memfd:HostMemory'   # the yuzu-family emulators' guest memory file (memfd_create)
+PORT_MEMFD_NAME = '/memfd:longshot-guest'   # native Linux Longshot: its guest window, mapped at HOST_BASE
+MEMFD_NAMES = (MEMFD_NAME, PORT_MEMFD_NAME)
 
 
 def is_guest_memfd(path):
-    """True for the link name or maps path of an emulator's guest memory file (pure)."""
-    return path in (MEMFD_NAME, MEMFD_NAME + ' (deleted)')
+    """True for the link name or maps path of a guest memory file: an emulator's or Longshot's (pure)."""
+    if path.endswith(' (deleted)'):
+        path = path[:-len(' (deleted)')]
+    return path in MEMFD_NAMES
+
+
+def port_layout(read):
+    """(HOST_BASE, GAMEDATA_SLOT) when the native port's fixed layout holds the GameData, else None.
+
+    ``read(host, size)`` returns bytes or None (pure)."""
+    if valid_slot(lambda guest, size: read(HOST_BASE + guest, size), GAMEDATA_SLOT):
+        return HOST_BASE, GAMEDATA_SLOT
+    return None
+
+
+def covers(regions, host):
+    """True when one of ``regions`` ((address, size, state)) holds ``host`` (pure)."""
+    return any(address <= host < address + size for address, size, _ in regions)
 
 
 def memfd_mappings(text):
@@ -437,6 +456,27 @@ def linux_emulator_pids(emulators, proc='/proc', own=None):
     return [pid for pid in pids if names_match(linux_process_names(proc, pid), wanted)]
 
 
+def linux_exe_path(proc, pid):
+    """Full path of a process's executable ('' when unreadable), without a ' (deleted)' mark."""
+    try:
+        target = os.readlink(os.path.join(proc, str(pid), 'exe'))
+    except (OSError, NotImplementedError, ValueError):
+        return ''
+    return target[:-len(' (deleted)')] if target.endswith(' (deleted)') else target
+
+
+def linux_port_pids(proc='/proc', own=None):
+    """Process ids of a native PC port (Longshot's Linux build): a known name, or an executable in
+    a port folder. Its launcher and crash watcher match too; they have no guest window."""
+    try:
+        entries = os.listdir(proc)
+    except OSError:
+        return []
+    pids = sorted(int(entry) for entry in entries if entry.isdigit() and int(entry) != own)
+    return [pid for pid in pids if names_match(linux_process_names(proc, pid), set(KNOWN_NAMES))
+            or is_port_process(linux_exe_path(proc, pid))]
+
+
 def ptrace_scope(proc='/proc'):
     """Yama's kernel.yama.ptrace_scope (0 to 3), or None without Yama."""
     try:
@@ -446,26 +486,29 @@ def ptrace_scope(proc='/proc'):
 
 
 def denied_message(scope):
-    """Why Linux refused to open the emulator's memory, and the fix (pure)."""
+    """Why Linux refused to open the game's memory, and the fix (pure)."""
     if scope == 1:
-        return ('Linux refused to read the emulator\'s memory: kernel.yama.ptrace_scope is 1 (only a parent '
-                'process may read it). Fix: the emulator can allow it with prctl(PR_SET_PTRACER, '
+        return ('Linux refused to read the game\'s memory: kernel.yama.ptrace_scope is 1 (only a parent '
+                'process may read it). Fix: the game can allow it with prctl(PR_SET_PTRACER, '
                 'PR_SET_PTRACER_ANY), or set kernel.yama.ptrace_scope to 0 (sysctl, as root).')
     if scope == 2:
-        return ('Linux refused to read the emulator\'s memory: kernel.yama.ptrace_scope is 2 (administrators '
+        return ('Linux refused to read the game\'s memory: kernel.yama.ptrace_scope is 2 (administrators '
                 'only). Fix: set kernel.yama.ptrace_scope to 0 (sysctl, as root).')
     if scope == 3:
-        return ('Linux refused to read the emulator\'s memory: kernel.yama.ptrace_scope is 3 (no process may, '
+        return ('Linux refused to read the game\'s memory: kernel.yama.ptrace_scope is 3 (no process may, '
                 'and it stays so until a restart). Fix: set it to 0 in the boot settings (sysctl.d), then restart.')
-    return ('Linux refused to read the emulator\'s memory' + (f' (kernel.yama.ptrace_scope is {scope})'
-            if scope is not None else '') + ': run this application as the user who runs the emulator.')
+    return ('Linux refused to read the game\'s memory' + (f' (kernel.yama.ptrace_scope is {scope})'
+            if scope is not None else '') + ': run this application as the user who runs the game.')
 
 
 class LinuxProcessMemory:
-    """Memory of a native Linux emulator that has the game loaded (same interface as
-    :class:`ProcessMemory`).
+    """Memory of a native Linux game: Longshot's Linux build, or an emulator that has the game
+    loaded (same interface as :class:`ProcessMemory`).
 
-    First the emulator's guest memory file (``/memfd:HostMemory``), opened again through
+    Longshot keeps Hookshot's fixed layout (guest window at HOST_BASE, ``/memfd:longshot-guest``);
+    an emulator's is found by :func:`emulator_layout`.
+
+    First the game's guest memory file (``/memfd:HostMemory``, ``/memfd:longshot-guest``), opened again through
     ``/proc/<pid>/fd`` and read at the offsets ``/proc/<pid>/maps`` gives: both need only read
     access to the process, which kernel.yama.ptrace_scope 1 (SteamOS, Ubuntu) allows. Else
     ``/proc/<pid>/mem``, which needs ptrace access.
@@ -477,6 +520,7 @@ class LinuxProcessMemory:
         self.proc, self.fd, self.pid, self.next_scan = proc, None, None, 0.0
         self.base, self.slot = HOST_BASE, GAMEDATA_SLOT
         self.failure = 'game not running'   # the last scan's answer, repeated until the next scan
+        self.image = ''   # full path of the attached game's executable
         self.windows, self.memfd, self.inode, self.next_maps = None, None, None, 0.0   # memory file only
 
     def _open(self, pid, flags):
@@ -531,7 +575,11 @@ class LinuxProcessMemory:
             data += part
         return data
 
-    def _attach_memfd(self, pid):
+    @staticmethod
+    def _layout(port, regions, read):
+        return port_layout(read) if port else emulator_layout(regions, read)
+
+    def _attach_memfd(self, pid, port=False):
         """(fd, path, inode, windows, layout) through a guest memory file of ``pid``, or None."""
         text = self._maps(pid)
         for path in self._guest_memfds(pid):
@@ -543,7 +591,7 @@ class LinuxProcessMemory:
             mappings = [row for row in memfd_mappings(text) if row[3] == inode]
             windows = MemfdWindows(mappings)
             regions = [(start, size, MEM_COMMIT) for start, size, _, _ in mappings]
-            layout = emulator_layout(regions, lambda host, size: self._read_file(fd, windows, host, size))
+            layout = self._layout(port, regions, lambda host, size: self._read_file(fd, windows, host, size))
             if layout:
                 return fd, path, inode, windows, layout
             os.close(fd)
@@ -572,12 +620,18 @@ class LinuxProcessMemory:
             raise LiveUnavailable(self.failure)
         self.next_scan = now + 5   # same pace as the Windows scan
         denied = False
-        for pid in linux_emulator_pids(emulator_exes(), self.proc, os.getpid()):
-            found = self._attach_memfd(pid)
+        ports = set(linux_port_pids(self.proc, os.getpid()))
+        emulators = set(linux_emulator_pids(emulator_exes(), self.proc, os.getpid())) - ports
+        for pid in sorted(ports | emulators):
+            port = pid in ports
+            found = self._attach_memfd(pid, port)
             if found:
                 self.fd, self.memfd, self.inode, self.windows, (self.base, self.slot) = found
-                self.pid = pid
+                self.pid, self.image = pid, linux_exe_path(self.proc, pid)
                 return
+            regions = self._regions(pid)
+            if port and not covers(regions, HOST_BASE + GAMEDATA_SLOT):
+                continue   # the port's launcher or crash watcher: no guest window
             try:
                 fd = self._open(pid, os.O_RDONLY)
             except PermissionError:
@@ -585,9 +639,9 @@ class LinuxProcessMemory:
                 continue
             except OSError:
                 continue
-            layout = emulator_layout(self._regions(pid), lambda host, size: self._read(fd, host, size))
+            layout = self._layout(port, regions, lambda host, size: self._read(fd, host, size))
             if layout:
-                self.fd, self.pid = fd, pid
+                self.fd, self.pid, self.image = fd, pid, linux_exe_path(self.proc, pid)
                 self.base, self.slot = layout
                 return
             os.close(fd)
@@ -647,7 +701,7 @@ class LinuxProcessMemory:
                 os.close(self.fd)
             except OSError:
                 pass
-        self.fd, self.pid = None, None
+        self.fd, self.pid, self.image = None, None, ''
         self.windows, self.memfd, self.inode = None, None, None
 
 

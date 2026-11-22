@@ -14,6 +14,9 @@ edit of one resource, checked by re-reading it (Discord reports of 15/11):
   ``HavePlayedEvent.Dm_Goron_0030`` is false. The gift scene itself moves the
   challenge to ``DodongoCavernOpne`` (Event121): that step is now skipped once the
   challenge is past ``SariaMelodyPlay``, so a finished quest never goes back.
+  Opening the cavern also selects a restricted ocarina prompt (Event82) which
+  omits melody cases 6–11. Until the gift is received, keep the original prompt
+  with all melodies, even when the quest has already advanced.
 * **Talon at the castle twice.** ``SubEvent_GetEponaSong/GetEponaSong_StepCheck``
   sends Malon back to the castle (``IsMalonAppear_HyruleCastleSecondTime``, with an
   awake Talon at the entrance) once Dodongo's Cavern is done and Jabu-Jabu is not.
@@ -29,6 +32,11 @@ edit of one resource, checked by re-reading it (Discord reports of 15/11):
 * **Bombchu Bowling.** The alley opened only after Dodongo's Cavern
   (``MiniGame_BombchuBowling/AfterWakeUp`` Event137, ``Get_StoneOfFire_IsCompleted_Exp``):
   it is open from the start, as the logic expects.
+* **Bombchu Shop.** Same lock on the shop door (``Market_Child_Prefab_0c76`` read
+  ``Get_StoneOfFire_IsCompleted_Exp``, :func:`bombchu_shop_open_from_start`): it now
+  opens from the start, with opening hours removed by ``shop_hours``. The vendor, music and closed sign have
+  separate map Presence checks; :func:`bombchu_shop_actor_edits` removes their
+  dungeon dependency too, keeping the vendor/music and hiding the closed sign.
 * **Great Fairies.** Zelda's Lullaby on a fountain's Triforce mark
   (``TriForcePoint/Sub_PlayOcarinaSequence_FairyFountain``) only calls the fairy of
   Din's Fire (Death Mountain Trail) at once; the five others stay away while
@@ -190,7 +198,7 @@ def _case(event, key):
 
 
 def darunia_gift_after_dungeon(raw):
-    """``Get_StoneOfFire``: the gift scene after the dance while it was never played.
+    """``Get_StoneOfFire``: full ocarina prompt and gift while never received.
 
     Returns (bytes, report)."""
     from evfl.util import make_index
@@ -204,11 +212,24 @@ def darunia_gift_after_dungeon(raw):
     given = flow.switch('RandoDaruniaGiftGiven', 'EventQueryIsGameDataBool',
                         {'GameDataName': DARUNIA_GIFT_PLAYED, 'Index': -1}, done, gift)
     check.data.cases[0] = make_index(given)
+    prompt = flow.event('Event82', 'SwitchEvent')
+    late, early = _case(prompt, 0), _case(prompt, 1)
+    if (_params(prompt) != {'GameDataName': AFTER_SARIA_PLAY}
+            or late is None or late.name != 'Event278'
+            or early is None or early.name != 'Event193'):
+        raise ValueError('Unexpected Darunia ocarina prompt dispatch.')
+    prompt_given = flow.switch('RandoDaruniaOcarinaGiftGiven', 'EventQueryIsGameDataBool',
+                               {'GameDataName': DARUNIA_GIFT_PLAYED, 'Index': -1}, late, early)
+    prompt.data.cases[0] = make_index(prompt_given)
     result, events = flow.write()
     written = events['Event39'].data.cases
     switch = events['RandoDaruniaGiftGiven'].data.cases
     if (written[0].v.name != 'RandoDaruniaGiftGiven' or written[1].v.name != gift.name
-            or switch[0].v.name != done.name or switch[1].v.name != gift.name):
+            or switch[0].v.name != done.name or switch[1].v.name != gift.name
+            or events['Event82'].data.cases[0].v.name != prompt_given.name
+            or events['Event82'].data.cases[1].v.name != early.name
+            or events[prompt_given.name].data.cases[0].v.name != late.name
+            or events[prompt_given.name].data.cases[1].v.name != early.name):
         raise ValueError('Darunia gift wrongly chained.')
     return result, {'flow': FIRE_STONE_FLOW, 'switch': 'RandoDaruniaGiftGiven', 'flag': DARUNIA_GIFT_PLAYED}
 
@@ -517,9 +538,9 @@ def lake_tree_wall_edits(root):
 # (:func:`zelda_escape_on_talk`).
 DOOR_FLOW = 'Event/EventFlow/DoorOfTime.bfevfl.zs'
 ACTION_GUIDE_FLOW = 'Event/EventFlow/ActionGuide.bfevfl.zs'
-# The ``spiritual_stones`` option's values: the stones the escape asks for.
+# Stone choices shared by the door and escape (older seeds retain separate settings).
 STONE_SETS = {'all': ('Item_Stone_Forest', 'Item_Stone_Fire', 'Item_Stone_Water'),
-              'vanilla': ('Item_Stone_Fire', 'Item_Stone_Water')}   # the native check's two quests
+              'vanilla': ('Item_Stone_Fire', 'Item_Stone_Water'), 'song': ()}   # the native check's two quests
 STONE_FLAG_PREFIX = 'IsGet.'   # saved when the stone is obtained, however it is given
 DOOR_STARTED = 'DoorOfTime_IsAfter_Step01_Exp'
 DOOR_BEFORE_ESCAPE = 'DoorOfTime_IsAfter_Step2_2_Exp'
@@ -533,7 +554,7 @@ DOOR_STEP03_PARAMS = {'IsIgnoreCompletedChallenge': False, 'IsIgnoreChallengePro
 def escape_stones(full):
     """The stones Zelda's escape asks for, from the (stored) full randomizer options."""
     from oot_rando.logic import rando_options
-    return STONE_SETS[rando_options.stored_value(full, 'spiritual_stones')]
+    return STONE_SETS[rando_options.escape_requirement(full)]
 
 
 def _stone_check(flow, prefix, stones, following, done=...):
@@ -1291,7 +1312,7 @@ GORON_TUNIC_GIFT = 'Obj_Armor_Goron'
 GORON_TUNIC = 'Armor_Adult_Goron'
 
 
-def link_goron_gives_tunic(raw):
+def link_goron_gives_tunic(raw, reward=None):
     """``Npc_Goron_DaruniaJr_Adult``: his talk gives the Goron Tunic while Link has none.
 
     Returns (bytes, report)."""
@@ -1306,10 +1327,20 @@ def link_goron_gives_tunic(raw):
         raise ValueError('Story fix already applied: RandoGoronTunic')
     usual = entry.main_event.v
     give = editor.subflow('RandoGoronTunicGive', 'Dm_SY_GetInEvent', 'GetInEvent_NotTurn_NotNpc',
-                          {'ActorName': GORON_TUNIC_GIFT, 'IsNpcEventStarter': False})
-    link(give, usual)
-    has = editor.switch('RandoGoronTunicHas', 'PouchSystemActor', 'EventQueryIsExistInPouch',
-                        {'Actor': GORON_TUNIC, 'Num': 1}, usual, give)
+                          {'ActorName': reward['actor'] if reward else GORON_TUNIC_GIFT, 'IsNpcEventStarter': False})
+    following = usual
+    if reward:
+        following = editor.action('RandoGoronTunicCollected', 'GameDataActor', 'EventTriggerSetGameDataBool',
+                                  {'GameDataName': reward['flag'], 'Index': -1, 'Value': True})
+        link(following, usual)
+    link(give, following)
+    if reward:
+        # Ownership cannot stand in for collection once the gift is shuffled.
+        has = editor.switch('RandoGoronTunicHas', 'GameDataActor', 'EventQueryIsGameDataBool',
+                            {'GameDataName': reward['flag'], 'Index': -1}, usual, give)
+    else:
+        has = editor.switch('RandoGoronTunicHas', 'PouchSystemActor', 'EventQueryIsExistInPouch',
+                            {'Actor': GORON_TUNIC, 'Num': 1}, usual, give)
     entry.main_event = make_index(has)
     entry._sub_flow_event_indices = list(entry._sub_flow_event_indices) + [chart.events.index(give)]
     result, checked = editor.write("Link the Goron's tunic")
@@ -1317,8 +1348,12 @@ def link_goron_gives_tunic(raw):
     start = {e.name: e for e in checked.flowchart.entry_points}[LINK_GORON_TALK].main_event.v
     cases = {k: c.v.name for k, c in events['RandoGoronTunicHas'].data.cases.items()}
     if (start.name != 'RandoGoronTunicHas' or cases != {0: 'Event99', 1: 'RandoGoronTunicGive'}
-            or events['RandoGoronTunicGive'].data.nxt.v.name != 'Event99'):
+            or events['RandoGoronTunicGive'].data.nxt.v.name != following.name):
         raise ValueError("Link the Goron's tunic wrongly chained.")
+    if reward:
+        from oot_rando.patching.progressive import is_token, add_converter_calls
+        if is_token(reward['actor']):
+            result = add_converter_calls(result, ['RandoGoronTunicGive'], 'Npc_Goron_DaruniaJr_Adult')
     return result, {'flow': LINK_GORON_FLOW, 'entry': LINK_GORON_TALK, 'gift': GORON_TUNIC_GIFT}
 
 
@@ -1359,6 +1394,17 @@ SAGE_OF_WATER_FLOW = 'Event/EventFlow/SageOfWater.bfevfl.zs'
 SAGE_OF_WATER_STEPS = ('Ready', 'Step00', 'Step01', 'Step03', 'Step04', 'Step05', 'Step06', 'Step07',
                        'Step07_00', 'Step07_1', 'Step07_1_Safety', 'Step07_2', 'Step08')
 SERENADE_STEPS = ('Step04', 'Step05')
+BOMBCHU_SHOP_MODULE = 'Logic/Market_Child_Prefab_0c76.logic.module.ainb'
+BOMBCHU_SHOP_QUEST = 'Get_StoneOfFire_IsCompleted_Exp'
+BOMBCHU_SHOP_ACTORS = {
+    'Banc/Market/Market_Child_Dynamic.bcett.byml.zs': (
+        (7765672504758317189, 'Land_HrlCity_ShopSign_A_01', True),),
+    'Banc/Market/Market_Child_Static.bcett.byml.zs': (
+        (13279196239484838949, 'Npc_Hylia_021_Shop_Child', False),
+        (14705828610563193869, 'BGM_Shop_Market_Bombchu', False)),
+}
+
+
 DOOR_MODULE = 'Logic/Market_Common_f252.logic.module.ainb'
 DOOR_OPENED = 'Market_Child_TimeTempleDoor_Opened'
 # The altar's ReplaceEventParam rejects the ocarina BEFORE DoorOfTime_OpenDoor
@@ -1554,6 +1600,55 @@ def door_opens_on_saved_flag(raw):
     return _module_edit(raw, check, edit), {'module': DOOR_MODULE, 'flag': DOOR_OPENED}
 
 
+def bombchu_shop_actor_edits(root, path):
+    """Keep the child shop's vendor/music present and its closed sign hidden.
+
+    Only replace these actors' dungeon gate with childhood; preserve the native
+    negations, vendor links, stock, and the door's separate nighttime condition.
+    Returns (patch_strings edits, manifest report).
+    """
+    edits, indices = [], []
+    for ident, gyaml, negation in BOMBCHU_SHOP_ACTORS[path]:
+        found = [i for i, actor in enumerate(root.get('Actors', [])) if actor.get('Hash') == ident]
+        if len(found) != 1:
+            raise ValueError('Bombchu Shop actor not found: ' + gyaml)
+        index = found[0]
+        actor = root['Actors'][index]
+        if (actor.get('Gyaml') != gyaml or actor.get('Presence') != {
+                'FlagName': BOMBCHU_SHOP_QUEST, 'IsCheckLazy': False, 'IsNegation': negation}):
+            raise ValueError('Unexpected Bombchu Shop actor presence: ' + gyaml)
+        edits.append({'path': ('Actors', index, 'Presence', 'FlagName'),
+                      'before': BOMBCHU_SHOP_QUEST, 'after': CHILDHOOD})
+        indices.append(index)
+    return edits, {'actors': indices, 'presence': CHILDHOOD}
+
+
+def bombchu_shop_open_from_start(raw):
+    """``Market_Child_Prefab_0c76``: the Bombchu Shop door no longer asks for the Fire Stone quest.
+
+    Node 1 reads ``Get_StoneOfFire_IsCompleted_Exp``; node 0 (night: opens the door) and node 4
+    (day or night: the door's prompt) AND it. Both now read only their time-of-day input
+    (the shop stays a night shop, as the logic expects). Returns (bytes, report)."""
+    def sources(node):
+        return [(s['Node Index'], s['Output Index']) for s in node['Parameters']['Inputs']['Bool'][0]['Sources']]
+
+    def check(nodes):
+        if (len(nodes) < 6 or nodes[1].get('Name') != 'HoldGameDataGetBoolExpSimple'
+                or nodes[1]['Parameters']['Inputs']['String'][0]['Default Value'] != BOMBCHU_SHOP_QUEST
+                or nodes[0].get('Name') != 'OperateAND' or sources(nodes[0]) != [(1, 0), (2, 1)]
+                or nodes[4].get('Name') != 'OperateAND' or sources(nodes[4]) != [(1, 0), (5, 1)]
+                or nodes[3].get('Flags') != ['Is Query', 'Is Module']):
+            raise ValueError('Unexpected Bombchu Shop door module (already patched?).')
+
+    def edit(nodes):
+        for node, queries in ((0, [2, 2]), (4, [5, 5])):
+            gate = nodes[node]
+            time = gate['Parameters']['Inputs']['Bool'][0]['Sources'][1]
+            gate['Parameters']['Inputs']['Bool'][0]['Sources'] = [dict(time), dict(time)]
+            gate['Queries'] = queries
+    return _module_edit(raw, check, edit), {'module': BOMBCHU_SHOP_MODULE, 'dropped': BOMBCHU_SHOP_QUEST}
+
+
 def door_song_before_escape(raw):
     """``DoorOfTime``: the Song of Time opens the door before the escape (see above).
 
@@ -1624,17 +1719,124 @@ def revelation_keeps_ganon_quest(raw):
 def scene_module_fixes():
     """((logic module path, report key, fix(raw) -> (bytes, report)), ...) of these fixes."""
     from oot_rando.patching.world_openings import PEDESTAL_MODULE as CHILD_PEDESTAL, pedestal_before_sages
-    return ((WATER_GATE_MODULE, 'water_gate', water_gate_for_adult),
+    from oot_rando.patching.world_openings import (KAKARIKO_CLOSED_MODULE, KAKARIKO_OPEN_MODULE,
+                                                  kakariko_gate_on_letter)
+    from oot_rando.patching import link_goron
+    from oot_rando.patching import lost_dog, shop_hours
+    return (*shop_hours.module_fixes(),
+            (lost_dog.MODULE, 'lost_dog_map', lost_dog.map_from_start),
+            (link_goron.MODULE, 'link_goron_spawn', link_goron.spawn_from_first_entry),
+            (WATER_GATE_MODULE, 'water_gate', water_gate_for_adult),
+            (KAKARIKO_CLOSED_MODULE, 'kakariko_gate_closed',
+             lambda raw: kakariko_gate_on_letter(raw, False)),
+            (KAKARIKO_OPEN_MODULE, 'kakariko_gate_open',
+             lambda raw: kakariko_gate_on_letter(raw, True)),
+            (BOMBCHU_SHOP_MODULE, 'bombchu_shop_open', shop_hours.bombchu_from_start),
             (DOOR_MODULE, 'door_saved_flag', door_opens_on_saved_flag),
             (CHILD_PEDESTAL, 'first_pull_any_door_step',
              lambda raw: (pedestal_before_sages(raw), {'module': CHILD_PEDESTAL})),
             (BRIDGE_MODULE, 'bridge_medallions', bridge_on_medallions))
 
 
-def flow_fixes(stones):
+# After Morpha the red ice disappears and the challenge's NPC schedule releases
+# King Zora to his ordinary Talk/IrregularTalk. Neither contains his tunic gift.
+# Keep the original reward site (SageOfWater/Event242), so item replacement and
+# AP/progressive hooks still run, and use its saved receipt instead of ownership.
+KING_ZORA_FLOW = 'Event/EventFlow/Npc_Zora_KingZora_adult.bfevfl.zs'
+KING_ZORA_GIFT_FLAG = 'SageOfWater_KingZora_adult_Talk_Event198'
+KING_ZORA_GIFT_ENTRY = 'RandoKingZoraGift'
+
+
+def king_zora_gift_entry(raw, shuffled=False):
+    """Expose the native gift sequence for a post-Morpha unclaimed reward."""
+    from evfl.entry_point import EntryPoint
+    from evfl.util import make_index
+    from oot_rando.patching.progressive import FlowEditor, link
+    editor = FlowEditor(raw, 'SageOfWater')
+    events = {e.name: e for e in editor.chart.events}
+    gift = events['Event242']
+    if (type(gift.data).__name__ != 'SubFlowEvent'
+            or (not shuffled and gift.data.params.data.get('ActorName') != 'Obj_Armor_Zora')
+            or events['Event69'].data.params.data.get('GameDataName') != KING_ZORA_GIFT_FLAG
+            or any(e.name == KING_ZORA_GIFT_ENTRY for e in editor.chart.entry_points)):
+        raise ValueError('Unexpected King Zora gift sequence or fix already applied.')
+    if shuffled:
+        # Both native talks already test the receipt before testing tunic ownership.
+        # An unclaimed randomized gift must take the no-tunic branch regardless.
+        for name, parent in (('Event136', 'Event137'), ('Event243', 'Event127')):
+            node = events[name]
+            if node.data.params.data != {'Actor': 'Armor_Adult_Zora', 'Num': 1}:
+                raise ValueError('Unexpected King Zora ownership gate.')
+            events[parent].data.cases[1] = node.data.cases[1]
+    init = editor.subflow('RandoKingZoraGiftInit', 'Get_StoneOfWater', 'Test_InitTalk_KingZora',
+                         {'Arg_Turn': 4, 'Arg_Greeting': 4})
+    link(init, gift)
+    entry = EntryPoint(KING_ZORA_GIFT_ENTRY)
+    entry.main_event = make_index(init)
+    # Event242 returns through Event265; its true branch ends after Step05,
+    # so this post-completion route never requests an earlier challenge step.
+    entry._sub_flow_event_indices = [editor.chart.events.index(init), editor.chart.events.index(gift)]
+    editor.chart.entry_points.append(entry)
+    result, _ = editor.write('King Zora gift entry')
+    return result, {'entry': KING_ZORA_GIFT_ENTRY, 'reward': 'Event242', 'flag': KING_ZORA_GIFT_FLAG}
+
+
+def king_zora_gift_after_morpha(raw):
+    """Normal and side-position talk offer the missed gift once after Morpha."""
+    from evfl.util import make_index
+    from oot_rando.patching.progressive import FlowEditor
+    editor = FlowEditor(raw, 'Npc_Zora_KingZora_adult')
+    entries = {e.name: e for e in editor.chart.entry_points}
+    for name, root in (('Talk', 'Event38'), ('IrregularTalk', 'Event113')):
+        entry = entries[name]
+        if entry.main_event.v.name != root:
+            raise ValueError('Unexpected King Zora talk entry: ' + name)
+        usual = entry.main_event.v
+        give = editor.subflow('RandoKingZoraGift' + name, 'SageOfWater', KING_ZORA_GIFT_ENTRY, None)
+        received = editor.switch('RandoKingZoraGiftReceived' + name, 'GameDataActor',
+                                 'EventQueryIsGameDataBool',
+                                 {'GameDataName': KING_ZORA_GIFT_FLAG, 'Index': -1}, usual, give)
+        completed = editor.switch('RandoKingZoraGiftCompleted' + name, 'GameDataActor',
+                                  'EventQueryIsGameDataBoolExp',
+                                  {'GameDataName': 'SageOfWater_IsCompleted_Exp'}, received, usual)
+        entry.main_event = make_index(completed)
+        entry._sub_flow_event_indices = list(entry._sub_flow_event_indices) + [editor.chart.events.index(give)]
+    result, _ = editor.write('King Zora gift after Morpha')
+    return result, {'entries': ['Talk', 'IrregularTalk'], 'flag': KING_ZORA_GIFT_FLAG}
+
+
+def link_goron_shuffled_gift(raw, flag):
+    """The quest and ordinary talks share one receipt for the shuffled gift."""
+    from evfl.util import make_index
+    flow = _Chart(raw)
+    give = flow.event('Event18', 'SubFlowEvent')
+    join = flow.event('Event36', 'JoinEvent')
+    if join.data.nxt.v is not give:
+        raise ValueError('Unexpected Darunia Jr. gift entrance.')
+    guard = flow.switch('RandoGoronGiftCollected', 'EventQueryIsGameDataBool',
+                        {'GameDataName': flag, 'Index': -1}, give.data.nxt.v, give)
+    join.data.nxt = make_index(guard)
+    result, _ = flow.write()
+    return result, {'flag': flag}
+
+
+def flow_fixes(stones, npc_gifts=None):
     """``(flow, report key, fix)`` of every story fix; the escape checks ask for ``stones``."""
+    npc_gifts = npc_gifts or {}
+    goron = npc_gifts.get('goron')
+    from oot_rando.patching.minigame_rewards import FIXES as MINIGAME_FIXES
+    from oot_rando.patching import gerudo_fortress as gerudo
+    from oot_rando.patching import link_goron
+    from oot_rando.patching import lost_dog, shop_hours
     return (
+        *shop_hours.flow_fixes(),
+        (lost_dog.FLOW, 'lost_dog_reward', lost_dog.reward_until_received),
+        (link_goron.FLOW, 'link_goron_forward', link_goron.keep_quest_forward),
+        (gerudo.SPIRIT_FLOW, 'gerudo_prison_card',
+         partial(gerudo.membership_flow, names=('Event123', 'Event99', 'Event389'))),
+        (gerudo.GUARD_FLOW, 'gerudo_guard_card', partial(gerudo.membership_flow, names=('Event20',))),
         *OWL_FLOW_FIXES,
+        *MINIGAME_FIXES,
         ('Event/EventFlow/AllSage.bfevfl.zs', 'prelude_quest_forward', prelude_keeps_later_sage_progress),
         (FIRE_STONE_FLOW, 'darunia_gift', darunia_gift_after_dungeon),
         (DARUNIA_GIFT_FLOW, 'fire_quest_forward', keep_fire_quest_forward),
@@ -1650,8 +1852,13 @@ def flow_fixes(stones):
         (KOKIRI_EXIT_FLOW, 'kokiri_exit_guard', kokiri_exit_guard_steps_aside),
         (DAMPE_FLOW, 'dampe_first_race', dampe_first_race_until_prize),
         (SARIA_SONG_FLOW, 'saria_song_forward', door_of_time_forward),
-        (LINK_GORON_FLOW, 'link_goron_tunic', link_goron_gives_tunic),
+        (LINK_GORON_FLOW, 'link_goron_tunic', partial(link_goron_gives_tunic, reward=goron)),
+        *((('Event/EventFlow/SageOfFire.bfevfl.zs', 'link_goron_shuffled',
+            partial(link_goron_shuffled_gift, flag=goron['flag'])),) if goron else ()),
         (SAGE_OF_WATER_FLOW, 'serenade_forward', serenade_keeps_water_temple),
+        (SAGE_OF_WATER_FLOW, 'king_zora_gift_entry',
+         partial(king_zora_gift_entry, shuffled=bool(npc_gifts.get('zora')))),
+        (KING_ZORA_FLOW, 'king_zora_gift', king_zora_gift_after_morpha),
         (DOOR_FLOW, 'door_song_before_escape', door_song_before_escape),
         (ALL_SAGE_FLOW, 'revelation_forward', revelation_keeps_ganon_quest),
     )
