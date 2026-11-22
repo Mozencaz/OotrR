@@ -355,11 +355,12 @@ class Application:
         self.settings_tab = self.tab('newseed', 'New seed', 'New seed', 'Pick an adventure, then generate it.')
         self.tracker_tab = self.tab('tracker', 'Tracker', 'Tracker', 'What you found, and what you can reach now.')
         self.multiworld_tab = self.tab('multiworld', 'Multiworld', 'Multiworld', 'Play with friends through Archipelago. Three steps.')
+        self.midna_guide_tab = self.tab('midna_guide', 'Midna Setup', "Midna's Devotion Workflow", 'Apply mods after generating a seed and before launching the game or starting a new save.')
+        self._add_mod_manager_sidebar_action()
         self.sidebar.gap()
         self.setup_tab = self.tab('setup', 'Setup', 'Setup', 'Where your game lives. Set once.')
         self.spoiler_tab = self.tab('spoiler', 'Spoiler', 'Spoiler', 'Every reward of the open seed. Reveal only if you want to know.')
         self.help_tab = self.tab('help', 'Help', 'Help', 'How the application works, step by step.')
-        self._add_mod_manager_sidebar_action()
         self.tabs.bind('<<NotebookTabChanged>>', lambda event: self.page_changed())
         self.home_body, self.settings_body = self.scrollable(self.home_tab), self.scrollable(self.settings_tab)
         self.multiworld_body, self.setup_body = self.scrollable(self.multiworld_tab), self.scrollable(self.setup_tab)
@@ -368,6 +369,7 @@ class Application:
         self.build_categories()
         self.build_tracker()
         self.build_multiworld()
+        self.build_midna_guide()
         self.build_spoiler()
         self.build_help()
         for variable in (self.nup, self.mods, self.save_path):
@@ -434,6 +436,26 @@ class Application:
         row = ttk.Frame(parent)
         row.pack(fill='x', pady=pady)
         return row
+
+    def build_midna_guide(self):
+        parent = self.scrollable(self.midna_guide_tab)
+        steps = [
+            ("01", "1. Generate the Seed First", "Go to New seed, pick your settings, and generate/install your seed so the generated seed folder is ready in your mods directory."),
+            ("02", "2. Run Midna's Devotion Before Playing", "After generating a seed, open Midna's Devotion to apply and merge your mods BEFORE launching the game or creating a new save file."),
+            ("03", "3. Launch Game & Make a New Save", "Once Midna's Devotion finishes applying your mods, launch the game and start a new save file (saving after the intro) so everything loads cleanly from the start."),
+            ("04", "4. Avoid Mid-Run Save Swaps", "Always apply mods before starting a fresh save file on a newly generated seed rather than swapping mod sets onto an existing save mid-run."),
+        ]
+        grid = ttk.Frame(parent, style='Page.TFrame')
+        grid.pack(fill='x')
+        grid.columnconfigure((0, 1), weight=1, uniform='midna_guide')
+        for index, (num, heading, text) in enumerate(steps):
+            box = ttk.Frame(grid, style='Card.TFrame', padding=theme.CARD_PADDING)
+            box.grid(row=index // 2, column=index % 2, sticky='nsew', padx=(0, 7) if index % 2 == 0 else (7, 0), pady=(0, 14))
+            ttk.Label(box, text=num, style='Field.TLabel').pack(anchor='w')
+            ttk.Label(box, text=heading, style='Heading.TLabel').pack(anchor='w', pady=(2, 6))
+            ttk.Label(box, text=text, style='Muted.TLabel', wraplength=360, justify='left').pack(anchor='w')
+        action_row = self.buttons(parent, pady=(4, 8))
+        ttk.Button(action_row, text="Open Midna's Devotion", style='Accent.TButton', command=self.launch_mod_manager).pack(side='left')
 
     def build_help(self):
         parent = self.scrollable(self.help_tab)
