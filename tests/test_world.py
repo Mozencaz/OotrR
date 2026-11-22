@@ -21,7 +21,7 @@ class WorldTests(unittest.TestCase):
         # Installed seeds keep it (tracker accessibility) and Archipelago patches compare it.
         # Gerudo Membership Card now grants access independently of the rescues.
         # Change this value on purpose only, when the logic files change.
-        self.assertEqual(self.world.fingerprint(), 'd6143a55ae9755a959d5918ab5c91e5d7f28b1629e6abe4ff4c7e965a4a66ff1')
+        self.assertEqual(self.world.fingerprint(), '9320b6448b1fb4af4bce35da746e3b593e4dd2c460ac1169d511723a312101e5')
 
     def test_tables_and_regions(self):
         self.assertEqual(len(self.world.location_table), 1707)

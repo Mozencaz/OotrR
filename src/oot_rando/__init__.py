@@ -1,2 +1,2 @@
 """Randomizer for the Ocarina of Time remake (Hookshot / emulator RomFS mods)."""
-__version__ = "0.7.5"
+__version__ = "0.8.0"

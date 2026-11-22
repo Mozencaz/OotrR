@@ -17,7 +17,9 @@ ACCEPTED_GENERATORS = (
     ('0.10.0', 'ap-glitchless-v5'), ('0.11.0', 'ap-glitchless-v5'), ('0.11.1', 'ap-glitchless-v5'),
     ('0.11.2', 'ap-glitchless-v5'), ('0.11.3', 'ap-glitchless-v5'), ('0.11.4', 'ap-glitchless-v5'),
     ('0.10.1', 'ap-glitchless-v5'), ('0.12.0', 'ap-glitchless-v5'), ('0.12.1', 'ap-glitchless-v5'),
-    ('0.12.2', 'ap-glitchless-v5'), ('0.12.3', 'ap-glitchless-v5'))
+    ('0.12.2', 'ap-glitchless-v5'), ('0.12.3', 'ap-glitchless-v5'), ('0.12.4', 'ap-glitchless-v5'),
+    ('0.12.5', 'ap-glitchless-v5'), ('0.12.6', 'ap-glitchless-v5'), ('0.12.7', 'ap-glitchless-v5'),
+    ('0.12.8', 'ap-glitchless-v5'))
 
 QOL_FOLDER = 'OoT_QoL'
 QOL_KIND = 'qol'

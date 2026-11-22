@@ -189,7 +189,7 @@ SETTING_GROUPS = (
      ['accessibility', 'logic_no_night_tokens_without_suns_song', 'game:skulltulas_always_present']),
     ('Item pool', 'What is shuffled and what you start with.',
      ['item_pool_value', 'start_inventory_from_pool', 'shuffle_kokiri_sword',
-      'shuffle_master_sword', 'shuffle_gerudo_card', 'shuffle_remake_items']),
+      'shuffle_master_sword', 'shuffle_gerudo_card', 'shuffle_remake_items', 'blue_fire_arrows']),
     ('Shuffled locations', 'Where items can be found.',
      ['shuffle_chests', 'chest_matching', 'tokensanity', 'shuffle_freestanding_items', 'shuffle_npc_gifts',
       'shuffle_quest_rewards', 'shuffle_boss_rewards', 'shuffle_great_fairies', 'shuffle_song_items',

@@ -2,8 +2,8 @@
 
 Generated pickups retain the real item's PouchActor. Their private event AINB
 sets a saved check flag only after the native add-to-pouch action. The source
-itself is left as in the game, but for its drop, so it breaks and respawns like
-the vanilla one (on a scene change). Once the check is collected, the pickup it
+keeps its native destruction and respawn settings; the texture adapter can
+give its map instance a private appearance actor. Once the check is collected, the pickup it
 drops is not a reward any more: its own AI (a clone of the native ``DropItem``
 one) checks the flag when it spawns and hands over to the source's vanilla drop
 (:func:`vanilla_drop_files`). A minor reward (rupees, ammunition, hearts) keeps
@@ -873,6 +873,7 @@ def patch_repeatable_sources(records, maps, raw_maps):
     their drop: no Presence and no vanilla copy. The game remembers a broken source
     by its hash (its Bool64bitKey) until the scene changes; a copy under another
     hash, or a source under a Presence condition, came back while the area stayed loaded.
+    The texture adapter later replaces Gyaml while preserving these native fields.
     """
     documents = {}
     for record in records:

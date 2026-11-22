@@ -34,7 +34,7 @@ from oot_rando.game.resource_allocations import allocation, grow_resources, add_
 from oot_rando.formats.byml_writer import lift_actors, patch_strings
 from oot_rando.logic import rando_options
 
-GENERATOR_VERSION = '0.12.3'  # shared AP dispatcher; bounded global sequence size
+GENERATOR_VERSION = '0.12.8'  # Optional ice arrows melting red ice; shops open day and night
 ADAPTER_VERSION = 'ap-glitchless-v5'   # v5: progressive tokens (every copy gives the next level)
 ADULT_MAP = MAP.replace('_Child_', '_Adult_')
 # The amiibo menu: given by Kaepora's first field arrival, now never played
@@ -479,6 +479,9 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
             # Story locks broken by items found in any order (patching/story_fixes.py).
             from oot_rando.patching import story_fixes
             story = {}
+            from oot_rando.patching import lost_dog
+            extra_raw[lost_dog.CHALLENGES], story['lost_dog_quest'] = lost_dog.quest_from_start(
+                extra_raw.get(lost_dog.CHALLENGES) or decompress(read(lost_dog.CHALLENGES), d))
             from oot_rando.patching import gerudo_fortress
             story['gerudo_membership'] = {}
             for path, fix in gerudo_fortress.resource_fixes():
@@ -488,7 +491,15 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
             from oot_rando.patching import link_goron
             extra_raw[link_goron.SCHEDULES], story['link_goron_rolling'] = link_goron.stunnable_before_intro(
                 extra_raw.get(link_goron.SCHEDULES) or decompress(read(link_goron.SCHEDULES), d))
-            for path, key, fix in story_fixes.flow_fixes(stones):
+            npc_gifts = {}
+            for key, location in (('goron', 'GC Rolling Goron as Adult'), ('zora', 'ZD King Zora Thawed')):
+                gid = 'npc#' + location
+                placement = next((p for p in full['placements'] if p['id'] == gid), None)
+                if placement:
+                    npc_gifts[key] = {'actor': placement['after'], 'flag': full['matches'][gid]['tracking_flag']}
+            if npc_gifts:
+                story['npc_gifts'] = npc_gifts
+            for path, key, fix in story_fixes.flow_fixes(stones, npc_gifts):
                 extra_raw[path], story[key] = fix(extra_raw.get(path) or decompress(read(path), d))
             # Kaepora's first field arrival never plays (its effects are set at the start):
             # its quest step follows the Deku Tree escape instead (patching/owl_advice.py).
@@ -803,6 +814,11 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
                 raw = decompress(read(path), d) if path.endswith('.zs') else read(path)
             target[path] = fix(raw)
         skips['elemental_arrows'] = True
+        if (settings.full or {}).get('blue_fire_arrows', False):
+            from oot_rando.patching import blue_fire_arrows
+            for path, fix in blue_fire_arrows.resource_fixes():
+                extra_raw[path] = fix(extra_raw.get(path) or decompress(read(path), d))
+            skips['blue_fire_arrows'] = True
         from oot_rando.patching import magic_capacity
         skips['magic_capacity'] = magic_capacity.apply(
             extra_raw, new_files, lambda path: decompress(read(path), d))
@@ -1241,6 +1257,9 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
             return modified[path] if path in modified else decompress(read(path), dictionaries_)
 
         new.update(build_repeatable_packs(repeatables, read_pack, repeat_read_raw, tables, progress=report))
+        from oot_rando.patching.source_textures import build_files as build_source_texture_files
+        report('Building unchecked source textures…')
+        new.update(build_source_texture_files(repeatables, maps, raw_maps, read_pack, repeat_read_raw, tables))
         for name, path in RSDB_FILES.items():
             modified[path] = byml_codec.dump(documents[name])
     if repeatables:

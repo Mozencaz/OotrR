@@ -13,7 +13,7 @@ and logic are checked statically (`python -m oot_rando verify`); items marked
 | **Gold Skulltulas** (`tokensanity`: dungeons / overworld / all) | 100 skulltulas = the 100 AP locations | `Drop__DropActor` added to the enemy (native instance parameter); every item but the token is dropped by a pickup built on the token (see below) |
 | **Shops** (`shopsanity`: 1 to 8 items per shop, random 1–4, or Whole shops) | 64 stalls across 8 shops, masks excluded | stall `Gyaml`; fixed price of 10 rupees; bought once |
 | **Freestanding items** (`shuffle_freestanding_items`) | non-respawning heart pieces, rupees and hearts | item `Gyaml` |
-| **NPC gifts and minigames** (`shuffle_npc_gifts`) | 29 gifts (`extra_sources.NPC_GIFTS`) | item parameter of the event (`ActorName`, `ReveiveItem`…) via `evfl` |
+| **NPC gifts and minigames** (`shuffle_npc_gifts`) | 31 gifts, including King Zora and adult Darunia Jr. (`extra_sources.NPC_GIFTS`) | item parameter of the event (`ActorName`, `ReveiveItem`…) via `evfl` |
 | **Bosses and dungeon rewards** (`shuffle_boss_rewards`) | 3 stones, 6 medallions (Rauru's included), 8 boss heart containers | hand-over event (`GetPouchContentByActorName`); placed heart container `Gyaml` |
 | **Great Fairies** (`shuffle_great_fairies`) | Din, Farore, Nayru, magic, double magic, double defense | `ActorName` of the fairy cutscene |
 | **Quest rewards** (`shuffle_quest_rewards`) | Saria's ocarina, Ocarina of Time, Zelda's Letter (only with a shuffled child trade quest: it takes the Weird Egg's slot), Light Arrows, Biggoron Sword, Ruto's Letter (the bottle in Lake Hylia) | `ActorName` of the cutscene; ocarinas: also the silent pouch add; Ruto's Letter: `Gyaml` of the bottle pickup |
@@ -30,6 +30,12 @@ shuffled reward only once (`repeatable_adapter.py`), then go back to their vanil
 
 ## Starting inventory, item pool, removed keys
 
+* **Ice arrows melt red ice** (`blue_fire_arrows`, Items tab, off by default):
+  usable ice arrows trigger the native red-ice melting sequence, including its
+  saved destruction and linked events. Requires adult Link, a bow, ice arrows,
+  and magic in the logic. Normal, fire, and light arrow attacks are unchanged;
+  bottled blue fire remains usable. The seven meltable red-ice variants are
+  covered; passive decorative ice stays vanilla. **Not validated in game.**
 * **Magic capacity comes only from Magic Meter upgrades**: Din's Fire, Farore's
   Wind, Nayru's Love, elemental arrows and the Lens of Truth no longer grant the
   first magic bar implicitly. Their shared expansion reference is detached in
@@ -140,6 +146,39 @@ it. In `Minigame_CatchCucco`, `Event3` (her "left to find" count, N minus the pe
 `Talk_21_1`, `Talk_40` of `Npc_Hylia_049_Child.msbt`) name N, as a digit, in every
 language. 0 (a reward without a cucco) is not supported. **Not validated in game.**
 
+With `shuffle_npc_gifts` enabled, King Zora's tunic (`ZD King Zora Thawed`)
+and adult Darunia Jr.'s tunic (`GC Rolling Goron as Adult`) are shuffled NPC checks.
+Their tunics enter the item pool. Darunia Jr.'s quest and ordinary talks share
+one saved collection flag and the same reward; collecting either prevents a
+second gift. King Zora's unclaimed gift remains available even when Link already
+owns a Zora Tunic. Generate a new seed to apply these changes.
+
+## Shops open day and night (`shop_hours.py`)
+
+New full-randomizer seeds remove opening hours from the Market and Kakariko
+shops and minigames, including both Kakariko potion-shop doors. The shooting
+gallery, Treasure Chest Game, Market potion shop, Bombchu Shop and Happy Mask
+Shop also use their normal service dialogue at either time of day. Bombchu
+Bowling already permits entry all day with the existing story fix.
+
+Native attendants and their challenge schedules remain in place, including the
+bowling attendant's wake-up interaction. Age and quest requirements, purchase
+prices, minigame payments, rewards and locks during an active game are preserved.
+The world clock continues normally. Tracker and Archipelago entrance rules match
+the new hours; regenerate the seed and use the updated apworld to apply this.
+**Not validated in game.**
+
+## Market lost dog from the start (`lost_dog.py`)
+
+The quest's `DependFlagName` and both Kakariko gate readers in the Market dog/chase
+module now read `Sequence_IsChildhood`. The native schedules, time checks, dog
+identification and return sequence remain intact. The first reward tests
+`SubEvent_FindRichard_GetHeartPiece`, set after its handover; subsequent returns
+give the native blue rupee. The tracker collection marker still runs only after
+the shuffled reward. Logic requires child Link at night, with no Zelda's Letter
+or Kakariko gate requirement. Existing seeds need regeneration to include this
+patch. **Not validated in game.**
+
 ## King Zora's gift after Morpha (`story_fixes.py`)
 
 Defeating Morpha before meeting frozen King Zora removes his red ice and releases
@@ -209,9 +248,12 @@ on the token. The token's AI keeps it standing where it spawns
 (`ExecuteKeepStandingPosture`), so an item shaken from a tree or out of a pot thrown at
 a wall hung in the air. Native drops share `Obj_Item_Base`'s `DropItem` AI
 (`ExecuteDropBound`: fall, bounce, land), physics, blackboard and death.
-The source itself keeps its map entry, but for its drop: no `Presence` and no vanilla
-copy. The game remembers a broken pot, rock, crate, bush or beehive by its hash (a
-`Bool64bitKey`) until the scene changes; a copy under another hash, or a source under a
+The source keeps its hash, transform and native condition. Its drop changes, and
+the texture adapter changes its `Gyaml` to a private source actor: no additional
+`Presence` and no vanilla physical copy. The game records broken sources by their
+hash (`Bool64bitKey`). The native reset metadata and `GameActorInfo.IsRespawn`
+remain unchanged; the precise reset transition requires testing in the target
+engine. A copy under another hash, or a source under a
 `Presence` condition, came back while the area stayed loaded. Each pickup runs its own
 clone of the `DropItem` AI: when it spawns, it reads its check flag, and once the check
 is collected it hands over to the source's vanilla drop. The pickup carries that drop
@@ -223,6 +265,17 @@ lantern does when it leaves its spirit (`Weapon_PoeCantera.root`:
 `OneShotDropReserveDropItemCreate`, then `OneShotDeathRequestDeath`, reason 10). A
 source whose drop is unknown (its pack has none, or its map entry names a table)
 drops nothing once collected. Not validated in game.
+
+`source_textures.py` bundles the user-supplied BNTX albedos and clones the native
+BFRES at generation time, preserving geometry, UVs, shaders and other textures.
+Each shuffled source keeps a vanilla main model and a gold submodel. Native
+material visibility actions read the saved check flag on every AI update; they
+do not depend on restarting a selector branch or respawning the actor. Both the
+pre-actor component and `ActorInfo.UsePreActorRenderer` disable pre-rendering for
+these instances so it cannot bypass material selection. Tests exercise all 20
+supported actor variants and flip the flag on an already-loaded graph. These
+are static/data-flow tests, not an in-engine respawn or animation test. Validate
+tree collection in place and KF destruction/exit/return in the target PC port.
 
 When the check is collected depends on the reward. A key reward plays its get event
 on every pickup, and that event's graph sets the check flag once the item is in the

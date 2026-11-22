@@ -161,6 +161,10 @@ OPTIONS = [
             ('dungeons', 'Dungeons', NO_ADAPTER), ('tokens', 'Skulltulas', NO_ADAPTER)), 'vanilla'),
     Option('triforce_hunt', 'Goal', 'Triforce hunt', ((False, OK), (True, NO_ADAPTER)), False, kind='bool'),
     # ------------------------------------------------------------------ Items
+    Option('blue_fire_arrows', 'Items', 'Ice arrows melt red ice',
+           ((False, OK), (True, OK)), False,
+           'Usable ice arrows melt red ice like bottled blue fire. Requires the bow and magic. '
+           'To be confirmed in game.', kind='bool', experimental=(True,)),
     Option('shuffle_chests', 'Items', 'Content of every chest (major items included)',
            ((False, OK), (True, OK)), True, 'Drop__DropActor mechanism already validated in game on four chests.',
            kind='bool', experimental=(True,)),
@@ -355,7 +359,7 @@ OUT_OF_SCOPE = ('Entrance shuffle, Master Quest, multiworld and gossip stone hin
 
 # Options added after a release, left out of the stored settings at this value: stored settings
 # without the option mean it, and seeds made before the option keep their identity.
-UNRECORDED = {'spiritual_stones': 'all', 'door_of_time_requirement': 'song'}
+UNRECORDED = {'spiritual_stones': 'all', 'door_of_time_requirement': 'song', 'blue_fire_arrows': False}
 
 
 def recorded(values):

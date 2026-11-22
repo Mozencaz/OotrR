@@ -75,6 +75,17 @@ def verify(nup_path, seed_dir):
     members = effective_members(nup)
     out = lambda path: decompress((seed_dir / 'romfs' / path).read_bytes(), d)
     full = [p for p in spoiler['placements'] if str(p.get('category', '')).startswith('full_')]
+    # Reconstruct both alternate-talk rewards from the spoiler, rather than
+    # accepting the generator's fallback configuration as independent evidence.
+    npc_gifts = {}
+    for key, location in (('goron', 'GC Rolling Goron as Adult'), ('zora', 'ZD King Zora Thawed')):
+        gid = 'npc#' + location
+        placement = next((p for p in full if p['id'] == gid), None)
+        if placement:
+            npc_gifts[key] = {'actor': placement.get('reward_actor', placement['actor']),
+                              'flag': 'RandoCheck.' + manifest['seed_id'][:16] + '.' + gid}
+    if npc_gifts != (manifest.get('skips', {}).get('story_fixes') or {}).get('npc_gifts', {}):
+        raise ValueError('Alternate NPC gifts differ from their shuffled rewards.')
     _, groups, enemies, extra = scan_world(nup, d, members)
     # Fresh logic sweep from the spoiler; it also names the progressive tokens.
     from oot_rando.logic.world import World
@@ -126,8 +137,11 @@ def verify(nup_path, seed_dir):
                 map_edits[variant['resource']].setdefault(variant['index'], {})[variant['field']] = actor
     tracking = json.loads((seed_dir / 'tracking.json').read_text(encoding='utf-8')) if manifest.get('tracking') else {}
     repeat_first, repeat_fallback = defaultdict(dict), defaultdict(list)
+    textured_sources = defaultdict(dict)
     for record in tracking.get('repeatables', []):
         for variant in record['variants']:
+            if variant.get('textured_actor'):
+                textured_sources[variant['resource']][variant['index']] = variant
             # Seeds made before sources were left as they are: Presence and a vanilla copy.
             if not variant['native_once'] and 'fallback_hash' in variant:
                 repeat_first[variant['resource']][variant['index']] = record
@@ -186,6 +200,19 @@ def verify(nup_path, seed_dir):
             if murmur3(record['recv']) not in flags or murmur3(record['got']) not in flags:
                 raise ValueError('Missing Archipelago reception flag: ' + record['key'])
         report['ap_reception'] = len(expected)
+    from oot_rando.patching import blue_fire_arrows
+    blue_arrows = bool((manifest['settings'].get('full') or {}).get('blue_fire_arrows', False))
+    if bool(manifest.get('skips', {}).get('blue_fire_arrows')) != blue_arrows:
+        raise ValueError('Blue-fire arrow patch differs from the settings.')
+    for path, fix in blue_fire_arrows.resource_fixes():
+        source = decompress(nup.read(nup.latest('romfs/' + path)), d)
+        destination = seed_dir / 'romfs' / path
+        actual = decompress(destination.read_bytes(), d) if destination.exists() else source
+        expected = fix(source) if blue_arrows else source
+        if actual != expected:
+            raise ValueError('Blue-fire arrow resource differs from the settings: ' + path)
+    if blue_arrows:
+        report['blue_fire_arrows'] = True
     from oot_rando.patching import elemental_arrows
     if manifest.get('skips', {}).get('elemental_arrows'):
         for path, fix in elemental_arrows.resource_fixes():
@@ -246,6 +273,12 @@ def verify(nup_path, seed_dir):
         if (out(link_goron.SCHEDULES) != expected
                 or details != gerudo_story['link_goron_rolling']):
             raise ValueError('Unexpected Darunia Jr. rolling schedule.')
+        report['story_fixes'] = report.get('story_fixes', 0) + 1
+    if 'lost_dog_quest' in gerudo_story:
+        from oot_rando.patching import lost_dog
+        expected, details = lost_dog.quest_from_start(decompress(nup.read(members[lost_dog.CHALLENGES]), d))
+        if out(lost_dog.CHALLENGES) != expected or gerudo_story['lost_dog_quest'] != details:
+            raise ValueError('Unexpected lost dog quest dependency.')
         report['story_fixes'] = report.get('story_fixes', 0) + 1
     if 'freed' in openings.get('gerudo_fortress', {}):
         path = gerudo_fortress.CELL_MODULE
@@ -417,7 +450,7 @@ def verify(nup_path, seed_dir):
                     original, challenge_steps(decompress(nup.read(members[CHALLENGES]), d)))[0]
                 report['story_fixes'] = report.get('story_fixes', 0) + 1
             from oot_rando.patching import story_fixes
-            for fixed_path, key, fix in story_fixes.flow_fixes(stones):
+            for fixed_path, key, fix in story_fixes.flow_fixes(stones, npc_gifts):
                 if path == fixed_path and key in (skips.get('story_fixes') or {}):
                     original = fix(original)[0]
                     report['story_fixes'] = report.get('story_fixes', 0) + 1
@@ -649,6 +682,11 @@ def verify(nup_path, seed_dir):
             if index in repeat_first.get(path, {}):
                 record = repeat_first[path][index]
                 a2['Presence'] = {'FlagName': record['flag'], 'IsNegation': True, 'IsCheckLazy': _seed_lazy(b2)}
+            if index in textured_sources.get(path, {}):
+                variant = textured_sources[path][index]
+                if a2['Gyaml'] != variant['source']:
+                    raise ValueError('Unexpected original textured source: ' + path)
+                a2['Gyaml'] = variant['textured_actor']
             for field, actor in edits.get(index, {}).items():
                 if field == 'Gyaml':
                     from oot_rando.game.item_forms import ground_lift, lifted, world_scale
@@ -754,7 +792,9 @@ def verify(nup_path, seed_dir):
         soul_actors.add(native['token'])
         if is_derived(native['after']):
             derived.add(native['after'])
-    generated = soul_actors | derived | master_actors
+    source_actors = {variant['textured_actor'] for variants in textured_sources.values()
+                     for variant in variants.values()}
+    generated = soul_actors | derived | master_actors | source_actors
     if generated:
         rest = decompress((seed_dir / 'romfs' / RESTBL).read_bytes(), d)
         count = struct.unpack_from('<I', rest, 14)[0]
@@ -781,10 +821,12 @@ def verify(nup_path, seed_dir):
             Byml(pack[f'Actor/{actor}.engine__actor__ActorParam.bgyml'])
             if zlib.crc32(pack_path[:-3].encode()) not in crcs:
                 raise ValueError('Missing RESTBL entry: ' + actor)
-            if any(actor not in rows for rows in tables.values()):
+            required = (tables['ActorInfo'], tables['GameActorInfo']) if actor in source_actors else tables.values()
+            if any(actor not in rows for rows in required):
                 raise ValueError('Missing RSDB row: ' + actor)
             if actor in soul_actors and murmur3(FLAG_PREFIX + actor) not in flags:
                 raise ValueError('Missing save flag: ' + actor)
+        report['textured_sources'] = len(source_actors)
     multiworld = manifest.get('archipelago')
     if multiworld is not None:
         # Placed by Archipelago: victory may need items of other worlds (checked by

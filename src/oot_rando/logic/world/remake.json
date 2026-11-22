@@ -22,8 +22,8 @@
    "why": "The only Lost Woods chest (purple rupee) is not in a grotto: it stands on a ledge of the stick-scrub room that only the adult bean platform of the soil near the bridge reaches (Obj_SmallFarm_A_03 → DestinationAnchor at 2.9 m)."
   },
   "Market Lost Dog": {
-   "rule": "is_child and at_night and 'Kakariko Village Gate Open'",
-   "why": "Richard only runs away once the Kakariko gate guard has read Zelda's Letter (Logic/Market_Child_Prefab_f3a2: RunningRichard needs Npc_Hylia_Soldier_003_GateOpen); before that he stays home with his owner (14/11, Discord report)."
+   "rule": "is_child and at_night",
+   "why": "The lost dog quest and Market dog/chase module are enabled from the first child visit (patching/lost_dog.py). Return Richard at night; the one-time reward reads its own saved receipt, independent of the Kakariko gate and quest progress."
   },
   "Song from Malon": {
    "rule": "is_child and (Zeldas_Letter or skip_child_zelda) and Ocarina and at_day",
@@ -99,6 +99,46 @@
   }
  },
  "exit_rules": {
+  "Market -> Market Bazaar": {
+   "rule": "is_child",
+   "why": "Shop opening hours are removed in patching/shop_hours.py, including attendant service checks; native age, quest and minigame state restrictions remain."
+  },
+  "Market -> Market Mask Shop": {
+   "rule": "is_child",
+   "why": "Shop opening hours are removed in patching/shop_hours.py, including attendant service checks; native age, quest and minigame state restrictions remain."
+  },
+  "Market -> Market Shooting Gallery": {
+   "rule": "is_child",
+   "why": "Shop opening hours are removed in patching/shop_hours.py, including attendant service checks; native age, quest and minigame state restrictions remain."
+  },
+  "Market -> Market Potion Shop": {
+   "rule": "is_child",
+   "why": "Shop opening hours are removed in patching/shop_hours.py, including attendant service checks; native age, quest and minigame state restrictions remain."
+  },
+  "Market -> Market Treasure Chest Game": {
+   "rule": "is_child",
+   "why": "Shop opening hours are removed in patching/shop_hours.py, including attendant service checks; native age, quest and minigame state restrictions remain."
+  },
+  "Market Back Alley -> Market Bombchu Shop": {
+   "rule": "True",
+   "why": "Shop opening hours are removed in patching/shop_hours.py, including attendant service checks; native age, quest and minigame state restrictions remain."
+  },
+  "Kakariko Village -> Kak Bazaar": {
+   "rule": "is_adult",
+   "why": "Shop opening hours are removed in patching/shop_hours.py, including attendant service checks; native age, quest and minigame state restrictions remain."
+  },
+  "Kakariko Village -> Kak Shooting Gallery": {
+   "rule": "is_adult",
+   "why": "Shop opening hours are removed in patching/shop_hours.py, including attendant service checks; native age, quest and minigame state restrictions remain."
+  },
+  "Kakariko Village -> Kak Potion Shop Front": {
+   "rule": "True",
+   "why": "Shop opening hours are removed in patching/shop_hours.py, including attendant service checks; native age, quest and minigame state restrictions remain."
+  },
+  "Kak Backyard -> Kak Potion Shop Back": {
+   "rule": "is_adult",
+   "why": "Shop opening hours are removed in patching/shop_hours.py, including attendant service checks; native age, quest and minigame state restrictions remain."
+  },
   "Lost Woods -> Zora River": {
    "rule": "can_dive or can_use(Iron_Boots)",
    "why": "A closed Kokiri Forest only blocks the bridge to Hyrule Field (its guard and invisible wall): the Lost Woods underwater shortcut to Zora's River stays open in the remake, so AP's can_leave_forest is dropped. From the river Hyrule Field is always reached (ZR Front)."

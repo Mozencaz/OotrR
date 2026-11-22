@@ -82,6 +82,13 @@ persistent flag, then the source goes back to its native loot (a rock without
 vanilla loot gives nothing again). A guard forbids a second randomized reward
 coming from an old copy of the same drop.
 
+New full-mode seeds use the supplied gold textures for unchecked pots, rocks,
+crates, beehives, bushes, grass and reward trees. The existing collection flag
+switches their materials back to vanilla, including a tree that stays loaded
+after its reward is collected. Regenerate older seeds to include these assets.
+The texture adapter preserves native destruction and respawn settings; static
+checks do not establish when a particular PC port reloads a broken source.
+
 Live reading of the game memory finds Hookshot and the yuzu-family emulators
 Lichii, Ryuchii, Eden, yuzu, suyu, citron and sudachi on Windows, and the native
 Linux builds of Longshot and of these emulators (Ryuchii on a Steam Deck, for instance)

@@ -292,14 +292,22 @@ class LogicTests(unittest.TestCase):
         self.assertNotIn(song, self.reachable({song: None}, dict(everything, **{'Zeldas Lullaby': 0})))
         self.assertIn(song, self.reachable({song: None}, everything))
 
-    def test_lost_dog_waits_for_kakariko_gate(self):
-        # Remake: Richard only runs away once the Kakariko gate guard read Zelda's Letter.
+    def test_lost_dog_available_without_kakariko_gate(self):
+        # The quest and native dog/chase module are now open from the start.
         dog = 'Market Lost Dog'
         everything = {item: 9 for item in self.logic.referenced}
         no_letter = {dog: None, 'HC Zeldas Letter': None}
         without = dict(everything, **{'Zeldas Letter': 0, 'Kakariko Village Gate Open': 0})
-        self.assertNotIn(dog, self.reachable(no_letter, without))
+        self.assertIn(dog, self.reachable(no_letter, without))
         self.assertIn(dog, self.reachable(no_letter, everything))
+        rule = self.logic.compile(self.data.remake['location_rules'][dog])
+        class Night:
+            tod = {'child': True, 'adult': True}
+        class Day:
+            tod = {'child': False, 'adult': False}
+        self.assertTrue(rule(Night, {}, 'child'))
+        self.assertFalse(rule(Day, {}, 'child'))
+        self.assertFalse(rule(Night, {}, 'adult'))
 
     def exit_rule(self, region, target):
         return dict(self.logic.regions[region]['exits'])[target]
@@ -312,9 +320,31 @@ class LogicTests(unittest.TestCase):
         self.assertTrue(river(Day, {'Megaton Hammer': 1}, 'adult'))
         self.assertTrue(river(Day, {'Bomb Bag': 1}, 'child'))
         # The Bombchu Shop is open from the start (story_fixes.bombchu_shop_open_from_start).
-        self.assertNotIn('Market Back Alley -> Market Bombchu Shop', self.data.remake['exit_rules'])
+        self.assertIn('Market Back Alley -> Market Bombchu Shop', self.data.remake['exit_rules'])
         shop = self.exit_rule('Market Back Alley', 'Market Bombchu Shop')
         self.assertTrue(shop(Day, {}, 'child'))
+
+    def test_shops_and_minigames_ignore_time_but_keep_age(self):
+        entrances = {
+            ('Market', 'Market Bazaar'): 'child',
+            ('Market', 'Market Mask Shop'): 'child',
+            ('Market', 'Market Shooting Gallery'): 'child',
+            ('Market', 'Market Potion Shop'): 'child',
+            ('Market', 'Market Treasure Chest Game'): 'child',
+            ('Market Back Alley', 'Market Bombchu Shop'): None,
+            ('Kakariko Village', 'Kak Bazaar'): 'adult',
+            ('Kakariko Village', 'Kak Shooting Gallery'): 'adult',
+            ('Kakariko Village', 'Kak Potion Shop Front'): None,
+            ('Kak Backyard', 'Kak Potion Shop Back'): 'adult',
+        }
+        for (region, target), required_age in entrances.items():
+            gate = self.exit_rule(region, target)
+            for day in (False, True):
+                state = self.logic.new_state(Counter())
+                state.tod = {'child': day, 'adult': day}
+                for age in ('child', 'adult'):
+                    self.assertEqual(gate(state, {}, age), required_age is None or required_age == age,
+                                     (region, target, day, age))
 
     def test_water_temple_gate_open_for_adult_without_the_serenade(self):
         # The lake gate opens for adult Link (story_fixes.water_gate_for_adult, 21/11):

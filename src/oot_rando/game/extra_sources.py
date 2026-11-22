@@ -125,6 +125,8 @@ NPC_GIFTS = (
     # Only the adult man on the roof gives the heart piece in the remake.
     (('Kak Man on Roof',), ('Kak Anju as Adult',), 'Npc_Hylia_001_Adult', (('Event4', 'Obj_Heart_Piece'),)),
     (('Graveyard Dampe Gravedigging Tour',), (), 'Npc_Hylia_Dampe_001', (('Event628', 'Obj_Heart_Piece'),)),
+    (('GC Rolling Goron as Adult',), (), 'SageOfFire', (('Event18', 'Obj_Armor_Goron'),)),
+    (('ZD King Zora Thawed',), (), 'SageOfWater', (('Event242', 'Obj_Armor_Zora'),)),
     (('GC Darunias Joy',), (), 'Dm_Goron_0030', (('Event127', 'Item_Gauntlet_Goron'),)),
     (('Kak Anju as Child',), (), 'Minigame_CatchCucco', (('Event181', 'Item_Bottle'),)),
     (('Market 10 Big Poes',), (), 'Npc_Hylia_048_BottleShop', (('Event329', 'Item_Bottle'),)),
