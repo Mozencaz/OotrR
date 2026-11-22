@@ -268,7 +268,7 @@ class ServiceTests(unittest.TestCase):
             install(title, 'reinstalled once', slot, save_seed_id='first-seed')
             self.assertEqual(continued_save(title, ApSettings(slot)), 'first-seed')
 
-    def test_generate_in_mods_conflict_archives_the_new_seed(self):
+    def test_generate_in_mods_conflict_stages_conflicting_mods(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             mods = self.make_hookshot(base / 'Hookshot')
@@ -276,11 +276,10 @@ class ServiceTests(unittest.TestCase):
             conflict.mkdir(parents=True)
             (conflict / 'resource').write_bytes(b'other')
             fake = lambda nup, output, settings, progress: self.make_artifact(output, settings.seed)
-            with self.assertRaisesRegex(ValueError, 'Resources shared with'):
-                generate_in_mods('game.nup', mods, Settings('first'), archive=base / 'archive', generate=fake)
-            self.assertEqual(sorted(p.name for p in mods.iterdir()), ['other'])
-            self.assertEqual(len(list((base / 'archive').iterdir())), 1)
-            self.assertEqual((conflict / 'resource').read_bytes(), b'other')
+            installed = generate_in_mods('game.nup', mods, Settings('first'), archive=base / 'archive', generate=fake)
+            self.assertEqual([p.name for p in mods.iterdir()], [installed.name])
+            staged_res = base / 'staged_for_generation' / 'other' / 'romfs' / 'resource'
+            self.assertEqual(staged_res.read_bytes(), b'other')
 
     def test_noop_options_are_rejected(self):
         with self.assertRaises(ValueError):
