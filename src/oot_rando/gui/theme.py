@@ -485,6 +485,27 @@ class Sidebar(tk.Frame):
         """Pushes the following entries to the bottom of the column."""
         tk.Frame(self, background=COLORS['sidebar']).pack(fill='both', expand=True)
 
+    def add_action(self, key, text, command, icon_image=None):
+        c = COLORS
+        row = tk.Frame(self, background=c['sidebar'], cursor='hand2')
+        row.pack(side='bottom', fill='x', padx=12, pady=(2, 4), before=self.footer)
+        bar = tk.Frame(row, background=c['sidebar'], width=3)
+        bar.pack(side='left', fill='y', pady=7)
+        if icon_image is not None:
+            icon = tk.Label(row, image=icon_image, background=c['sidebar'])
+            icon.pack(side='left', padx=(9, 6), pady=7)
+        else:
+            icon = tk.Label(row, text='', font=(self.fonts.icons, 12), foreground=c['sidebar_text'], background=c['sidebar'], width=2)
+            icon.pack(side='left', padx=(10, 6), pady=9)
+        label = tk.Label(row, text=text, font=self.fonts.nav, foreground=c['sidebar_text'], background=c['sidebar'], anchor='w')
+        label.pack(side='left', fill='x', expand=True, pady=9)
+        parts = (row, icon, label)
+        self.items[key] = (row, bar, icon, label)
+        for widget in parts:
+            widget.bind('<Button-1>', lambda _e, fn=command: fn())
+            widget.bind('<Enter>', lambda _e, k=key: self.paint(k, hover=True))
+            widget.bind('<Leave>', lambda _e, k=key: self.paint(k))
+
     def select(self, key):
         previous, self.current = self.current, key
         if previous:

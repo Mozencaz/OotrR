@@ -275,10 +275,31 @@ def generate_in_mods(nup, title_directory, settings, progress=None, archive=None
     manifest, _ = read_artifact(destination)
     conflicts = conflicting_mods(title_directory, manifest, name)
     if conflicts:
-        if archive is not None:
-            _move_to_archive(destination, Path(archive), '')
-        raise ValueError('Resources shared with: ' + ', '.join(conflicts)
-                         + '. Move these mods out of the title folder, then generate again.')
+        from oot_rando.paths import data_dir as _data_dir
+        stage_root = (Path(archive).parent if archive is not None else _data_dir()) / 'staged_for_generation'
+        stage_root.mkdir(parents=True, exist_ok=True)
+        moved_names = []
+        for mod_name in conflicts:
+            src_mod = title_directory / mod_name
+            if src_mod.is_dir():
+                dst_mod = stage_root / mod_name
+                if dst_mod.exists():
+                    shutil.rmtree(dst_mod)
+                shutil.move(str(src_mod), str(dst_mod))
+                moved_names.append(mod_name)
+        if moved_names:
+            report('Moved conflicting mods out of mods folder to staging: ' + ', '.join(moved_names))
+            if destination.exists():
+                shutil.rmtree(destination)
+            title_directory.mkdir(parents=True, exist_ok=True)
+            generate(nup, destination, settings, report, **options)
+            manifest, _ = read_artifact(destination)
+            conflicts = conflicting_mods(title_directory, manifest, name)
+        if conflicts:
+            if archive is not None:
+                _move_to_archive(destination, Path(archive), '')
+            raise ValueError('Resources shared with: ' + ', '.join(conflicts)
+                             + '. Move these mods out of the title folder, then generate again.')
     if archive is not None:
         archive_previous_seeds(title_directory, Path(archive), keep=name)
     warning = qol_seed_warning(title_directory)

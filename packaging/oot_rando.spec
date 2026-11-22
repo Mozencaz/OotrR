@@ -17,6 +17,7 @@ datas = [
     # HookshotBuilder's Python.
     (str(PKG / 'tracker' / 'icon_extract.py'), 'oot_rando/tracker'),
     (str(ROOT / 'README.md'), '.'),
+    (str(PKG / 'midnas_devotion' / 'assets'), 'oot_rando/midnas_devotion/assets'),
 ]
 # Sources copied into the Archipelago .apworld (``python -m oot_rando apworld``).
 sys.path.insert(0, str(SRC))
@@ -26,14 +27,14 @@ for _name in VENDORED + (TEMPLATE,):
     datas.append((str(PKG / _name), 'oot_rando' + ('' if _parent == '.' else '/' + _parent)))
 datas += collect_data_files('ainb')
 hiddenimports = (collect_submodules('oot_rando') + collect_submodules('ainb') + collect_submodules('evfl')
-                 + collect_submodules('websockets'))
+                 + collect_submodules('websockets') + collect_submodules('oead') + collect_submodules('restbl') + collect_submodules('byml'))
 
 a = Analysis(
     [str(ROOT / 'packaging' / 'launcher.py')],
     pathex=[str(SRC)],
     datas=datas,
     hiddenimports=hiddenimports + ['yaml', 'PIL.Image', 'PIL.ImageTk', 'texture2ddecoder'],
-    excludes=['pytest', 'numpy', 'matplotlib'],
+    excludes=['pytest', 'numpy', 'matplotlib', 'PySide6.QtWebEngineCore', 'PySide6.QtWebEngineWidgets', 'PySide6.QtWebEngineQuick', 'PySide6.QtPdf', 'PySide6.QtPdfWidgets', 'PySide6.QtQml', 'PySide6.QtQuick', 'PySide6.QtQuickWidgets', 'PySide6.Qt3DCore'],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

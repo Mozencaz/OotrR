@@ -359,6 +359,7 @@ class Application:
         self.setup_tab = self.tab('setup', 'Setup', 'Setup', 'Where your game lives. Set once.')
         self.spoiler_tab = self.tab('spoiler', 'Spoiler', 'Spoiler', 'Every reward of the open seed. Reveal only if you want to know.')
         self.help_tab = self.tab('help', 'Help', 'Help', 'How the application works, step by step.')
+        self._add_mod_manager_sidebar_action()
         self.tabs.bind('<<NotebookTabChanged>>', lambda event: self.page_changed())
         self.home_body, self.settings_body = self.scrollable(self.home_tab), self.scrollable(self.settings_tab)
         self.multiworld_body, self.setup_body = self.scrollable(self.multiworld_tab), self.scrollable(self.setup_tab)
@@ -583,7 +584,7 @@ class Application:
         links = ttk.Frame(parent, style='Page.TFrame')
         links.pack(fill='x', pady=(0, 12))
         for text, command in [('Open a seed…', self.open_artifact), ('Open the folder', self.open_folder),
-                              ('Spoiler', self.show_spoilers)]:
+                              ('Spoiler', self.show_spoilers), ('Mod Manager', self.launch_mod_manager)]:
             ttk.Button(links, text=text, style='Page.Link.TButton', command=command).pack(side='left', padx=(4, 14))
         tiles = ttk.Frame(parent, style='Page.TFrame')
         tiles.pack(fill='x', pady=(0, 14))
@@ -1586,6 +1587,37 @@ class Application:
         self.set_archipelago_seed(manifest)
         self.reset_spoiler()
         self.status.set('Seed opened.')
+
+    def _add_mod_manager_sidebar_action(self) -> None:
+        import tkinter as tk
+        from oot_rando.midnas_devotion.launcher import resolve_asset
+        if not hasattr(self.sidebar, 'add_action'):
+            return
+        icon_p = resolve_asset('icon.png')
+        img = None
+        if os.path.isfile(icon_p):
+            try:
+                img = tk.PhotoImage(file=icon_p)
+                while img.width() > 20 or img.height() > 20:
+                    img = img.subsample(2, 2)
+                self._midna_sidebar_icon = img
+            except Exception:
+                img = None
+        self.sidebar.add_action('midnas_devotion', "Midna's Devotion", self.launch_mod_manager, icon_image=img)
+
+    def launch_mod_manager(self) -> None:
+        import subprocess
+        import sys
+        import sys
+        from oot_rando.paths import FROZEN
+        try:
+            if FROZEN:
+                cmd = [sys.executable, 'mod-manager']
+            else:
+                cmd = [sys.executable, '-m', 'oot_rando', 'mod-manager']
+            subprocess.Popen(cmd, close_fds=True)
+        except OSError as exc:
+            messagebox.showerror('Mod Manager', f"Could not launch Midna's Devotion: {exc}")
 
     def open_artifact(self):
         directory = filedialog.askdirectory(title='Choose the folder holding manifest.json')

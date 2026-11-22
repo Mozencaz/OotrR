@@ -69,6 +69,9 @@ def _run(argv=None):
     if command == 'reload-test':
         from oot_rando.archipelago.reload_test import main as reload_test
         return reload_test(argv)
+    if command in ('mod-manager', 'mods', 'midnas-devotion'):
+        from oot_rando.midnas_devotion.launcher import main as mod_manager
+        return mod_manager(argv)
     print(__doc__)
     return 2
 
