@@ -1,3 +1,4 @@
+from typing import Optional
 """Desktop application (Tkinter). Run with ``python -m oot_rando``."""
 import ctypes
 import json
