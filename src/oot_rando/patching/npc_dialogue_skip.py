@@ -42,6 +42,21 @@ ZONES = {
         'Npc_Kokiri_Fado_Adult', 'Npc_Kokiri_Fado_Child', 'Npc_Kokiri_Mido_Adult', 'Npc_Kokiri_Mido_Child',
         'Npc_Kokiri_Saria_Child',
     ),
+    # Ordinary residents audited for external service calls. Leaders, merchants,
+    # ShowItem/trade flows and minigames remain outside this list. Question and
+    # response protection is the same as for the Kokiri.
+    'Goron City': (
+        'Npc_Goron_001_Child', 'Npc_Goron_001_Adult',
+        'Npc_Goron_002_Child', 'Npc_Goron_002_Adult',
+        'Npc_Goron_003_Child', 'Npc_Goron_003_Adult',
+        'Npc_Goron_004_Child', 'Npc_Goron_004_Adult',
+        'Npc_Goron_007_Adult', 'Npc_Goron_008_Adult', 'Npc_Goron_009_Adult',
+    ),
+    'Zoras Domain': (
+        'Npc_Zora_002', 'Npc_Zora_002_Adult', 'Npc_Zora_003', 'Npc_Zora_003_Adult',
+        'Npc_Zora_004', 'Npc_Zora_004_Adult', 'Npc_Zora_005_Adult', 'Npc_Zora_006_Adult',
+        'Npc_Zora_008_Child', 'Npc_Zora_008_Adult', 'Npc_Zora_009', 'Npc_Zora_009_Adult',
+    ),
 }
 
 

@@ -29,12 +29,12 @@ game), and ``randomizer_core.complete_event_info`` lists ``Dm_SY_GetInEvent`` an
 what it calls in the event row's ``SubFlowList`` (``event_info``), which it does
 for any changed flow calling a new external flow.
 
-A song held up needs a model: songs given here get Sheik's harp in their colour
-(``song_models``), as songs found in chests. The ocarinas have no item-get pose
-(``item_forms.OCARINAS``) and never stand at a song lesson.
+A song held up needs a model and animation: ``song_models`` supplies the coloured
+harp, and ``story_shortcuts`` changes the held actor to its animated world form.
 
-Not skipped (:data:`NOT_SKIPPED`): the Ocarina of Time lesson (it also gives the
-ocarina, which has no item-get pose) and the Requiem (started by the map, not a flow).
+The ten adapters here are complemented by ``story_shortcuts.extra_song``:
+the Time lesson has two rewards, and Requiem is started by the map. Those two
+special cases stay outside this generic adapter's registry (:data:`NOT_SKIPPED`).
 Not validated in game.
 """
 from collections import namedtuple
@@ -57,8 +57,8 @@ TRIGGERS = {
     'Sheik at Temple': ('AllSage', ()),
 }
 NOT_SKIPPED = {
-    'Song from Ocarina of Time': 'also gives the Ocarina of Time, which has no item-get pose',
-    'Sheik at Colossus': 'started by the map, not by a flow',
+    'Song from Ocarina of Time': 'dedicated two-reward adapter in story_shortcuts',
+    'Sheik at Colossus': 'dedicated map-entry adapter in story_shortcuts',
 }
 
 
@@ -334,7 +334,9 @@ def trigger_applied(raw, lesson, actor, flag):
         get = events.get(names['get'])
         if transition.name in reached or get is None or not isinstance(get.data, SubFlowEvent):
             return False
-        if (get.data.res_flowchart_name, get.data.entry_point_name) != GET_CALL or _params(get).get('ActorName') != actor:
+        from oot_rando.patching.cinematic_tools import held_actor
+        if ((get.data.res_flowchart_name, get.data.entry_point_name) != GET_CALL
+                or _params(get).get('ActorName') not in (actor, held_actor(actor))):
             return False
         if get.name not in reached:
             return False

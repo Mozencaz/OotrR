@@ -34,7 +34,7 @@ from oot_rando.game.resource_allocations import allocation, grow_resources, add_
 from oot_rando.formats.byml_writer import lift_actors, patch_strings
 from oot_rando.logic import rando_options
 
-GENERATOR_VERSION = '0.12.1'
+GENERATOR_VERSION = '0.12.9'
 ADAPTER_VERSION = 'ap-glitchless-v5'   # v5: progressive tokens (every copy gives the next level)
 ADULT_MAP = MAP.replace('_Child_', '_Adult_')
 # The amiibo menu: given by Kaepora's first field arrival, now never played
@@ -635,6 +635,8 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
             castle_skip = child_castle_skip.enabled(settings.full)
             start_values = dict(start_dungeon_values(settings.full), **story_fixes.story_start_values())
             start_values.update(area_presentations.start_values())
+            from oot_rando.patching.cinematic_comfort import start_values as comfort_start_values
+            start_values.update(comfort_start_values(settings.full))
             if castle_skip:
                 start_values.update(child_castle_skip.START_VALUES)
             if start_values:
@@ -747,12 +749,23 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
                 path = timeline_skip.flow_path(name)
                 extra_raw[path], skips['story_timelines'][name] = timeline_skip.drop_timelines(
                     current_flow(path), name)
+        # Scene adapters run after generic skips, on the latest bytes. Their
+        # short grant paths must be registered before transitive preload repair.
+        from oot_rando.patching import story_shortcuts
+        if settings.full is not None and story_shortcuts.enabled(settings.full):
+            report('Short story, tutorial and reward sequences…')
+            vanilla = lambda p: decompress(read(p), d) if p in members else None
+            skips['cinematic_shortcuts'] = story_shortcuts.apply(
+                settings.full, current_flow, vanilla, lambda p, raw: extra_raw.__setitem__(p, raw))
         skips.update(complete_event_info(extra_raw, nup, members, d, read))
         # In place on the vanilla table (same size); chest rows are added after. The
         # area presentation rows always pause like the fountains (their skip windows).
         report('Dialogues and area presentations skippable with + …')
         extra_raw[EVENT_SETTINGS], skips['dialogues'] = patch_dialogues(
             decompress(read(EVENT_SETTINGS), d), settings.skip_auto_dialogues, True)
+        if settings.full is not None and story_shortcuts.enabled(settings.full):
+            extra_raw[EVENT_SETTINGS], skips['cinematic_event_styles'] = story_shortcuts.event_styles(
+                extra_raw[EVENT_SETTINGS], settings.full)
         plain_raw = {}
         mailbox_items = ap_records(settings)
         if mailbox_items:
@@ -1201,6 +1214,10 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
                          if p['form'] in ('chest', 'world') and _reward(p) in song_models.SONG_COLOURS}
                         | {given['actor'] for given in plan['song_lessons'].values()
                            if given['actor'] in song_models.SONG_COLOURS})   # held up in the item get
+    from oot_rando.patching import story_shortcuts
+    if any(settings.full.get(k) for k in ('skip_song_lessons', 'skip_story_sequences', 'skip_dungeon_endings')):
+        # Any short reward can contain a song, including an unshuffled Requiem.
+        harp_songs = sorted(set(harp_songs) | set(song_models.SONG_COLOURS))
     plan['song_models'] = {song: song_models.project_of(song) for song in harp_songs}
     if harp_songs:
         report(f'Building {len(harp_songs)} song harps (one colour per song)…')
@@ -1209,6 +1226,12 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
         modified.update(harp_modified)
         new.update(harp_new)
     derived = derived_actors(p['after'] for p in plan['placements'] + natives)
+    if any(settings.full.get(k) for k in ('skip_song_lessons', 'skip_story_sequences', 'skip_dungeon_endings')):
+        from oot_rando.game.item_forms import OCARINAS, form_actor
+        from oot_rando.patching.progressive import token_family
+        held = set(OCARINAS) | set(song_models.SONG_COLOURS)
+        held.update(a for a in plan['progressive']['actors'] if token_family(a) == 'Ocarina')
+        derived = sorted(set(derived) | {form_actor(a, 'world') for a in held})
     if derived or repeatables:
         report(f'Building {len(derived)} derived actors (freestanding and shop items)…')
         packs = {}

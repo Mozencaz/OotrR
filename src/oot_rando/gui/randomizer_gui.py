@@ -199,7 +199,9 @@ SETTING_GROUPS = (
      ['shuffle_mapcompass', 'shuffle_smallkeys', 'key_rings', 'key_rings_list', 'shuffle_bosskeys']),
     ('Enemy souls', '', ['shuffle_enemy_spawns']),
     ('Cutscenes and dialogues', 'Scenes that do not play at all: their item and quest progress are given directly.',
-     ['skip_song_lessons', 'skip_story_timelines', 'auto_skip_cutscenes', 'skip_npc_dialogues']),
+     ['skip_opening', 'skip_tutorials', 'skip_first_pickup_text', 'skip_story_sequences',
+      'skip_dungeon_endings', 'skip_fairy_sequences', 'skip_song_lessons',
+      'skip_story_timelines', 'auto_skip_cutscenes', 'skip_npc_dialogues']),
     ('Minigames', '', ['big_poe_count', 'chicken_count']),
 )
 # Kept in the settings files (older seeds, AP YAML) but never shown: no effect any more.

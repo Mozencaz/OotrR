@@ -106,6 +106,52 @@ the melody of the current `MelodyType`) and also adds it silently
   collection flag instead. The other song cutscenes start from quest steps.
 * **Not validated in game.**
 
+## Optional cinematic and dialogue shortcuts (generator 0.12.9)
+
+These experimental settings use RomFS event patches; no input automation or
+runtime executable patch is required. They are all off by default and compose
+with the existing timeline, automatic skip-window and chest options.
+
+| Setting | Result |
+| --- | --- |
+| `skip_opening` | Bypass the opening movie and wake-up scene while preserving seed binding, starting items, start values, Navi setup and the native loading/fade continuation. |
+| `skip_tutorials` | Suppress action-guide screens and mark the 53 guides done. Keep progressive conversion, dungeon-key credit and Zelda's stone/progression checks in `ActionGuide`. Unlock the map interface without granting individual dungeon maps. |
+| `skip_first_pickup_text` | Mark the first presentations of 16 repeatable consumables as seen. Initialize missing small nut/stick capacity without replacing owned higher bags. Equipment, heart pieces/containers, gold rupees and chest messages keep their normal presentation. |
+| `skip_story_sequences` | Short reward paths for Saria, the first Master Sword/Rauru sequence, Light Arrows and Darunia's successful song/bracelet sequence. Preserve healing, forward-only quest requests, the native era change and the two burning-Kakariko map transfers. |
+| `skip_dungeon_endings` | Give each of the eight dungeon rewards after accepting its first-clear warp, before leaving the boss room; bypass the reward ceremony and Chamber of Sages stops. Repeat/cancelled warps give nothing. Ruto's earlier sapphire display no longer collects the relocated Barinade check. |
+| `skip_fairy_sequences` | Shorten all six paid fairy gifts while retaining choices, payment, prerequisites (including Din's magic check), the current patched native grant routine and healing. |
+| `skip_song_lessons` | Cover all twelve song checks: the original ten trigger adapters plus a two-reward Time lesson and a dedicated map-started Requiem adapter. Both Time-scene collection markers are retained independently. |
+| `skip_npc_dialogues` | Remove 949 non-choice lines across selected Kokiri, Goron and Zora residents in the supported game. Preserve questions and their response paths. Shops, minigames, leaders, trade services and dedicated hint givers remain outside the ordinary-resident whitelist. |
+
+Songs and ocarinas have no native get-demo animation. Short reward paths display
+our derived pickup actors, which retain the token pickup's `Rotate_GetDemo`
+animation; songs use their coloured harp models. Ocarinas are also added through
+their native equipment actor and the highest owned tier is equipped immediately.
+The normal progressive/key conversion hooks still run for the displayed reward.
+
+The escape shortcut deliberately leaves `DoorOfTime` at **Step04**: this game's
+moat pickup module requires equality with that step. The native post-Time-lesson
+continuation advances it to Step05. When both story and lesson shortcuts are on,
+Nocturne is given before the first Kakariko transfer; its alternate-village boot
+does not give it again. The intermediate ordinary-village load is retained.
+
+The implementation is in `cinematic_comfort.py`, `cinematic_tools.py` and
+`story_shortcuts.py`, composed on already patched flows before event dependency
+completion. Every newly replayed non-final quest request is guarded against
+moving a later/completed quest backwards. New GameData writes and expressions
+are checked against the game's tables. Entry call lists are rebuilt by the EVFL
+writer, and external dependencies are completed through `event_info`.
+
+`verify` uses a fresh logic sweep plus a complete source rebuild for seeds with
+these adapters, comparing every resource byte, reports and tracking documents.
+This also checks control-flow links and preload metadata which a parameter-only
+comparison cannot detect. Verification therefore takes about another generation.
+
+Generate a new mod and use a fresh test save to exercise the opening, tutorial
+and first-pickup initialization. Older accepted artifacts remain readable.
+**Static tests and source replay do not validate animations, loading or actor
+lifetime in the engine. These options still need in-game playtesting.**
+
 ## Big Poes to bring back (`big_poes.py`)
 
 `big_poe_count` (1 to 10): the collector (`Npc_Hylia_048_BottleShop`) compares the

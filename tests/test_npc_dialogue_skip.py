@@ -40,7 +40,7 @@ class GameFlows(unittest.TestCase):
         ok, kept = skip.scan(self.read, skip.zone_flows(True))
         self.assertEqual(kept, {})
         self.assertEqual(set(ok), set(skip.zone_flows(True)))
-        self.assertEqual(sum(len(r['talks']) for r in ok.values()), 657)
+        self.assertEqual(sum(len(r['talks']) for r in ok.values()), 949)
 
     def test_lines_after_a_choice_stay(self):
         from oot_rando.patching.event_patch import _flow

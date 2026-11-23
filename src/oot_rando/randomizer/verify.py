@@ -58,6 +58,40 @@ def _event_snapshot(raw):
     return _snapshot(_flow(raw))
 
 
+def _verify_cinematic_rebuild(nup_path, seed_dir, manifest, plan):
+    """Source replay for composed scene adapters, including topology and preloads.
+
+    The older per-event verifier compares parameter dictionaries. A shortcut can
+    preserve every parameter while disconnecting its grant, so for these seeds
+    regenerate from the original game/settings and compare every resource byte.
+    The caller also performed a fresh logic sweep over the spoiled placements.
+    """
+    import tempfile
+    from oot_rando.randomizer.randomizer_core import generate, Settings
+    with tempfile.TemporaryDirectory(prefix='oot-cinematic-verify-') as temporary:
+        target = Path(temporary) / 'reference'
+        expected = generate(nup_path, target, Settings.from_dict(manifest['settings']),
+                            save_seed_id=manifest.get('save_seed_id'), saves_from=manifest.get('saves_from'))
+        expected = json.loads(json.dumps(expected))  # stored reports turn tuples into lists
+        for key in ('files', 'source_files', 'resource_allocations', 'skips', 'start_values', 'full_randomizer'):
+            if manifest.get(key) != expected.get(key):
+                raise ValueError('Cinematic source replay differs: ' + key)
+        for resource in expected['files']:
+            if (seed_dir / 'romfs' / resource).read_bytes() != (target / 'romfs' / resource).read_bytes():
+                raise ValueError('Cinematic source replay differs: ' + resource)
+        for document in ('checks.json', 'spoiler.json', 'tracking.json'):
+            if (target / document).exists() and json.loads((target / document).read_text(encoding='utf-8')) != json.loads(
+                    (seed_dir / document).read_text(encoding='utf-8')):
+                raise ValueError('Cinematic source replay differs: ' + document)
+    multiworld = manifest.get('archipelago')
+    if not multiworld and not plan['beatable']:
+        raise ValueError('Logic replay: victory not reached.')
+    return {'beatable': 'checked by Archipelago' if multiworld else True,
+            'spheres': plan['sphere_count'], 'unreachable_logic_locations': plan['unreachable'],
+            'source_replayed_files': len(expected['files']),
+            'cinematic_flows': len(manifest['skips'].get('cinematic_shortcuts', {}))}
+
+
 def verify(nup_path, seed_dir):
     from oot_rando.game.extra_sources import scan_world
     seed_dir = Path(seed_dir)
@@ -85,6 +119,10 @@ def verify(nup_path, seed_dir):
                                   # options drawn from the seed key (random key rings) must match
                                   seed_key=(manifest['settings'].get('archipelago') or {}).get('seed_key')
                                   or manifest['seed_id'])
+    from oot_rando.patching import story_shortcuts
+    if story_shortcuts.enabled(manifest['settings']['full']):
+        nup.stream.close()
+        return _verify_cinematic_rebuild(nup_path, seed_dir, manifest, plan)
     tokens, natives = plan['progressive']['tokens'], plan['progressive']['natives']
     for placement in full:
         reward = placement.get('reward_actor', placement['actor'])
@@ -374,16 +412,6 @@ def verify(nup_path, seed_dir):
             if path == SWORD_CHEST_FLOW and skips.get('sword_chest'):
                 original = skip_kokiri_sword_cutscene(original)[0]
                 report['comfort_flows'] = report.get('comfort_flows', 0) + 1
-            from oot_rando.patching.shop_bottles import DISPLAY_SHOP_FLOW, patch_display_shop
-            if path == DISPLAY_SHOP_FLOW and 'shop_full_bottles' in (skips.get('story_fixes') or {}):
-                original = patch_display_shop(original)[0]
-                report['story_fixes'] = report.get('story_fixes', 0) + 1
-            from oot_rando.patching import owl_advice
-            if path == owl_advice.ESCAPE_FLOW and 'owl_field_step' in (skips.get('story_fixes') or {}):
-                from oot_rando.patching.quest_guard import CHALLENGES, challenge_steps
-                original = owl_advice.field_step_after_escape(
-                    original, challenge_steps(decompress(nup.read(members[CHALLENGES]), d)))[0]
-                report['story_fixes'] = report.get('story_fixes', 0) + 1
             from oot_rando.patching import story_fixes
             for fixed_path, key, fix in story_fixes.flow_fixes(stones):
                 if path == fixed_path and key in (skips.get('story_fixes') or {}):

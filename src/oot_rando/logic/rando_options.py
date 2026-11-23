@@ -337,12 +337,30 @@ OPTIONS = [
     Option('fast_chests', 'Quality of life', 'Fast chest opening', ((False, OK), (True, OK)), False,
            'Same patch as "Chests without cutscene" in the setup: the lid opens and Link holds the item up.',
            kind='bool'),
+    Option('skip_opening', 'Quality of life', 'Start without opening scenes', ((False, OK), (True, OK)), False,
+           'Skip the opening movie and wake-up scene. Starting inventory and seed initialization still run. Experimental.',
+           kind='bool', experimental=(True,)),
+    Option('skip_tutorials', 'Quality of life', 'Skip tutorials', ((False, OK), (True, OK)), False,
+           'Suppress action guides and their first-time prompts; keep item conversion, dungeon-key credit and story progression.',
+           kind='bool', experimental=(True,)),
+    Option('skip_first_pickup_text', 'Quality of life', 'Skip first consumable pickup text', ((False, OK), (True, OK)), False,
+           'Ground consumables skip their first You got message. Nuts and sticks start with empty base capacity. Chests and equipment keep their messages.',
+           kind='bool', experimental=(True,)),
+    Option('skip_story_sequences', 'Quality of life', 'Short story reward sequences', ((False, OK), (True, OK)), False,
+           'Shorten Saria, the first Master Sword draw and Rauru, Light Arrows, Darunia and burning Kakariko. Keep rewards, quest effects and native map transfers.',
+           kind='bool', experimental=(True,)),
+    Option('skip_dungeon_endings', 'Quality of life', 'Short dungeon endings', ((False, OK), (True, OK)), False,
+           'Give the dungeon reward after accepting the first-clear blue warp, before leaving the boss room. Skip reward ceremonies and Chamber of Sages stops.',
+           kind='bool', experimental=(True,)),
+    Option('skip_fairy_sequences', 'Quality of life', 'Short Great Fairy gifts', ((False, OK), (True, OK)), False,
+           'All six fountains keep payment, prerequisites, their native item grant and healing, while shortening the gift presentation.',
+           kind='bool', experimental=(True,)),
     Option('skip_song_lessons', 'Quality of life', 'Song lessons without cutscene', ((False, OK), (True, OK)), False,
            'The song lesson cutscene does not play: once it starts, Link holds up the item of its check right away '
            '(songs shown as Sheik\'s harp in their colour), then the quest goes on as after the lesson. '
            'No dialogue, no ocarina to play back. Impa, Malon, Saria, the Royal Family\'s Tomb, the windmill '
-           'and Sheik (forest, crater, ice cavern, Kakariko, temple). Not the Ocarina of Time lesson (the ocarina '
-           'cannot be held up) nor the Requiem. Not validated in game.',
+           'and all six Sheik lessons, including Requiem. The Time lesson gives both the ocarina check and song check. '
+           'Ocarinas use an animated pickup form and become usable immediately. Not validated in game.',
            kind='bool', experimental=(True,)),
     Option('skip_story_timelines', 'Quality of life', 'Animated story scenes skipped', ((False, OK), (True, OK)),
            False,
@@ -367,7 +385,8 @@ OPTIONS = [
            False,
            'Lines of the listed NPCs that ask nothing are not shown: talking to them goes straight to their '
            'item, their question or the end of the talk. Lines after a question the player answered are kept. '
-           'Zones so far: Kokiri Forest (every Kokiri, Mido, Saria, Fado, the Deku Tree sprout; not the shop). '
+           'Selected residents in Kokiri Forest, Goron City and Zora\'s Domain. Shops, minigames, leaders, '
+           'trade services and dedicated hint givers keep their dialogue. '
            'Not validated in game.',
            kind='bool', experimental=(True,)),
     Option('free_scarecrow', 'Quality of life', 'Free scarecrow', ((False, OK), (True, NO_EVENT)), False, kind='bool'),
@@ -386,7 +405,9 @@ OUT_OF_SCOPE = ('Entrance shuffle, Master Quest, multiworld and gossip stone hin
 
 # Options added after a release, left out of the stored settings at this value: stored settings
 # without the option mean it, and seeds made before the option keep their identity.
-UNRECORDED = {'spiritual_stones': 'all', 'door_of_time_requirement': 'song'}
+UNRECORDED = {'spiritual_stones': 'all', 'door_of_time_requirement': 'song',
+              'skip_opening': False, 'skip_tutorials': False, 'skip_first_pickup_text': False,
+              'skip_story_sequences': False, 'skip_dungeon_endings': False, 'skip_fairy_sequences': False}
 
 
 def recorded(values):
