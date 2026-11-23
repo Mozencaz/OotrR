@@ -41,10 +41,18 @@ def port_appdata_names(root):
     return names
 
 
+def linux_data_home():
+    """``$XDG_DATA_HOME``, else ``~/.local/share`` (None on Windows)."""
+    if os.name == 'nt':
+        return None
+    return Path(os.environ.get('XDG_DATA_HOME') or Path.home() / '.local' / 'share')
+
+
 def save_roots(hookshot_root=None, mods=None):
     """Save folders of a PC port (``<game>/user/save``, or ``%APPDATA%/<Port>/save`` where Longshot
-    moves them on import, renaming the old folder ``save.moved-<date>``), of a portable emulator
-    holding ``mods`` (its mods folder or a seed in it), and of Eden in %APPDATA% (NAND user saves)."""
+    moves them on import, renaming the old folder ``save.moved-<date>``; Longshot's Linux build:
+    ``~/.local/share/longshot/save``), of a portable emulator holding ``mods`` (its mods folder or
+    a seed in it), and of Eden in %APPDATA% (NAND user saves)."""
     roots = []
     appdata = os.environ.get('APPDATA')
     if hookshot_root:
@@ -54,6 +62,10 @@ def save_roots(hookshot_root=None, mods=None):
         roots.append(root / 'user' / 'save')
         if appdata:
             roots.extend(Path(appdata) / name / 'save' for name in port_appdata_names(root))
+        data = linux_data_home()
+        if data:
+            names = dict.fromkeys(name.lower() for name in port_appdata_names(root))
+            roots.extend(data / name / 'save' for name in names)
     portable = emulator_save_root(mods) if mods else None
     if portable:
         roots.append(portable)

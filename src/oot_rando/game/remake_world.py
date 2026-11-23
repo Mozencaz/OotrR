@@ -131,7 +131,7 @@ ACTOR_ITEMS = {
     'Item_Longshot': 'Progressive Hookshot', 'Item_Hammer': 'Megaton Hammer',
     'Item_HeavyBoot': 'Iron Boots', 'Item_HoverBoot': 'Hover Boots',
     'Item_Gauntlet_Silver': 'Progressive Strength Upgrade', 'Item_Gauntlet_Gold': 'Progressive Strength Upgrade',
-    'Item_GlassTruth': 'Lens of Truth', 'Item_Arrow_Ice': 'Ice Arrows', 'Item_Sword_Kokiri': 'Kokiri Sword',
+    'Item_GlassTruth': 'Lens of Truth', 'Item_Arrow_Ice': 'Ice Arrows', 'Item_Arrow_Fire': 'Fire Arrows', 'Item_Sword_Kokiri': 'Kokiri Sword',
     'Item_BombBag_Small': 'Bomb Bag', 'Obj_Heart_Piece': 'Piece of Heart',
     'Item_BombBundle_Small': 'Bombs (5)', 'Item_BombchuBundle_Small': 'Bombchus (5)',
     'Item_BombchuBundle_Large': 'Bombchus (10)', 'Item_Token_Gold': 'Gold Skulltula Token',
@@ -156,6 +156,7 @@ ACTOR_ITEMS = {
     'Item_Ocarina_Fairy': 'Ocarina', 'Item_Ocarina_Time': 'Ocarina',
     'Item_ZeldaLetter': 'Zeldas Letter', 'Item_Arrow_Light': 'Light Arrows',
     'Item_Bottle_Letter': 'Rutos Letter',
+    'Obj_Armor_Goron': 'Goron Tunic', 'Obj_Armor_Zora': 'Zora Tunic',
     'Item_Sword_Biggoron': 'Biggoron Sword',
     'Weapon_Sword_Master': 'Master Sword', 'Item_Rando_MasterSword': 'Master Sword',
     'Item_Token_Gerudo': 'Gerudo Membership Card',
@@ -410,8 +411,30 @@ def map_age(path):
     return 'child' if '_Child_' in path else 'adult' if '_Adult_' in path else None
 
 
+# Native child copies of the seven rocks around (-99, 106, 44), on the
+# Colossus bean plateau. Adult rocks have separate hashes; ground-level rocks
+# and the bean soil must remain candidates. Use exact IDs to limit this exclusion.
+COLOSSUS_CHILD_PLATEAU_ROCKS = frozenset({
+    17604351797179232812, 18089518693918851857, 2465861655194430312,
+    16808421367294770117, 15615314528351978483, 12414690125675705208,
+    352697202323389437,
+})
+
+
+# Invisible, inaccessible Kokiri rocks reported in game. Labels are from the
+# native scan before exclusions; filter by stable actor ID, never renumbered labels.
+KOKIRI_INACCESSIBLE_ROCKS = {
+    'child': frozenset({16780156705177292663, 4164292104786619976,
+                        12045642716728132811, 13219695470225186387}),  # 12,18,24,30
+    'adult': frozenset({10656348214587939196, 5853846732169153879,
+                        8931631613049749371, 13164882936498639212,
+                        802407974539353270, 15388836867476865988,
+                        2657789777104100407, 5675403228854574159}),  # 9,14,16,19,23,26,28,33
+}
+
+
 def inaccessible_child_actor(path, actor):
-    """Child actors kept out of the shuffle and the logic.
+    """Inaccessible actors kept out of the shuffle and the logic.
 
     * Every actor of the child Death Mountain Crater maps: they stay vanilla,
       and a source shared by both ages keeps only its adult copy.
@@ -419,13 +442,20 @@ def inaccessible_child_actor(path, actor):
       grotto: the child map contains these actors despite the bridge being
       impassable. The far plateau is west of x=-15 at y~100; its grotto is at
       y~84. Keep the lower river ledges (y~48) and crate/heart ledge (x~-9, y~90).
+    * The seven child Desert Colossus bean-plateau rocks: only adult Link can
+      ride the planted bean to that plateau. Their adult copies stay eligible.
+    * Twelve invisible Kokiri Forest rocks, with distinct child/adult IDs.
 
     Filter candidates only: decoded maps and original actor indices stay intact.
     """
+    if path.startswith('Banc/KokiriForest/'):
+        return actor.get('Hash') in KOKIRI_INACCESSIBLE_ROCKS.get(map_age(path), ())
     if map_age(path) != 'child':
         return False
     if path.startswith('Banc/DeathMountainCrater/'):
         return True
+    if path.startswith('Banc/DesertColossus/'):
+        return actor.get('Hash') in COLOSSUS_CHILD_PLATEAU_ROCKS
     position = actor.get('Translate')
     return (path.startswith('Banc/GerudoValley/')
             and isinstance(position, list) and len(position) == 3
@@ -505,6 +535,8 @@ KNOWN_CHEST_GROUPS.update({
 # the bombs-only rule of the center and right chests and held the Kokiri Emerald in
 # logic (Discord 16/11). The matching (pool, tracker, names) is unchanged.
 CHEST_RULE_EVENTS = {
+    # Read the fairy's memory as adult, then return as child to open its chest.
+    'HyruleField#2967378296224661060': 'HF Fairy Memory Chest',  # Obj_TBox_A_01_memo11
     # Kakariko's two freestanding heart pieces, told apart by position (17/11).
     'KakarikoVillage#free#13389209437182306002': 'Kak Windmill Heart Piece',     # Kak_heart_piece_2
     'KakarikoVillage#free#17926402522258180222': 'Kak Impas House Heart Piece',  # Kak_heart_piece_1

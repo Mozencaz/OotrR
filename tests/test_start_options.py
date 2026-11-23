@@ -68,7 +68,7 @@ class OptionTests(unittest.TestCase):
         from oot_rando.randomizer.full_randomizer import ap_settings
         option = rando_options.BY_NAME['spiritual_stones']
         self.assertEqual((option.label, option.tab, option.default), ('Require Spiritual Stones', 'World', 'all'))
-        self.assertEqual(option.allowed(), ('all', 'vanilla'))
+        self.assertEqual(option.allowed(), ('door', 'all', 'vanilla'))
         self.assertEqual(rando_options.defaults()['spiritual_stones'], 'all')
         for value in option.allowed():
             values = rando_options.validate({'spiritual_stones': value}, supported_only=True)
@@ -76,7 +76,7 @@ class OptionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             rando_options.validate({'spiritual_stones': 'emerald'})
         spec = next(s for s in ap_option_specs() if s['name'] == 'spiritual_stones')
-        self.assertEqual((spec['values'], spec['default']), (['all', 'vanilla'], 'all'))
+        self.assertEqual((spec['values'], spec['default']), (['door', 'all', 'vanilla'], 'all'))
         imported, ignored = rando_options.from_ap_yaml(rando_options.to_ap_yaml(
             rando_options.validate({'spiritual_stones': 'vanilla'})))
         self.assertEqual((imported['spiritual_stones'], ignored), ('vanilla', []))
@@ -86,6 +86,7 @@ class OptionTests(unittest.TestCase):
     def test_recorded_options_leave_out_the_unrecorded_value(self):
         values = rando_options.defaults()
         self.assertNotIn('spiritual_stones', rando_options.recorded(values))
+        self.assertNotIn('spiritual_stones', rando_options.recorded(dict(values, spiritual_stones='all')))
         self.assertEqual(rando_options.recorded(dict(values, spiritual_stones='vanilla'))['spiritual_stones'], 'vanilla')
         self.assertEqual(rando_options.stored_value({}, 'spiritual_stones'), 'all')
         self.assertEqual(rando_options.stored_value({'spiritual_stones': 'vanilla'}, 'spiritual_stones'), 'vanilla')
@@ -107,16 +108,23 @@ class GuiSourceTests(unittest.TestCase):
         source = Path(__file__).resolve().parents[1] / 'src' / 'oot_rando' / 'gui' / 'randomizer_gui.py'
         compile(source.read_text(encoding='utf-8'), str(source), 'exec')
 
-    def test_stones_option_has_its_tooltip_in_the_open_world_card(self):
+    def test_escape_stones_and_door_requirements_have_separate_controls(self):
         from oot_rando.gui import randomizer_gui as g
         card = next(names for title, _, names in g.SETTING_GROUPS if title == 'Open world')
+        self.assertNotIn('spiritual_stones', g.HIDDEN_OPTIONS)
         self.assertIn('spiritual_stones', card)
-        option = rando_options.BY_NAME['spiritual_stones']
-        tip = g.option_tip(option, option.label, option.help)
-        self.assertTrue(tip.startswith('Require Spiritual Stones'))
-        for text in ('Require all', 'Vanilla', 'DoorOfTime_CheckStoneNum', 'Kokiri Emerald', 'original game'):
-            self.assertIn(text, tip)
-        self.assertIn('Require all (default)', tip)
+        self.assertIn('door_of_time_requirement', card)
+        self.assertNotIn('door_of_time_requirement', g.HIDDEN_OPTIONS)
+
+    def test_gui_values_preserve_the_separate_escape_choice(self):
+        from types import SimpleNamespace
+        from oot_rando.gui import randomizer_gui as g
+        for mode in ('all', 'vanilla', 'song'):
+            values = rando_options.validate({'door_of_time_requirement': mode, 'spiritual_stones': 'all'})
+            fake = SimpleNamespace(full_vars=values, full_value=lambda option: values[option.name],
+                                   options={'skip_chest_cutscenes': SimpleNamespace(get=lambda: False)})
+            result = g.Application.full_values(fake)
+            self.assertEqual(rando_options.escape_requirement(result), 'all')
 
     def test_every_setting_has_a_tooltip_and_a_place(self):
         from oot_rando.gui import randomizer_gui as g

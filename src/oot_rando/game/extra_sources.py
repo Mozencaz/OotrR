@@ -125,6 +125,8 @@ NPC_GIFTS = (
     # Only the adult man on the roof gives the heart piece in the remake.
     (('Kak Man on Roof',), ('Kak Anju as Adult',), 'Npc_Hylia_001_Adult', (('Event4', 'Obj_Heart_Piece'),)),
     (('Graveyard Dampe Gravedigging Tour',), (), 'Npc_Hylia_Dampe_001', (('Event628', 'Obj_Heart_Piece'),)),
+    (('GC Rolling Goron as Adult',), (), 'SageOfFire', (('Event18', 'Obj_Armor_Goron'),)),
+    (('ZD King Zora Thawed',), (), 'SageOfWater', (('Event242', 'Obj_Armor_Zora'),)),
     (('GC Darunias Joy',), (), 'Dm_Goron_0030', (('Event127', 'Item_Gauntlet_Goron'),)),
     (('Kak Anju as Child',), (), 'Minigame_CatchCucco', (('Event181', 'Item_Bottle'),)),
     (('Market 10 Big Poes',), (), 'Npc_Hylia_048_BottleShop', (('Event329', 'Item_Bottle'),)),
@@ -137,8 +139,7 @@ NPC_GIFTS = (
 )
 # Never shuffled, whatever the options (documented exclusions).
 EXCLUDED_NPC_LOCATIONS = ('DMT Biggoron', 'Kak Anju as Adult', 'GC Medigoron', 'Wasteland Bombchu Salesman',
-                          'ZR Magic Bean Salesman', 'HC Malon Egg', 'HC Zeldas Letter', 'HF Ocarina of Time Item',
-                          'LH Sun')
+                          'ZR Magic Bean Salesman', 'HC Malon Egg', 'HC Zeldas Letter', 'HF Ocarina of Time Item')
 # Ruto's Letter: the bottle Link fishes out of Lake Hylia is a placed pickup of the
 # child Hyrule Field map (``Obj_Bottle_Letter``, its AP location below). It is a
 # story reward (``quest``): the generic get sequence (``Dm_SY_Get``) sets
@@ -146,6 +147,14 @@ EXCLUDED_NPC_LOCATIONS = ('DMT Biggoron', 'Kak Anju as Adult', 'GC Medigoron', '
 # letter, and a derived pickup keeps ``Item_Bottle_Letter`` as its pouch actor.
 LETTER_ACTOR = 'Obj_Bottle_Letter'
 LETTER_LOCATION = 'LH Underwater Item'
+# Fire Arrows (``LH Sun``): a placed pickup of the adult Hyrule Field map, on the
+# Lake Hylia island (``Obj_Arrow_Fire`` named ``Item``, its own saved Bool64bitKey).
+# Shooting the sun plays ``Dm_LakeHrl_0030``, which binds that actor by name
+# (``Obj_Arrow_Fire[Item]``): a shuffled item gets the cutscene retargeted
+# (patching/fire_arrows.py). Picking up Fire Arrows anywhere only completes the
+# remake's side quest (``SubEvent_GetFireArrow/GetFireArrow``: challenge + Navi).
+FIRE_ARROW_ACTOR = 'Obj_Arrow_Fire'
+FIRE_ARROW_LOCATION = 'LH Sun'
 # Cutscene rewards: (source, AP locations, guards, ((event file stem, event, vanilla actor), ...)).
 # Every site of one reward gets the same item: the visible "get" box and, when
 # the cutscene adds the item silently first (ocarinas), that pouch addition too.
@@ -284,6 +293,13 @@ def scan_map_sources(maps, instance_param=None, world_respawn=None):
                 entries[gid].update(kind='exact', ap=[LETTER_LOCATION])
                 if 'Presence' in actor:
                     entries[gid]['reason'] = 'conditional_presence'
+            elif name == FIRE_ARROW_ACTOR:
+                gid = f'{folder}#firearrow#{ident}'
+                add('quest', 'world', gid, folder, name, 'Fire Arrows',
+                    {'resource': path, 'index': index, 'field': 'Gyaml', 'before': name}, ident)
+                entries[gid].update(kind='exact', ap=[FIRE_ARROW_LOCATION])
+                if 'Presence' in actor:
+                    entries[gid]['reason'] = 'conditional_presence'
             elif name == 'Obj_Heart_Container':
                 gid = f'{folder}#heart#{ident}'
                 add('bossheart', 'world', gid, folder, name, 'Heart Container',
@@ -323,6 +339,18 @@ def scan_map_sources(maps, instance_param=None, world_respawn=None):
                     entries[gid]['reason'] = 'special_drop_behavior'
                 elif not instance_param(name, 'Drop__DropActor'):
                     entries[gid]['reason'] = 'instance_parameter_not_proven'
+    # The central adult Kakariko tree is replaced when the village burns.
+    # One reward across both bancs prevents losing a check to that irreversible
+    # transition. The repeatable adapter keys its shared collection flag by gid.
+    normal = 'KakarikoVillage#trees#16206101463308204390'
+    burnt = 'KakarikoVillage#trees#17337529934879425827'
+    if normal in entries and burnt in entries:
+        original, replacement = entries[normal], entries[burnt]
+        if replacement['reason'] is not None:
+            original['reason'] = replacement['reason']
+        if original['before'] != replacement['before']:
+            original['reason'] = 'variant_mismatch'
+        original['variants'].extend(entries.pop(burnt)['variants'])
     for entry in entries.values():
         if entry['reason'] is None and len({v['resource'] for v in entry['variants']}) != len(entry['variants']) \
                 and entry['source'] != 'shop':
@@ -435,6 +463,15 @@ def kokiri_spot(entry):
     return KF_ANCHOR_VILLAGE
 
 
+# Physically identified sources must keep their own mechanism instead of the
+# conjunction of every AP check of their type in the area. The cemetery wall
+# drop is adult-only; the soil Skulltula is a separate child check.
+KNOWN_SOURCE_LOCATIONS = {
+    'Graveyard#gs#229475726653285413': 'Graveyard GS Wall',
+    'Graveyard#gs#16798263777516949500': 'Graveyard GS Bean Patch',
+}
+
+
 def match_sources(entries, data, logic, used=()):
     """Assign AP locations to map-based entries (NPC entries come pre-matched)."""
     used = set(used)
@@ -454,8 +491,15 @@ def match_sources(entries, data, logic, used=()):
                       if l not in used and set(cats) & areas and (item is None or v == item))
 
     groups = defaultdict(list)
+    for gid, location in KNOWN_SOURCE_LOCATIONS.items():
+        entry = entries.get(gid)
+        if entry and not entry['reason'] and location in logic.location_region and location not in used:
+            entry.update(kind='exact', ap=[location])
+            used.add(location)
     for entry in entries.values():
         if entry['source'] in EVENT_SOURCES or entry['reason']:
+            continue
+        if entry['id'] in KNOWN_SOURCE_LOCATIONS and entry['kind'] == 'exact':
             continue
         if entry['source'] == 'bossheart':
             location = BOSS_HEARTS.get(entry['folder'])
@@ -554,13 +598,17 @@ def mark_underwater(nup, dictionaries, members, maps, extra):
     """Mark the world-form spots under water (:mod:`oot_rando.game.underwater`)."""
     from oot_rando.formats import byml_codec
     from oot_rando.formats.inspect_resources import decompress
-    from oot_rando.game.underwater import mark_entries
+    from oot_rando.game.underwater import drop_child_deep, mark_deep, mark_entries
     if UNDERWATER_INFO not in members:
         return 0
     rows = byml_codec.load(decompress(nup.read(members[UNDERWATER_INFO]), dictionaries))['root']
     boxes = {row['__RowId']: (row['ModelAabbMin'], row['ModelAabbMax']) for row in rows
              if 'WaterPlane' in row.get('__RowId', '') and 'ModelAabbMin' in row and 'ModelAabbMax' in row}
-    return mark_entries(maps, extra, boxes.get)
+    marked = mark_entries(maps, extra, boxes.get)
+    # Deep crates (Lake Hylia lab, Hyrule Field storms grotto): out of child reach.
+    mark_deep(maps, extra, boxes.get)
+    drop_child_deep(extra)
+    return marked
 
 
 def scan_world(nup, dictionaries, members, progress=None):

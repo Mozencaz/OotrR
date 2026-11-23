@@ -16,7 +16,8 @@ from oot_rando.tracker.live_memory import (LiveGameData, LiveUnavailable, parse_
                                            BOOL64_PROBE, BOOL64_TYPE, EMULATOR_EXES, LinuxProcessMemory,
                                            denied_message, exe_link_name, linux_emulator_pids, names_match,
                                            parse_exe_names, parse_maps, plain_name, ptrace_scope,
-                                           readable_regions, MemfdWindows, is_guest_memfd, memfd_mappings)
+                                           readable_regions, MemfdWindows, is_guest_memfd, memfd_mappings,
+                                           HOST_BASE, port_layout, linux_port_pids)
 
 
 def gamedata_image(bools, size=16, gamedata_slot=GAMEDATA_SLOT, at=0, bool64=None, bool64_at=BOOL64_TYPE):
@@ -281,7 +282,9 @@ class MemfdTests(unittest.TestCase):
     def test_link_names(self):
         self.assertTrue(is_guest_memfd('/memfd:HostMemory (deleted)'))
         self.assertTrue(is_guest_memfd('/memfd:HostMemory'))
+        self.assertTrue(is_guest_memfd('/memfd:longshot-guest (deleted)'))
         self.assertFalse(is_guest_memfd('/memfd:HostMemoryX'))
+        self.assertFalse(is_guest_memfd('/memfd:pipewire-memfd:flags=0x0000000f,type=2,size=2312 (deleted)'))
         self.assertFalse(is_guest_memfd('/dev/shm/HostMemory'))
 
     def test_mappings_of_any_protection(self):
@@ -361,6 +364,105 @@ class MemfdTests(unittest.TestCase):
                     memory.read(self.DATA + 0x20000, 8)   # not mapped, even after reading maps again
             finally:
                 memory.close()
+
+    def port_proc(self, folder):
+        """Longshot's Linux build as the round of 18/11 saw it: the game, its crash watcher (same
+        exe, no guest window), and a sparse guest file mapped at HOST_BASE from offset 0."""
+        game = Path(folder, 'Longshot')
+        (game / 'bin').mkdir(parents=True)
+        (game / 'bin' / 'longshot').touch()
+        (game / 'image.bin').touch()
+        (game / 'romfs').mkdir()
+        data = 0x90000000
+        image = gamedata_image({SEQUENCE_IS_CHILDHOOD: True, 17: False}, at=data)
+        path = Path(folder, 'longshot-guest')
+        with open(path, 'wb') as file:
+            for guest, raw in image.items():
+                file.seek(guest)
+                file.write(raw)
+        inode = os.stat(path).st_ino
+        proc = Path(folder, 'proc')
+        maps = {100: f'{HOST_BASE:x}-{HOST_BASE + 0x8000000000:x} rw-s 00000000 00:01 {inode}'
+                     f'    /memfd:longshot-guest (deleted)\n'
+                     '7f9279a89000-7f9279a8d000 r--p 00000000 00:01 7404    /memfd:kwin-dmabuf-feedback-table (deleted)\n',
+                200: '7f9279a89000-7f9279a8d000 r--p 00000000 00:01 7404    /dev/zero\n'}
+        for pid, text in maps.items():
+            (proc / str(pid)).mkdir(parents=True)
+            (proc / str(pid) / 'comm').write_text('longshot\n', encoding='utf-8')
+            (proc / str(pid) / 'maps').write_text(text, encoding='utf-8')
+            os.symlink(game / 'bin' / 'longshot', proc / str(pid) / 'exe')
+        return proc, path, data, game
+
+    @unittest.skipUnless(hasattr(os, 'symlink') and os.name != 'nt', 'POSIX symlinks')
+    def test_attaches_to_native_longshot_through_its_guest_file(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        proc, path, data, game = self.port_proc(folder.name)
+        self.assertEqual(linux_port_pids(str(proc)), [100, 200])
+
+        def pread(fd, size, offset):
+            with open(path, 'rb') as file:
+                file.seek(offset)
+                return file.read(size)
+
+        def pwrite(fd, raw, offset):
+            with open(path, 'r+b') as file:
+                file.seek(offset)
+                return file.write(raw)
+
+        class Memfd(LinuxProcessMemory):
+            def _guest_memfds(self, pid):
+                return [str(path)] if pid == 100 else []
+
+            def _open(self, pid, flags):
+                raise AssertionError('/proc/<pid>/mem opened')
+
+        memory = Memfd(str(proc))
+        with mock.patch.object(live_memory, 'emulator_exes', return_value=EMULATOR_EXES), \
+                mock.patch.object(live_memory.os, 'pread', pread, create=True), \
+                mock.patch.object(live_memory.os, 'pwrite', pwrite, create=True):
+            try:
+                snapshot = LiveGameData(memory).snapshot()
+                self.assertEqual((memory.pid, memory.base, memory.slot), (100, HOST_BASE, GAMEDATA_SLOT))
+                self.assertEqual(Path(memory.image), game / 'bin' / 'longshot')
+                self.assertTrue(snapshot['bool'][SEQUENCE_IS_CHILDHOOD])
+                memory.write(data + 0x5000 + 24 + 22, b'\x01')   # key 17's value byte
+                self.assertTrue(LiveGameData(memory).snapshot()['bool'][17])
+            finally:
+                memory.close()
+            self.assertEqual(memory.image, '')
+
+    @unittest.skipUnless(hasattr(os, 'symlink') and os.name != 'nt', 'POSIX symlinks')
+    def test_a_port_without_guest_window_is_not_read(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        proc, _, _, _ = self.port_proc(folder.name)
+
+        class NoFile(LinuxProcessMemory):
+            def _guest_memfds(self, pid):
+                return []
+
+            def _open(self, pid, flags):
+                if pid == 200:
+                    raise AssertionError('the crash watcher was opened')
+                raise PermissionError
+
+        memory = NoFile(str(proc))
+        with self.assertRaises(LiveUnavailable) as caught:
+            memory.attach()
+        self.assertIn('Linux refused', str(caught.exception))   # the game (100) has a window, no readable file
+
+    def test_port_layout(self):
+        image = gamedata_image({SEQUENCE_IS_CHILDHOOD: True}, at=0x90000000)
+        memory = FakeMemory({HOST_BASE + guest: raw for guest, raw in image.items()})
+
+        def read(host, size):
+            try:
+                return memory.read(host, size)
+            except LiveUnavailable:
+                return None
+        self.assertEqual(port_layout(read), (HOST_BASE, GAMEDATA_SLOT))
+        self.assertIsNone(port_layout(lambda host, size: None))
 
     @unittest.skipUnless(sys.platform.startswith('linux') and hasattr(os, 'memfd_create'), 'a Linux memfd')
     def test_reads_and_writes_a_memfd_of_this_process(self):

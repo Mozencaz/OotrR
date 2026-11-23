@@ -1,7 +1,8 @@
 """Handing the items of other worlds to the running game (``patching.ap_mailbox``).
 
 The client signals one item at a time: it sets the item's ``RandoAP.Recv`` Bool in
-the game's memory, the game's global sequence starts its item get, and the event
+the game's memory, then the shared Pending Bool for newer seeds. The global
+sequence requests the dispatcher (or the item's event for older seeds), and the event
 sets the saved ``RandoAP.Got`` Bool. Until Got is true the item is pending: a signal
 lost (an event already playing, a save loaded meanwhile) is sent again after
 ``RETRY_SECONDS``. Got comes back with the save, so loading an older save gives back
@@ -120,7 +121,9 @@ class LiveDelivery:
 
     def __init__(self, manifest, live=None, clock=time.monotonic):
         from oot_rando.patching.soul_adapter import murmur3
-        self.records = ((manifest.get('skips') or {}).get('ap_mailbox') or {}).get('items', [])
+        mailbox = ((manifest.get('skips') or {}).get('ap_mailbox') or {})
+        self.records = mailbox.get('items', [])
+        self.signal = murmur3(mailbox['signal']) if mailbox.get('signal') else None
         from oot_rando.randomizer.randomizer_core import save_marker
         self.marker = murmur3(save_marker(manifest))
         self.deliverer = Deliverer(self.records, murmur3)
@@ -144,6 +147,16 @@ class LiveDelivery:
             self.status = 'no save of this seed loaded' + running_game_hint(self.live)
             return None
         self.waiting = len(self.deliverer.pending(keys, bools))
+        if self.signal is not None:
+            if bools.get(self.signal) is not False:
+                self.status = 'waiting for the game mailbox'
+                return None
+            # The sequence clears the shared signal even if the event is dropped.
+            # Retry that request after the usual timeout; the dispatcher's Got
+            # guard makes a delayed/repeated request harmless. Paused games keep
+            # the shared signal true and cannot receive a second request.
+            bools = dict(bools)
+            bools.update({flag: False for flag in self.deliverer.recv.values()})
         key = self.deliverer.step(keys, bools, self.clock())
         self.status = f'{self.waiting} item(s) to hand over' if self.waiting else 'every received item is in game'
         if self.deliverer.aside:
@@ -152,6 +165,8 @@ class LiveDelivery:
             return None
         try:
             set_bool_in(self.live, self.deliverer.recv[key], True)
+            if self.signal is not None:
+                set_bool_in(self.live, self.signal, True)
         except LiveUnavailable as error:
             self.status = 'cannot signal the item (' + str(error) + ')'
             return None

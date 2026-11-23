@@ -99,7 +99,7 @@ def _relink(chart, target, replacement):
     return count
 
 
-def guard_regressions(raw, challenge, steps, floor, gamedata_raw=None):
+def guard_regressions(raw, challenge, steps, floor, gamedata_raw=None, prefix=PREFIX):
     """Flow bytes where no request of a step before ``floor`` runs once the quest reached it.
 
     ``steps``: the challenge table (:func:`challenge_steps`). Not every step has its
@@ -107,11 +107,12 @@ def guard_regressions(raw, challenge, steps, floor, gamedata_raw=None):
     with ``gamedata_raw`` the expression is checked first. Returns (bytes, report)
     with report = {'expression', 'guarded': [(event, step, skip_to or None)]}; the
     input is returned unchanged (empty ``guarded``) when the flow has no such request.
+    Use a distinct ``prefix`` when another quest floor edits the same flow.
     """
     expression = floor_expression(steps, challenge, floor)
     order = steps[challenge]
     return guard_requests(raw, challenge, steps, order[:order.index(floor)], expression,
-                          skip_when=True, gamedata_raw=gamedata_raw)
+                          skip_when=True, gamedata_raw=gamedata_raw, prefix=prefix)
 
 
 def guard_requests(raw, challenge, steps, wanted, expression, skip_when=True, gamedata_raw=None,

@@ -29,11 +29,11 @@ class SeedStringTests(unittest.TestCase):
                 self.assertEqual(version, GENERATOR_VERSION)
 
     def test_stones_travel_with_the_string_and_older_strings_ask_for_all(self):
-        for value in ('all', 'vanilla'):
+        for value in ('door', 'all', 'vanilla'):
             with self.subTest(spiritual_stones=value):
                 decoded, _ = settings_string.decode(settings_string.encode(full_settings(spiritual_stones=value)))
                 self.assertEqual(decoded.full['spiritual_stones'], value)
-        text = settings_string.encode(full_settings())
+        text = settings_string.encode(full_settings(spiritual_stones='all'))
         payload = json.loads(zlib.decompress(base64.urlsafe_b64decode(text[len(settings_string.PREFIX):] + '===')))
         self.assertNotIn('spiritual_stones', payload['s'].get('full', {}))   # as written before the option
         self.assertEqual(settings_string.decode(text)[0].full['spiritual_stones'], 'all')

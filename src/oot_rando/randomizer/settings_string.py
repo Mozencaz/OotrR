@@ -32,7 +32,7 @@ def encode(settings):
     diff = {}
     for name, value in current.items():
         if name == 'full':
-            base = rando_options.defaults()
+            base = dict(rando_options.defaults(), spiritual_stones=rando_options.UNRECORDED['spiritual_stones'])
             diff['full'] = {k: v for k, v in value.items() if base.get(k) != v}
         elif name == 'categories':
             changed = {k: v for k, v in value.items() if defaults['categories'].get(k) != v}
@@ -74,6 +74,7 @@ def decode(text):
         full = diff.pop('full')
         if not isinstance(full, dict):
             raise ValueError('Invalid full randomizer options.')
-        value['full'] = {**rando_options.defaults(), **full}
+        value['full'] = {**rando_options.defaults(),
+                         'spiritual_stones': rando_options.UNRECORDED['spiritual_stones'], **full}
     value.update(diff)
     return Settings.from_dict(value), payload['v']

@@ -42,11 +42,15 @@ class MapAgeTests(unittest.TestCase):
     def setUpClass(cls):
         cls.data = World()
         cls.c = cls.prepared()
-        cls.vanilla = cls.prepared(spiritual_stones='vanilla')
+        cls.vanilla = cls.prepared(door_of_time_requirement='vanilla', spiritual_stones='vanilla')
 
     @classmethod
     def prepared(cls, **options):
-        options = dict(rando_options.defaults(), shuffle_rocks=True, **options)
+        # These scenarios require stones for both the door and Zelda's escape.
+        # The two settings are independent: changing the door does not change
+        # which stones give the vanilla ocarina and Song of Time.
+        options = dict(rando_options.defaults(), shuffle_rocks=True,
+                       **dict({'door_of_time_requirement': 'all'}, **options))
         return prepare(cls.data, options, {}, [], 'map-ages', True, extra=map_sources())
 
     def collected(self, counts, time_travel=True, c=None):

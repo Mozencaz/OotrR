@@ -63,5 +63,67 @@ class DelivererTests(unittest.TestCase):
         self.assertEqual(keys, [record_key('Ami', 'L5'), record_key('Moi', 'L6')])   # server items: none
 
 
+class SharedMailboxTests(unittest.TestCase):
+    def delivery(self, shared=True):
+        from oot_rando.archipelago.receive import LiveDelivery
+        from oot_rando.patching.ap_mailbox import SIGNAL
+        from oot_rando.patching.soul_adapter import murmur3
+        from types import SimpleNamespace
+        mailbox = {'items': RECORDS}
+        if shared:
+            mailbox['signal'] = SIGNAL
+        delivery = LiveDelivery({'seed_id': 'test', 'skips': {'ap_mailbox': mailbox}}, clock=lambda: self.now)
+        self.now = 0
+        self.bools = {delivery.marker: True}
+        for record in RECORDS:
+            self.bools.update({murmur3(record['recv']): False, murmur3(record['got']): False})
+        self.bools[murmur3(SIGNAL)] = False
+        delivery.live = SimpleNamespace(snapshot=lambda: {'bool': dict(self.bools)})
+        return delivery
+
+    def test_signal_order_pause_dropped_event_retry_and_receipt(self):
+        from unittest.mock import patch
+        d = self.delivery()
+        writes = []
+        def write(live, key, value):
+            writes.append(key)
+            self.bools[key] = value
+        with patch('oot_rando.tracker.live_memory.set_bool_in', side_effect=write):
+            self.assertEqual(d.step(['a', 'b'])['key'], 'a')
+            self.assertEqual(writes, [d.deliverer.recv['a'], d.signal])
+            self.now += RETRY_SECONDS + 1
+            self.assertIsNone(d.step(['a', 'b']))  # game paused: request not consumed
+            self.bools[d.signal] = False  # request consumed, event dropped; Recv stays true
+            self.assertEqual(d.step(['a', 'b'])['key'], 'a')
+            self.bools[d.signal] = False
+            self.bools[d.deliverer.got['a']] = True
+            self.assertEqual(d.step(['a', 'b'])['key'], 'b')
+            self.bools[d.signal] = False
+            self.bools[d.deliverer.got['b']] = True
+            self.assertIsNone(d.step(['a', 'b']))
+
+    def test_partial_write_failure_can_be_retried(self):
+        from unittest.mock import patch
+        from oot_rando.tracker.live_memory import LiveUnavailable
+        d = self.delivery()
+        def write(live, key, value):
+            if key == d.signal:
+                raise LiveUnavailable('interrupted')
+            self.bools[key] = value
+        with patch('oot_rando.tracker.live_memory.set_bool_in', side_effect=write):
+            self.assertIsNone(d.step(['a']))
+        self.now += RETRY_SECONDS + 1
+        with patch('oot_rando.tracker.live_memory.set_bool_in') as write:
+            self.assertEqual(d.step(['a'])['key'], 'a')
+            self.assertEqual(write.call_count, 2)
+
+    def test_old_seed_still_uses_only_the_item_flag(self):
+        from unittest.mock import patch
+        d = self.delivery(shared=False)
+        with patch('oot_rando.tracker.live_memory.set_bool_in') as write:
+            self.assertEqual(d.step(['a'])['key'], 'a')
+            write.assert_called_once_with(d.live, d.deliverer.recv['a'], True)
+
+
 if __name__ == '__main__':
     unittest.main()

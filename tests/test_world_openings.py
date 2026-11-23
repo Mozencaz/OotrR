@@ -88,6 +88,46 @@ class ZoraFountain(unittest.TestCase):
         return w.zora_fountain_open(self.read, self.read(game_defaults.GAMEDATA),
                                     self.read(quest_guard.CHALLENGES))
 
+    def test_no_stones_makes_native_bridge_escape_ready_and_guards_later_visits(self):
+        import ainb
+        from oot_rando.logic import rando_options
+        from oot_rando.patching import story_fixes
+        source = self.read(game_defaults.GAMEDATA)
+        challenges = self.read(quest_guard.CHALLENGES)
+        # Apply the same general repairs that precede world openings in generation.
+        fixed = {path: fix(self.read(path))[0]
+                 for path, _, fix in story_fixes.flow_fixes(())}
+        read = lambda path: fixed.get(path) or self.read(path)
+        raw = lambda path: self.nup.read(self.nup.latest('romfs/' + path))
+        data, files, reports = w.apply_openings(dict(rando_options.defaults(), spiritual_stones='door'), read, source, challenges, raw)
+        expected = {'Step_DoorOfTime': 'Step03', 'IsHyruleFieldBridgeClose': True,
+                    'DoorOfTime_GetStoneCount': 0}
+        self.assertEqual(game_defaults.read_defaults(data, expected), expected)
+        self.assertEqual(reports['zelda_escape']['defaults'], expected)
+        self.assertEqual(set(files), set(w.ESCAPE_FLOWS))
+        self.assertEqual(sum(len(v) for v in reports['zelda_escape']['guarded'].values()), 6)
+        self.assertEqual(reports['zelda_escape']['expression'], 'DoorOfTime_IsAfter_Step2_2_Exp')
+        from oot_rando.patching import child_castle_skip
+        start_steps = child_castle_skip.start_step_params(self.read, door_ready=True)
+        self.assertEqual(len(start_steps), 3)
+        self.assertFalse(any(p['ChallengeName'] == 'DoorOfTime' for _, p in start_steps))
+        # The unchanged native bridge area needs only this exact quest step.
+        module = 'Logic/HyruleField_Child_Prefab_0ce5.logic.module.ainb'
+        nodes = ainb.AINB.from_binary(raw(module)).as_dict()['Nodes']
+        query = nodes[3]
+        self.assertEqual(query['Name'], 'HoldChallengeCurrentStepCheckOrder')
+        strings = {p['Name']: p['Default Value'] for p in query['Parameters']['Inputs']['String']}
+        self.assertIn('Step03', strings.values())
+        create = next(p for p in nodes[0]['Parameters']['Inputs']['Bool'] if p['Name'] == 'Logic_Create')
+        self.assertEqual((create['Node Index'], create['Output Index']), (3, 2))
+        # All door choices leave the independent default escape state alone.
+        for mode in ('all', 'vanilla', 'song'):
+            options = rando_options.validate({'door_of_time_requirement': mode})
+            unchanged, no_files, no_reports = w.apply_openings(options, read, source, challenges, raw)
+            self.assertEqual(unchanged, source)
+            self.assertFalse(no_files)
+            self.assertNotIn('zelda_escape', no_reports)
+
     def test_quest_starts_after_the_letter(self):
         gamedata, flows, report = self.opened()
         self.assertEqual(game_defaults.read_defaults(gamedata, [w.ZORA_STEP]), {w.ZORA_STEP: w.ZORA_FLOOR})
@@ -97,6 +137,33 @@ class ZoraFountain(unittest.TestCase):
         self.assertIn('Step03', guarded)            # first arrival in Zora's Domain
         self.assertTrue({'Step05', 'Step06'} <= guarded)
         self.assertFalse(guarded & {'Step07', 'Step08', 'Step09', 'Step10', 'Step14'})
+
+    def test_open_kakariko_with_no_stones_keeps_both_quest_guards(self):
+        from oot_rando.logic import rando_options
+        from oot_rando.patching.story_fixes import _Chart, _params
+        options = dict(rando_options.defaults(), open_kakariko='open', spiritual_stones='door')
+        data, files, reports = w.apply_openings(
+            options, self.read, self.read(game_defaults.GAMEDATA), self.read(quest_guard.CHALLENGES))
+        defaults = {w.step_enum(w.KAKARIKO_QUEST): w.KAKARIKO_FLOOR, w.KAKARIKO_GATE: True,
+                    w.step_enum(w.ESCAPE_QUEST): w.ESCAPE_FLOOR}
+        self.assertEqual(game_defaults.read_defaults(data, defaults), defaults)
+        chart = _Chart(files[w.DOOR_FLOW]).chart
+        self.assertEqual(len({e.name for e in chart.events}), len(chart.events))
+        for option in ('open_kakariko', 'zelda_escape'):
+            report = reports[option]
+            self.assertTrue(report['guarded'][w.DOOR_FLOW])
+            for event, _, resume in report['guarded'][w.DOOR_FLOW]:
+                guards = [e for e in chart.events
+                          if getattr(e.data, 'actor_query', None) is not None
+                          and _params(e).get('GameDataName') == report['expression']
+                          and 1 in e.data.cases and e.data.cases[1].v.name == event]
+                self.assertEqual(len(guards), 1)
+                self.assertEqual(guards[0].data.cases[0].v.name if 0 in guards[0].data.cases else None,
+                                 resume)
+        # Distinct quest patches can coexist; applying the same patch twice still fails.
+        with self.assertRaisesRegex(ValueError, 'Quest guard already applied'):
+            w.zelda_escape_ready(lambda p: files.get(p) or self.read(p), data,
+                                 self.read(quest_guard.CHALLENGES))
 
     def test_no_other_flow_requests_the_quests(self):
         # The guarded flows are the only ones that move each opened quest back.
@@ -127,8 +194,7 @@ class ZoraFountain(unittest.TestCase):
         import ainb
         from oot_rando.formats import byml_codec
         steps = quest_guard.challenge_steps(self.read(quest_guard.CHALLENGES))
-        floors = {w.ZORA_QUEST: w.ZORA_FLOOR, w.KAKARIKO_QUEST: w.KAKARIKO_FLOOR,
-                  w.SPIRIT_QUEST: w.BRIDGE_FLOOR}
+        floors = {w.ZORA_QUEST: w.ZORA_FLOOR, w.KAKARIKO_QUEST: w.KAKARIKO_FLOOR}
         written = []
         for path in sorted({p.split('/', 2)[2] for p in self.nup.entries
                             if '/romfs/Logic/' in p and p.endswith('.ainb')}):
@@ -161,15 +227,16 @@ class ZoraFountain(unittest.TestCase):
         self.assertEqual([s for _, s, _ in report['guarded'][w.DOOR_FLOW]], ['KakarikoVillageNpc'])
 
     def test_gerudo_valley_bridge(self):
-        gamedata, flows, report = w.gerudo_valley_bridge(self.read, self.read(game_defaults.GAMEDATA),
-                                                         self.read(quest_guard.CHALLENGES))
-        self.assertEqual(game_defaults.read_defaults(gamedata, ['Step_SageOfSpirit']), {'Step_SageOfSpirit': 'Step01'})
-        self.assertEqual(flows, {})
-        # The bridge module shows the repaired bridge from Step01 on.
+        source = self.read(game_defaults.GAMEDATA)
+        gamedata, files, report = w.gerudo_valley_bridge(self.read, source,
+            self.read(quest_guard.CHALLENGES), lambda p: self.nup.read(self.nup.latest('romfs/' + p)))
+        self.assertEqual(gamedata, source)  # no carpenter or card progress granted
+        self.assertEqual(set(files), {w.BRIDGE_MODULE})
         import ainb
-        nodes = ainb.AINB.from_binary(self.nup.read(self.nup.latest('romfs/' + w.BRIDGE_MODULE))).as_dict()['Nodes']
-        self.assertIn('SageOfSpirit_IsAfter_Step01_Exp',
-                      [s['Default Value'] for n in nodes for s in n.get('Parameters', {}).get('Inputs', {}).get('String', [])])
+        nodes = ainb.AINB.from_binary(files[w.BRIDGE_MODULE]).as_dict()['Nodes']
+        selector = nodes[3]['Parameters']['Inputs']['Bool'][0]
+        self.assertEqual((selector['Default Value'], selector['Node Index']), (True, -1))
+        self.assertEqual(unflagged_links(nodes), [])
 
     def test_door_of_time_modules(self):
         import ainb

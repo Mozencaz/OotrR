@@ -9,8 +9,9 @@ Time (adult).
 * Plus menu (``PlusMenu.module``): the button sets ``RandoSaveWarp``, then opens the
   usual save screen (``Save.module``).
 * Save screen: with the flag, "Save" clears it (the save never holds it), saves as Save
-  does, selects that save (``CaptionData.SelectedSavePathIndex``), leaves the menu as the
-  load screen does before a load (overlay closed; pre-game pause turned into the game
+  does, capturing its slot in ``CaptionData.SelectedSavePathIndex`` before the write,
+  leaves the menu as the load screen does before a load (overlay closed; pre-game pause
+  turned into the game
   pause), sets the flag again and ends with ``Warp``. The plus menu then runs its load
   (``_LocalModule_bde133631675``): the vanilla load of that save (the flag is gone once it
   is read back), into the warp destination. Cancel (and B) clear the flag.
@@ -534,28 +535,35 @@ def _leave_menu(document):
                          [overlay, _bool_selector(document, 'paused', paused, pause, no_pause)])
 
 
-def _select_latest_save(document):
-    """``CaptionData.SelectedSavePathIndex`` (the save the load reads) set to the latest save."""
+def _select_written_save(document):
+    """Capture the manual slot about to be written, using the save action's query.
+
+    GetLatestSaveIndex is used by Retry and tracks the previously loaded save;
+    a manual write must not rely on it becoming the latest loaded index.
+    Capture before the write/caption update can advance the manual slot.
+    """
     nodes = document['Nodes']
     caption = _node(document, 'UserDefined', 'SeqQueryGetNonStructGameDataStruct', 'caption', flags=['Is Query'],
                     properties=copy.deepcopy(_QUERY),
                     inputs={'Int': [_param('GameDataIndex', -1)], 'Bool': [_param('IsDirect', False)],
                             'String': [_param('GameDataFullName', 'CaptionData')]},
                     outputs={'Pointer': [{'Name': 'Value', 'Classname': 'const void', 'Is Output': True}]})
-    latest = _node(document, 'UserDefined', 'SeqQueryGetLatestSaveIndex', 'latest', flags=['Is Query'],
-                   properties=copy.deepcopy(_QUERY), outputs={'Int': [{'Name': 'SaveFileIndex', 'Is Output': True}]})
+    slot = next(p['Node Index'] for p in nodes[5]['Parameters']['Inputs']['Int']
+                if p['Name'] == 'SlotIndex')
+    if slot < 0 or nodes[slot]['Name'] != 'SeqQueryGameDataGetManualSaveIndex':
+        raise ValueError('Unexpected manual save slot query.')
     nodes[caption]['Plugs'] = {'Generic': [{'Node Index': len(nodes), 'Name': 'Value'}]}
-    return _node(document, 'UserDefined', 'SeqOneShotSetGameDataInt', 'select', queries=[latest, caption],
+    return _node(document, 'UserDefined', 'SeqOneShotSetGameDataInt', 'select', queries=[slot, caption],
                  properties=copy.deepcopy(_ONCE),
-                 inputs={'Int': [_param('GameDataIndex', -1), _param('Value', 0, latest)],
+                 inputs={'Int': [_param('GameDataIndex', -1), _param('Value', 0, slot)],
                          'String': [_param('GameDataName', 'SelectedSavePathIndex')],
                          'Pointer': [{'Name': 'ParentStruct', 'Classname': 'const void', 'Default Value': None,
                                       'Node Index': caption, 'Output Index': 0, 'Flags': []}]},
-                 plugs={'Int': [{'Node Index': latest, 'Name': 'Value'}]})
+                 plugs={'Int': [{'Node Index': slot, 'Name': 'Value'}]})
 
 
 def patch_save(raw):
-    """With the flag, "Save" saves (the flag cleared during the save), selects that save,
+    """With the flag, "Save" captures its slot and saves (the flag cleared during the save),
     leaves the menu as the load screen does, sets the flag and ends with ``Warp``."""
     document = _document(raw)
     nodes = document['Nodes']
@@ -571,10 +579,11 @@ def patch_save(raw):
     end = _node(document, 'Element_StateEnd', '', 'end-warp', flags=['Is Root Node'],
                 properties={'String': [{'Name': 'TransitionCommand', 'Default Value': 'Warp', 'Flags': []}]})
     after = _sequential(document, 'after-save',
-                        [35, 23, 56, _select_latest_save(document), _leave_menu(document),
+                        [35, 23, 56, _leave_menu(document),
                          _set_bool(document, 'flag-on', SAVE_WARP_FLAG, True)],
                         transition=end, root=True)
-    save = _sequential(document, 'save', [_set_bool(document, 'flag-off', SAVE_WARP_FLAG, False), 54, 25, 27],
+    save = _sequential(document, 'save', [_set_bool(document, 'flag-off', SAVE_WARP_FLAG, False),
+                                        54, 25, _select_written_save(document), 27],
                        transition=after, root=True)
     start = _node(document, 'UserDefined', 'SeqOneShotEnd', 'start', properties=copy.deepcopy(_ONCE),
                   plugs={'Transition': [{'Node Index': save, 'Transition Type': 1, 'Update Post Calc': True}]})

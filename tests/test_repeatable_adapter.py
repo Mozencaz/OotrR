@@ -226,30 +226,113 @@ class LocalGraphTests(unittest.TestCase):
         from oot_rando.formats.inspect_nup import Nup
         from oot_rando.formats.inspect_resources import dictionaries
         from oot_rando.game.world_maps import effective_members
-        from oot_rando.patching.repeatable_adapter import SHOP_AI_MEMBER, as_command, instrument_shop_ai, _refers
+        from oot_rando.patching.repeatable_adapter import (SHOP_AI_MEMBER, SHOP_EVENT_MEMBER, EVENT_PACK,
+                                                          as_command, instrument_shop_ai, _refers)
         nup = Nup(os.environ['OOT_NUP'])
         try:
             dic, members = dictionaries(nup), effective_members(nup)
             raw = sarc(decompress(nup.read(members['Pack/Actor/Shop_ArrowBundle_01.pack.zs']), dic))[SHOP_AI_MEMBER]
+            shop_event = sarc(decompress(nup.read(members[EVENT_PACK]), dic))[SHOP_EVENT_MEMBER]
         finally:
             nup.stream.close()
         before = ainb.AINB.from_binary(raw).as_dict()
-        after = ainb.AINB.from_binary(instrument_shop_ai(raw, 'Rando.Check.test', 'Shop_RandoOnce_test.root')).as_dict()
+        after = ainb.AINB.from_binary(instrument_shop_ai(raw, 'Rando.Check.test', 'Shop_RandoOnce_test.root', shop_event)).as_dict()
         self.assertEqual(before['Commands'], after['Commands'])
         nodes = {n['Node Index']: n for n in after['Nodes']}
-        setter, query, delete, native = after['Nodes'][len(before['Nodes']):]
-        self.assertEqual((setter['Name'], query['Name'], delete['Name']),
-                         ('OneShotSetNonStructGameDataBool', 'QueryGetNonStructGameDataBool', 'OneShotGenericDeleteThisActor'))
+        self.assertNotIn('OneShotGenericDeleteThisActor', {n['Name'] for n in nodes.values()},
+                         'Bought shelves must remain as navigation slots after re-entry')
+        setter, query, native = after['Nodes'][len(before['Nodes']):len(before['Nodes']) + 3]
+        self.assertEqual((setter['Name'], query['Name']),
+                         ('OneShotSetNonStructGameDataBool', 'QueryGetNonStructGameDataBool'))
         visibility = next(n for n in after['Nodes'] if n['Node Type'] == 'Element_BoolSelector'
                           and _refers(n.get('Parameters'), query['Node Index']))
         self.assertEqual({p['Name']: p['Node Index'] for p in visibility['Plugs']['Child']}['True'], native['Node Index'])
-        # Bought: hidden while the shop's own stock says sold out, deleted otherwise.
+        # Bought: retain the navigation slot, restoring its native sold counter on re-entry.
         sold_out = next(n['Node Index'] for n in after['Nodes'] if n['Name'] == 'QueryShopItemIsSoldOut')
         self.assertEqual(native['Queries'], [sold_out])
         branches = {p['Name']: nodes[p['Node Index']] for p in native['Plugs']['Child']}
         self.assertEqual(branches['True']['Name'], 'OneShotGameModelControllerSetVisible')
         self.assertIs(branches['True']['Parameters']['Inputs']['Bool'][0]['Default Value'], False)
-        self.assertEqual(branches['False']['Node Index'], delete['Node Index'])
+        sequence = branches['False']
+        self.assertEqual(sequence['Node Type'], 'Element_Sequential')
+        restore, hidden = [nodes[p['Node Index']] for p in sequence['Plugs']['Child']]
+        self.assertEqual(hidden['Node Index'], branches['True']['Node Index'])
+        self.assertEqual(restore['Name'], 'OneShotAddGameDataInt')
+        self.assertEqual(next(p['Default Value'] for p in restore['Parameters']['Inputs']['Int']
+                              if p['Name'] == 'Value'), 1)
+        # Resolve the real native counter address: Shop_SoldNum.<ForSale seller>.<own slot>.
+        def input_node(node, kind, name):
+            return nodes[next(p['Node Index'] for p in node['Parameters']['Inputs'][kind] if p['Name'] == name)]
+        stock = input_node(restore, 'Pointer', 'ParentStruct')
+        shop = input_node(stock, 'String', 'GameDataName')
+        self.assertEqual(input_node(shop, 'Pointer', 'Actor')['Name'], 'QueryActorGetReferenceLinkSrcActor')
+        root = input_node(stock, 'Pointer', 'ParentStruct')
+        self.assertEqual(root['Parameters']['Inputs']['String'][0]['Default Value'], 'Shop_SoldNum')
+        slot = input_node(restore, 'String', 'GameDataName')
+        self.assertEqual(input_node(slot, 'Int', 'S32')['Name'], 'QueryBlackboardGetS32')
+        # Replay the emitted visibility graph, including its counter-address queries.
+        # After leaving, all native counters are zero again, but saved checks remain.
+        counters = {}
+        seller, shelf_slot, bought = 'KokiriShop', 0, False
+        visible = True
+        increments = []
+
+        def value(node, kind, name):
+            param = next(p for p in node['Parameters']['Inputs'][kind] if p['Name'] == name)
+            return evaluate(nodes[param['Node Index']]) if param.get('Node Index', -1) >= 0 else param['Default Value']
+
+        def evaluate(node):
+            nonlocal visible
+            name = node['Name']
+            if name == 'QueryGetNonStructGameDataBool':
+                return bought
+            if name == 'QueryActorGetReferenceLinkSrcActor':
+                return seller
+            if name == 'QueryBlackboardGetS32':
+                return shelf_slot
+            if name == 'QueryGenericGetActorName':
+                return value(node, 'Pointer', 'Actor')
+            if name == 'QueryGetNonStructGameDataStruct':
+                return (value(node, 'String', 'GameDataFullName'),)
+            if name == 'QueryGetGameDataStruct':
+                return value(node, 'Pointer', 'ParentStruct') + (value(node, 'String', 'GameDataName'),)
+            if name == 'QueryFormatStringFromInt':
+                return value(node, 'String', 'Formatter') % value(node, 'Int', 'S32')
+            if name == 'QueryShopItemIsSoldOut':
+                return counters.get(('Shop_SoldNum', seller, str(shelf_slot)), 0) >= 1
+            if name == 'OneShotAddGameDataInt':
+                key = value(node, 'Pointer', 'ParentStruct') + (value(node, 'String', 'GameDataName'),)
+                counters[key] = counters.get(key, 0) + value(node, 'Int', 'Value')
+                increments.append(key)
+            elif name == 'OneShotGameModelControllerSetVisible':
+                visible = value(node, 'Bool', 'IsVisible')
+            elif node['Node Type'] == 'Element_BoolSelector':
+                branch = 'True' if value(node, 'Bool', 'Input') else 'False'
+                child, = [p for p in node['Plugs']['Child'] if p['Name'] == branch]
+                evaluate(nodes[child['Node Index']])
+            elif node['Node Type'] == 'Element_Sequential':
+                for child in node['Plugs']['Child']:
+                    evaluate(nodes[child['Node Index']])
+            else:
+                self.fail('Unexpected navigation branch: ' + name)
+
+        for seller in ('KokiriShop', 'MarketShop'):
+            for shelf_slot in range(8):
+                bought = shelf_slot in (0, 1)  # adjacent bought slots, all other slots still for sale
+                for _ in range(3):
+                    evaluate(visibility)
+                    self.assertEqual(visible, not bought)
+                self.assertEqual(counters.get(('Shop_SoldNum', seller, str(shelf_slot)), 0), int(bought))
+        self.assertEqual(len(increments), 4)  # one restoration per bought slot, never every frame
+        # Already sold during this visit: no restoration or duplicate increments.
+        shelf_slot, bought = 0, True
+        evaluate(visibility)
+        self.assertEqual(len(increments), 4)
+        # Another visit resets native stock again, and repairs just this shelf.
+        counters.clear()
+        evaluate(visibility)
+        self.assertEqual(counters, {('Shop_SoldNum', 'MarketShop', '0'): 1})
+        self.assertFalse(visible)
         put = next(n['Node Index'] for n in after['Nodes'] if n['Name'] == 'ExecuteShopItemPutInPouch')
         put_parent = next(n for n in after['Nodes'] if any(p['Node Index'] == put for p in n['Plugs'].get('Child', [])))
         self.assertNotIn(visibility['Node Index'], [p['Node Index'] for p in put_parent['Plugs']['Child']])
@@ -482,6 +565,81 @@ class LocalGraphTests(unittest.TestCase):
         self.assertEqual((reserve['Name'], death['Name']), ('OneShotDropReserveDropItemCreate', 'OneShotDeathRequestDeath'))
         self.assertEqual(death['Parameters']['Inputs']['Int'][0]['Default Value'], 10)   # the lantern's reason
         self.assertNotIn('OneShotGenericDeleteThisActor', [n['Name'] for n in after['Nodes']])
+
+    def test_first_pickup_cannot_emit_vanilla_drop_on_collection(self):
+        """Replay the emitted startup actions before pickup death or later respawn."""
+        from oot_rando.formats.inspect_nup import Nup
+        from oot_rando.formats.inspect_resources import dictionaries
+        from oot_rando.game.world_maps import effective_members
+        from oot_rando.patching.repeatable_adapter import (DROP_AI_MEMBER, EVENT_MEMBER, EVENT_PACK,
+                                                           HANDOVER_AI_MEMBER, instrument_drop_ai)
+        nup = Nup(os.environ['OOT_NUP'])
+        try:
+            dic, members = dictionaries(nup), effective_members(nup)
+            pack = sarc(decompress(nup.read(members[EVENT_PACK]), dic))
+        finally:
+            nup.stream.close()
+        for minor in (None, 'TBox_Rupee_Red'):
+            raw = instrument_drop_ai(pack[DROP_AI_MEMBER], 'Rando.Check.test', 'Obj_RandoOnce_test.root',
+                                     pack[EVENT_MEMBER], mark_on_spawn=minor,
+                                     restore_raw=pack[HANDOVER_AI_MEMBER])
+            nodes = _nodes(raw)
+            # Match the native action's schema; only its input is now constant.
+            native = next(n for n in _nodes(pack['AI/Enemy_Leever.brain.root.ainb'])
+                          if n['Name'] == 'OneShotDropSetDropValid')
+            disable, = [n for n in nodes if n['Name'] == native['Name']]
+            for key in ('Node Type', 'Flags', 'Attachments', 'Properties', 'XLink Actions'):
+                self.assertEqual(disable[key], native[key])
+            self.assertEqual(disable['Parameters']['Inputs']['Bool'][0]['Name'],
+                             native['Parameters']['Inputs']['Bool'][0]['Name'])
+            start = next(n for n in nodes if n['Node Type'] == 'Element_Sequential'
+                         and n['Node Index'] < len(_nodes(pack[DROP_AI_MEMBER])))
+            for collected, room in ((False, True), (False, False), (True, True)):
+                with self.subTest(minor=minor, collected=collected, room=room):
+                    state = {'flag': collected, 'valid': True, 'reserved': False, 'dead': False}
+                    drops = []
+
+                    def execute(index):
+                        node = nodes[index]
+                        name = node['Name']
+                        if node['Node Type'] == 'Element_Sequential':
+                            for plug in node['Plugs']['Child']:
+                                execute(plug['Node Index'])
+                                if state['dead']:
+                                    break
+                        elif node['Node Type'] == 'Element_BoolSelector':
+                            query = nodes[node['Queries'][0]]
+                            if query['Name'] == 'QueryGetNonStructGameDataBool':
+                                value = state['flag']
+                            elif query['Name'] == 'QueryPouchMgrIsEnablePushToPouch':
+                                value = room
+                            else:
+                                return  # native rotation selector
+                            branch = 'True' if value else 'False'
+                            execute(next(p['Node Index'] for p in node['Plugs']['Child'] if p['Name'] == branch))
+                        elif name == 'OneShotDropSetDropValid':
+                            state['valid'] = node['Parameters']['Inputs']['Bool'][0]['Default Value']
+                        elif name == 'OneShotSetNonStructGameDataBool':
+                            state['flag'] = True
+                        elif name == 'OneShotDropReserveDropItemCreate':
+                            state['reserved'] = True
+                        elif name == 'OneShotDeathRequestDeath':
+                            state['dead'] = True
+                            if state['valid'] and state['reserved']:
+                                drops.append('vanilla')
+                        elif name != 'OneshotDoNothing':
+                            self.fail('Unexpected startup action: ' + name)
+
+                    execute(start['Node Index'])
+                    if not collected:
+                        self.assertFalse(state['dead'], 'The shuffled reward must stay collectable')
+                        # Normal pickup removal must not use the attached vanilla DropRef.
+                        if state['valid']:
+                            drops.append('vanilla')
+                        self.assertEqual(drops, [], 'Collecting the shuffled reward emits a second, vanilla drop')
+                        self.assertEqual(state['flag'], bool(minor and room))
+                    else:
+                        self.assertEqual(drops, ['vanilla'], 'Later source respawns retain the vanilla refill')
 
     def test_minor_drop_marks_its_check_on_spawn(self):
         """A minor reward's short pick-up runs no get event: its drop sets the check flag

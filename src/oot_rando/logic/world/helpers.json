@@ -79,6 +79,6 @@
  "spirit_temple_shortcuts": "'Spirit Temple' in dungeon_shortcuts",
  "king_dodongo_shortcuts": "region_has_shortcuts('King Dodongo Boss Room')",
  "has_adult_sword": "is_adult and (not shuffle_master_sword or Master_Sword or Biggoron_Sword)",
- "has_gerudo_membership": "Gerudo_Membership_Card and (not shuffle_gerudo_card or can_finish_GerudoFortress)",
+ "has_gerudo_membership": "Gerudo_Membership_Card",
  "can_adult_attack": "is_adult and (has_adult_sword or can_use(Megaton_Hammer) or can_use(Hookshot) or can_use(Bow) or has_explosives or can_use(Dins_Fire))"
 }

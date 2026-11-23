@@ -93,7 +93,11 @@ def ap_give(argv):
         return 0
     record = items[int(argv[1])]
     try:
-        done = set_bool_in(LiveGameData(), murmur3(record['recv']), True)
+        live = LiveGameData()
+        done = set_bool_in(live, murmur3(record['recv']), True)
+        signal = (manifest.get('skips') or {}).get('ap_mailbox', {}).get('signal')
+        if signal:
+            set_bool_in(live, murmur3(signal), True)
     except LiveUnavailable as error:
         print('Game unreachable:', error)
         return 1
@@ -176,4 +180,6 @@ def selftest(argv):
 
 
 if __name__ == '__main__':
+    from multiprocessing import freeze_support
+    freeze_support()
     sys.exit(main())

@@ -67,7 +67,7 @@ GENERIC_KEYS = 'Remake keys are generic (credited to the current dungeon): impos
 STARTABLE_ITEMS = (
     'Kokiri Sword', 'Biggoron Sword', 'Deku Shield', 'Hylian Shield', 'Mirror Shield',
     'Slingshot', 'Bow', 'Boomerang', 'Progressive Hookshot', 'Megaton Hammer', 'Lens of Truth',
-    'Bomb Bag', 'Bombchus (10)', 'Ice Arrows', 'Light Arrows', 'Dins Fire', 'Farores Wind', 'Nayrus Love',
+    'Bomb Bag', 'Bombchus (10)', 'Fire Arrows', 'Ice Arrows', 'Light Arrows', 'Dins Fire', 'Farores Wind', 'Nayrus Love',
     'Iron Boots', 'Hover Boots', 'Progressive Strength Upgrade', 'Progressive Scale', 'Progressive Wallet',
     'Deku Nut Capacity', 'Deku Stick Capacity', 'Magic Meter', 'Double Defense', 'Ocarina', 'Bottle',
     'Bottle with Milk', 'Zeldas Letter', 'Stone of Agony', 'Heart Container', 'Piece of Heart',
@@ -121,7 +121,8 @@ OPTIONS = [
            'Door of Time open overrides this requirement. Independent of the stones for Zelda\'s escape. '
            'To be confirmed in game.', experimental=('all', 'vanilla', 'song')),
     Option('spiritual_stones', 'World', 'Require Spiritual Stones',
-           (('all', 'Require all', OK), ('vanilla', 'Vanilla', OK)), 'all',
+           (('door', 'Follow Door of Time requirements (legacy seed)', OK),
+            ('all', 'Require all', OK), ('vanilla', 'Vanilla', OK)), 'all',
            'Which stones Zelda\'s escape asks for to give the Ocarina of Time and the Song of Time. '
            'Require all: the Kokiri Emerald, the Goron Ruby and the Zora Sapphire. Vanilla: the Goron Ruby '
            'and the Zora Sapphire only, as in the original game. Door of Time requirements are separate.'),
@@ -137,11 +138,12 @@ OPTIONS = [
             ('open', 'Open', 'The Gerudo Membership Card is handed over by the rescue of the last '
              'carpenter: with every carpenter free from the start its check would be lost.')), 'normal',
            'One carpenter: the first carpenter freed, in any cell, ends the fortress and brings the '
-           'Gerudo Membership Card. To be confirmed in game.', experimental=('fast',)),
+           'rescue reward, then frees the remaining carpenters and opens every cell. '
+           'To be confirmed in game.', experimental=('fast',)),
     Option('open_gerudo_valley_bridge', 'World', 'Gerudo Valley bridge repaired',
            ((False, OK), (True, OK)), False,
-           'The adult crosses the Gerudo Valley bridge on foot from the start, as after meeting the head '
-           'carpenter on the fortress side. The carpenters stay in their cells and the last rescue still '
+           'The adult crosses the repaired Gerudo Valley bridge on foot from the start. '
+           'The carpenters stay in their cells and the last rescue still '
            'brings the Gerudo Membership Card. To be confirmed in game.', kind='bool', experimental=(True,)),
     Option('starting_age', 'World', 'Starting age',
            (('child', 'Child', OK), ('adult', 'Adult', NO_ADAPTER), ('random', 'Random', NO_ADAPTER)), 'child'),
@@ -159,6 +161,10 @@ OPTIONS = [
             ('dungeons', 'Dungeons', NO_ADAPTER), ('tokens', 'Skulltulas', NO_ADAPTER)), 'vanilla'),
     Option('triforce_hunt', 'Goal', 'Triforce hunt', ((False, OK), (True, NO_ADAPTER)), False, kind='bool'),
     # ------------------------------------------------------------------ Items
+    Option('blue_fire_arrows', 'Items', 'Ice arrows melt red ice',
+           ((False, OK), (True, OK)), False,
+           'Usable ice arrows melt red ice like bottled blue fire. Requires the bow and magic. '
+           'To be confirmed in game.', kind='bool', experimental=(True,)),
     Option('shuffle_chests', 'Items', 'Content of every chest (major items included)',
            ((False, OK), (True, OK)), True, 'Drop__DropActor mechanism already validated in game on four chests.',
            kind='bool', experimental=(True,)),
@@ -223,8 +229,8 @@ OPTIONS = [
            'at the pedestal. To be validated in game.', kind='bool', experimental=(True,)),
     Option('shuffle_gerudo_card', 'Items', 'Gerudo Membership Card', ((False, OK), (True, OK)), False,
            'Shuffle the Gerudo Membership Card and the reward for rescuing the carpenters. '
-           'Rescuing the carpenters still completes their quest. No game flow reads the card itself, so '
-           'the logic expects both the card and the carpenters freed for the gate, the training ground '
+           'Rescuing the carpenters still completes their quest. The card grants membership, '
+           'including before the rescues, for the gate, the training ground '
            'and horseback archery. To be validated in game.',
            kind='bool', experimental=(True,)),
     Option('shuffle_beans', 'Items', 'Magic beans', ((False, OK), (True, NO_EVENT)), False, kind='bool'),
@@ -247,7 +253,7 @@ OPTIONS = [
            kind='bool', experimental=(True,)),
     Option('shuffle_quest_rewards', 'Items', 'Quest rewards',
            ((False, OK), (True, OK)), False,
-           'Fairy Ocarina (Saria), Ocarina of Time, Zelda\'s Letter, Light Arrows, Biggoron Sword, Ruto\'s Letter. '
+           'Fairy Ocarina (Saria), Ocarina of Time, Zelda\'s Letter, Light Arrows, Fire Arrows (Lake Hylia sun), Biggoron Sword, Ruto\'s Letter. '
            'Zelda\'s Letter stays Zelda\'s gift while the child trade quest is vanilla: it takes the '
            'Weird Egg\'s slot, and Talon could no longer be woken. '
            'Vanilla cutscene kept, only the item given changes. To be validated in game. Out of scope: trade items, songs.', kind='bool', experimental=(True,)),
@@ -405,7 +411,7 @@ OUT_OF_SCOPE = ('Entrance shuffle, Master Quest, multiworld and gossip stone hin
 
 # Options added after a release, left out of the stored settings at this value: stored settings
 # without the option mean it, and seeds made before the option keep their identity.
-UNRECORDED = {'spiritual_stones': 'all', 'door_of_time_requirement': 'song',
+UNRECORDED = {'spiritual_stones': 'all', 'door_of_time_requirement': 'song', 'blue_fire_arrows': False,
               'skip_opening': False, 'skip_tutorials': False, 'skip_first_pickup_text': False,
               'skip_story_sequences': False, 'skip_dungeon_endings': False, 'skip_fairy_sequences': False}
 
@@ -418,6 +424,12 @@ def recorded(values):
 def stored_value(values, name):
     """Option ``name`` in stored settings (``recorded``, so it may be missing)."""
     return values.get(name, UNRECORDED.get(name, BY_NAME[name].default))
+
+
+def escape_requirement(values):
+    """Independent escape choice; linked older seeds retain their original rules."""
+    value = stored_value(values, 'spiritual_stones')
+    return stored_value(values, 'door_of_time_requirement') if value == 'door' else value
 
 
 def defaults():

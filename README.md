@@ -56,9 +56,10 @@ or to the Temple of Time as an adult. Cancel or B leaves the game where it was.
 The game file must hold the base game **and** update v131072 in one `.nup`; the
 order of the packages inside it does not matter.
 
-For a **PC port on Windows** (Hookshot, its successor Longshot, or any fork with the
-same layout), keep the NUP as the source and choose the `mods` folder next to the
-game exe, `image.bin` and `romfs` (create it if needed). The
+For a **PC port** (Hookshot, its successor Longshot — on Windows, or Longshot's native
+Linux build — or any fork with the same layout), keep the NUP as the source and choose
+the `mods` folder next to `image.bin` and `romfs` (create it if needed). Longshot's Linux
+build keeps its saves in `~/.local/share/longshot/save`; the tracker finds them. The
 seed is installed in its own sub-folder, without replacing the original resources.
 
 ## Tracking
@@ -81,17 +82,25 @@ persistent flag, then the source goes back to its native loot (a rock without
 vanilla loot gives nothing again). A guard forbids a second randomized reward
 coming from an old copy of the same drop.
 
+New full-mode seeds use the supplied gold textures for unchecked pots, rocks,
+crates, beehives, bushes, grass and reward trees. The existing collection flag
+switches their materials back to vanilla, including a tree that stays loaded
+after its reward is collected. Regenerate older seeds to include these assets.
+The texture adapter preserves native destruction and respawn settings; static
+checks do not establish when a particular PC port reloads a broken source.
+
 Live reading of the game memory finds Hookshot and the yuzu-family emulators
 Lichii, Ryuchii, Eden, yuzu, suyu, citron and sudachi on Windows, and the native
-Linux builds of these emulators (Ryuchii on a Steam Deck, for instance) on Linux.
+Linux builds of Longshot and of these emulators (Ryuchii on a Steam Deck, for instance)
+on Linux.
 On Linux, run the Linux application (`OoT-Randomizer`): the Windows `.exe` started
 through Proton or Wine cannot read a native Linux process. Another fork can be added
 by its executable name in **Setup → Other emulator executables** (on Linux, with or
 without `.exe`).
 
 On Linux, the yuzu-family emulators keep the game's memory in a file
-(`/memfd:HostMemory`). The application reads it through `/proc/<pid>/fd` at the
-offsets `/proc/<pid>/maps` gives. That only needs the same user as the emulator, so
+(`/memfd:HostMemory`, Longshot: `/memfd:longshot-guest`). The application reads it through `/proc/<pid>/fd` at the
+offsets `/proc/<pid>/maps` gives. That only needs the same user as the game, so
 it also works with `kernel.yama.ptrace_scope` at 1 (SteamOS, Ubuntu). For an
 emulator without that file it reads `/proc/<pid>/mem`, which `ptrace_scope` 1 allows
 only when the emulator allows it (`prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY)`) or the
@@ -116,7 +125,7 @@ Code: [qol_patches.py](src/oot_rando/patching/qol_patches.py).
 | **Ocarina found before the Deku Tree** (full randomizer) | `ActionGuide/ActionGuide` first runs `OpenActionGuideSceenForOcarina` when the Fairy Ocarina is in the pouch (guide shown once) | to test |
 | **Owl advice removed** (full randomizer) | tutorial flags are set at the opening; the first field conversation keeps its quest work; Death Mountain and Lake Hylia keep a single ride choice. The Dream World introduction unlocks the service silently | statically verified; to test in game |
 | **Skip child Hyrule Castle** (full randomizer, `skip_child_zelda`) | the opening replays the native quest requests the castle makes (`Goto_HyruleCastle` complete, `DoorOfTime` at Impa's send-off, `Get_StoneOfFire` at Kakariko) and sets Talon's wake-up flags; Zelda's Letter and Lullaby are shuffled elsewhere (the lullaby anywhere a song can be given); the castle's shuffled checks hold green rupees (Great Fairy apart); castle requests of earlier steps are skipped once the quest is complete ([child_castle_skip.py](src/oot_rando/patching/child_castle_skip.py)) | statically verified; to test in game |
-| **Turbo A** | holding X during a dialogue taps A (keyboard key bound to A in `hookshot_options.ini`) | always on |
+| **Turbo A** | holding A during a dialogue repeats A (keyboard key bound to A in `hookshot_options.ini`) | optional; remembered between app starts |
 
 Other NPC conversations are not skippable (an earlier attempt crashed the game); turbo
 A speeds up their text instead. The owl patch bypasses specific advice triggers and keeps
@@ -149,7 +158,7 @@ world, with the same locations, item pool and glitchless rules as the built-in f
 
 Items of other players show in game as an Archipelago medallion with the item and player
 name. Items of this game found in other worlds are handed over in game by the client
-while a save of the seed is loaded (Hookshot or a yuzu-family emulator on Windows, a native
+while a save of the seed is loaded (Hookshot, Longshot or a yuzu-family emulator on Windows, Longshot's Linux build or a native
 yuzu-family emulator on Linux), one at
 a time in server order: Link holds the item up (consumables arrive as a pickup). An item
 the game does not take after several tries is set aside and reported in the client log,
@@ -158,6 +167,26 @@ opening. Progressive items (hookshot, bow, bomb bag, wallet…) can be in any wo
 every copy, found in your world or received, gives the level above the one Link holds,
 in any order. Limits: chest checks reach the server once the game writes its save;
 dungeon-bound keys (other than key rings and dungeon boss keys) stay in your world.
+
+Generator 0.12.3 uses one shared Archipelago mailbox watcher, keeping the global
+sequence small even when hundreds of items come from other worlds (issue #86).
+Regenerate the mod from its `.aprmk` to apply this change and use the updated
+application/client for delivery. The updated client still supports older mods.
+
+Desktop seed generation runs in a separate process so the window can keep
+responding during CPU-heavy work. The log reports actor-building progress and
+event analysis/compression stages. See [performance measurements](docs/PERFORMANCE.md).
+
+External AP trackers use conservative area-wide requirements for filler-only
+checks without a reliable location match. These checks remain excluded from
+progression placement; they become reachable only when every supported check in
+their area is reachable, with source age and known chest guards preserved.
+The Dream World boss-rush interval chests use a deliberately late estimate:
+every supported world check must be reachable. AP does not track the museum's
+native enemy records or the boss-rush round, so this cannot show their exact
+unlock time. Other areas without a logic mapping stay unavailable. Rebuild the
+host's `.apworld` with the updated application to use these rules; existing
+generated multiworlds keep their original logic.
 
 ## Development
 

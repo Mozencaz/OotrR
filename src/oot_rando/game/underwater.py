@@ -55,8 +55,9 @@ def water_planes(root, boxes):
     return planes
 
 
-def covered(position, planes):
-    """Whether a water surface of ``planes`` lies above ``position``."""
+def water_depth(position, planes):
+    """Deepest water surface of ``planes`` above ``position`` (metres), or None."""
+    deepest = None
     for translate, rotation, scale, low, high in planes:
         delta = [position[i] - translate[i] for i in range(3)]
         # World → plane frame: transposed rotation, then the scale.
@@ -64,9 +65,14 @@ def covered(position, planes):
         if not (low[0] <= local[0] <= high[0] and low[2] <= local[2] <= high[2]):
             continue
         depth = (high[1] - local[1]) * abs(scale[1] or 1.0)
-        if MIN_DEPTH < depth <= MAX_DEPTH:
-            return True
-    return False
+        if MIN_DEPTH < depth <= MAX_DEPTH and (deepest is None or depth > deepest):
+            deepest = depth
+    return deepest
+
+
+def covered(position, planes):
+    """Whether a water surface of ``planes`` lies above ``position``."""
+    return water_depth(position, planes) is not None
 
 
 def mark_entries(maps, entries, boxes):
@@ -95,3 +101,63 @@ def mark_entries(maps, entries, boxes):
                 variant['underwater'] = True
                 marked += 1
     return marked
+
+
+# Breakable sources Link must reach on the bottom: only adult Link with the Iron
+# Boots stands there, and the Hookshot breaks them (AP: "LH GS Lab Crate"). Child
+# Link only swims. Crates only: the deep pots and rocks found by the scan are in
+# dungeons whose water level changes (Bottom of the Well, Water Temple, Jabu).
+DEEP_SOURCES = ('crates',)
+DEEP_DEPTH = 2.0
+
+
+def _layer(resource):
+    """(folder, age) of a map: its water surfaces are shared by its Static and Dynamic halves."""
+    from oot_rando.game.remake_world import map_age
+    parts = resource.split('/')
+    return (parts[1] if len(parts) > 1 else resource), map_age(resource)
+
+
+def mark_deep(maps, entries, boxes):
+    """Set ``deep`` on the variants of :data:`DEEP_SOURCES` lying at least
+    :data:`DEEP_DEPTH` under water.
+
+    Water surfaces sit in the ``*_Static`` maps and most crates in the ``*_Dynamic``
+    ones (Lake Hylia lab, Hyrule Field storms grotto): every map of the same folder
+    and age is searched, unlike ``mark_entries``. Returns the number of marked variants."""
+    layers, marked = {}, 0
+    for resource, data in maps.items():
+        root = (data or {}).get('root')
+        if root is not None:
+            layers.setdefault(_layer(resource), []).extend(water_planes(root, boxes))
+    for entry in entries.values():
+        if entry.get('source') not in DEEP_SOURCES:
+            continue
+        for variant in entry['variants']:
+            position, resource = variant.get('position'), variant.get('resource')
+            if not resource or not isinstance(position, (list, tuple)) or len(position) != 3:
+                continue
+            depth = water_depth(position, layers.get(_layer(resource), ()))
+            if depth is not None and depth >= DEEP_DEPTH:
+                variant['deep'] = True
+                marked += 1
+    return marked
+
+
+def drop_child_deep(entries):
+    """Remove the deep child copies (child Link cannot break them); a source left
+    without copies leaves the shuffle (it stays vanilla). Returns the removed ids."""
+    from oot_rando.game.remake_world import map_age
+    removed = []
+    for gid in list(entries):
+        entry = entries[gid]
+        kept = [v for v in entry['variants']
+                if not (v.get('deep') and map_age(v.get('resource', '')) == 'child')]
+        if len(kept) == len(entry['variants']):
+            continue
+        if kept:
+            entry['variants'] = kept
+        else:
+            del entries[gid]
+            removed.append(gid)
+    return removed

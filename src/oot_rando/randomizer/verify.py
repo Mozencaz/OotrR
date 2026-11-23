@@ -109,6 +109,17 @@ def verify(nup_path, seed_dir):
     members = effective_members(nup)
     out = lambda path: decompress((seed_dir / 'romfs' / path).read_bytes(), d)
     full = [p for p in spoiler['placements'] if str(p.get('category', '')).startswith('full_')]
+    # Reconstruct both alternate-talk rewards from the spoiler, rather than
+    # accepting the generator's fallback configuration as independent evidence.
+    npc_gifts = {}
+    for key, location in (('goron', 'GC Rolling Goron as Adult'), ('zora', 'ZD King Zora Thawed')):
+        gid = 'npc#' + location
+        placement = next((p for p in full if p['id'] == gid), None)
+        if placement:
+            npc_gifts[key] = {'actor': placement.get('reward_actor', placement['actor']),
+                              'flag': 'RandoCheck.' + manifest['seed_id'][:16] + '.' + gid}
+    if npc_gifts != (manifest.get('skips', {}).get('story_fixes') or {}).get('npc_gifts', {}):
+        raise ValueError('Alternate NPC gifts differ from their shuffled rewards.')
     _, groups, enemies, extra = scan_world(nup, d, members)
     # Fresh logic sweep from the spoiler; it also names the progressive tokens.
     from oot_rando.logic.world import World
@@ -164,8 +175,11 @@ def verify(nup_path, seed_dir):
                 map_edits[variant['resource']].setdefault(variant['index'], {})[variant['field']] = actor
     tracking = json.loads((seed_dir / 'tracking.json').read_text(encoding='utf-8')) if manifest.get('tracking') else {}
     repeat_first, repeat_fallback = defaultdict(dict), defaultdict(list)
+    textured_sources = defaultdict(dict)
     for record in tracking.get('repeatables', []):
         for variant in record['variants']:
+            if variant.get('textured_actor'):
+                textured_sources[variant['resource']][variant['index']] = variant
             # Seeds made before sources were left as they are: Presence and a vanilla copy.
             if not variant['native_once'] and 'fallback_hash' in variant:
                 repeat_first[variant['resource']][variant['index']] = record
@@ -205,20 +219,114 @@ def verify(nup_path, seed_dir):
         expected = ap_mailbox.records((manifest.get('archipelago') or {}).get('remote', []))
         if expected != mailbox['items']:
             raise ValueError('Archipelago reception differs from the patch.')
+        dispatch = 'signal' in mailbox
+        if dispatch and mailbox['signal'] != ap_mailbox.SIGNAL:
+            raise ValueError('Unexpected Archipelago mailbox signal.')
         if (seed_dir / 'romfs' / ap_mailbox.MAIN_UPDATE).read_bytes() != ap_mailbox.patch_main_update(
-                nup.read(members[ap_mailbox.MAIN_UPDATE]), expected):
+                nup.read(members[ap_mailbox.MAIN_UPDATE]), expected, dispatch=dispatch):
             raise ValueError('Unexpected global sequence (Archipelago reception).')
         rows = {r['__RowId']: r for r in Byml(out(ap_mailbox.EVENT_SETTINGS)).root}
         flags = {entry['Hash'] for entry in byml_codec.load(out(GAMEDATA))['root']['Data']['Bool']}
+        if dispatch and murmur3(ap_mailbox.SIGNAL) not in flags:
+            raise ValueError('Missing Archipelago mailbox signal.')
         for record in expected:
-            row = rows.get(record['event'])
-            if not row or row.get('EntryPointName') != record['event'] or not row.get(
+            event = ap_mailbox.DISPATCH if dispatch else record['event']
+            row = rows.get(event)
+            if not row or row.get('EntryPointName') != event or not row.get(
                     'FlowchartFileName', '').endswith('/' + ap_mailbox.FLOW + '.evfc'):
                 raise ValueError('Missing Archipelago reception event row: ' + record['event'])
             if murmur3(record['recv']) not in flags or murmur3(record['got']) not in flags:
                 raise ValueError('Missing Archipelago reception flag: ' + record['key'])
         report['ap_reception'] = len(expected)
+    from oot_rando.patching import blue_fire_arrows
+    blue_arrows = bool((manifest['settings'].get('full') or {}).get('blue_fire_arrows', False))
+    if bool(manifest.get('skips', {}).get('blue_fire_arrows')) != blue_arrows:
+        raise ValueError('Blue-fire arrow patch differs from the settings.')
+    for path, fix in blue_fire_arrows.resource_fixes():
+        source = decompress(nup.read(nup.latest('romfs/' + path)), d)
+        destination = seed_dir / 'romfs' / path
+        actual = decompress(destination.read_bytes(), d) if destination.exists() else source
+        expected = fix(source) if blue_arrows else source
+        if actual != expected:
+            raise ValueError('Blue-fire arrow resource differs from the settings: ' + path)
+    if blue_arrows:
+        report['blue_fire_arrows'] = True
+    from oot_rando.patching import elemental_arrows
+    if manifest.get('skips', {}).get('elemental_arrows'):
+        for path, fix in elemental_arrows.resource_fixes():
+            raw = (seed_dir / 'romfs' / path).read_bytes()
+            raw = decompress(raw, d) if path.endswith('.zs') else raw
+            if fix(raw) != raw:
+                raise ValueError('Elemental arrow protection missing: ' + path)
+        report['elemental_arrows'] = True
+    from oot_rando.patching import bomb_refills
+    if 'bomb_refills' in manifest.get('skips', {}):
+        recorded = manifest['skips']['bomb_refills']
+        if not set(bomb_refills.NATIVE_PACKS) <= set(recorded):
+            raise ValueError('Missing native bomb refill protection.')
+        for path in sorted(set(bomb_refills.NATIVE_PACKS) | {
+                p for p in manifest['files'] if p.startswith('Pack/Actor/')}):
+            pack = sarc(out(path))
+            for pouch in bomb_refills.POUCH_PATHS:
+                if pouch in pack and byml_codec.load(pack[pouch])['root'].get('SmallBagActor'):
+                    raise ValueError('Bomb refill still awards a bag: ' + path)
+        report['bomb_refill_packs'] = len(recorded)
+    from oot_rando.patching import magic_capacity
+    if 'magic_capacity' in manifest.get('skips', {}):
+        recorded = manifest['skips']['magic_capacity']
+        if not set(magic_capacity.NATIVE_PACKS) <= set(recorded):
+            raise ValueError('Missing native magic capacity protection.')
+        for path in sorted(set(magic_capacity.NATIVE_PACKS) | {
+                p for p in manifest['files'] if p.startswith('Pack/Actor/')}):
+            raw = out(path)
+            if magic_capacity.patch_pack(raw)[1]:
+                raise ValueError('Item still awards magic capacity: ' + path)
+        raw = out(magic_capacity.TABLE)
+        if magic_capacity.patch_table(raw) != raw:
+            raise ValueError('Pouch database still awards implicit magic capacity.')
+        report['magic_capacity_packs'] = len(recorded)
     from oot_rando.patching import story_fixes
+    openings = (manifest.get('skips', {}).get('story_fixes') or {}).get('openings') or {}
+    from oot_rando.patching import gerudo_fortress
+    from oot_rando.patching import link_goron
+    gerudo_story = manifest.get('skips', {}).get('story_fixes') or {}
+    if 'gerudo_membership' in gerudo_story:
+        for path, fix in gerudo_fortress.resource_fixes():
+            original = nup.read(members[path])
+            expected, details = fix(decompress(original, d) if path.endswith('.zs') else original)
+            if path == link_goron.SCHEDULES and 'link_goron_rolling' in gerudo_story:
+                expected, _ = link_goron.stunnable_before_intro(expected)
+            actual = (seed_dir / 'romfs' / path).read_bytes()
+            actual = decompress(actual, d) if path.endswith('.zs') else actual
+            if details != gerudo_story['gerudo_membership'].get(path) or actual != expected:
+                raise ValueError('Unexpected Gerudo membership resource: ' + path)
+        if not gerudo_fortress.expressions_applied(out(GAMEDATA)):
+            raise ValueError('Unexpected Gerudo membership expressions.')
+        report['story_fixes'] = report.get('story_fixes', 0) + 1
+    if 'link_goron_rolling' in gerudo_story:
+        original = decompress(nup.read(members[link_goron.SCHEDULES]), d)
+        if 'gerudo_membership' in gerudo_story:
+            original, _ = gerudo_fortress.archery_schedule_pack(original)
+        expected, details = link_goron.stunnable_before_intro(original)
+        if (out(link_goron.SCHEDULES) != expected
+                or details != gerudo_story['link_goron_rolling']):
+            raise ValueError('Unexpected Darunia Jr. rolling schedule.')
+        report['story_fixes'] = report.get('story_fixes', 0) + 1
+    if 'lost_dog_quest' in gerudo_story:
+        from oot_rando.patching import lost_dog
+        expected, details = lost_dog.quest_from_start(decompress(nup.read(members[lost_dog.CHALLENGES]), d))
+        if out(lost_dog.CHALLENGES) != expected or gerudo_story['lost_dog_quest'] != details:
+            raise ValueError('Unexpected lost dog quest dependency.')
+        report['story_fixes'] = report.get('story_fixes', 0) + 1
+    if 'freed' in openings.get('gerudo_fortress', {}):
+        path = gerudo_fortress.CELL_MODULE
+        if (seed_dir / 'romfs' / path).read_bytes() != gerudo_fortress.open_completed_cells(nup.read(members[path])):
+            raise ValueError('Unexpected completed fortress cell locks.')
+    from oot_rando.patching import game_defaults
+    for option, details in openings.items():
+        defaults = details.get('defaults') or {}
+        if game_defaults.read_defaults(out(GAMEDATA), defaults) != defaults:
+            raise ValueError('World opening defaults differ from the spoiler: ' + option)
     for key, module, fix in (
             ('light_arrows_medallions', story_fixes.LIGHT_ARROWS_MODULE, story_fixes.light_arrows_on_medallions),
             ('prelude_medallion', story_fixes.PRELUDE_MODULE, story_fixes.prelude_on_forest_medallion)):
@@ -249,6 +357,9 @@ def verify(nup_path, seed_dir):
             raise ValueError('Unexpected scene conditions in the game data.')
         opened = bool(((manifest.get('settings') or {}).get('full') or {}).get('open_door_of_time'))
         for module, key, fix in story_fixes.scene_module_fixes():
+            # Earlier seeds did not patch these shop and child gate modules.
+            if key in ('kakariko_gate_closed', 'kakariko_gate_open', 'bombchu_shop_open', 'link_goron_spawn') and key not in manifest['skips']['story_fixes']:
+                continue
             expected, _ = fix(nup.read(members[module]))
             if module == story_fixes.DOOR_MODULE and opened:
                 from oot_rando.patching.world_openings import door_always_open
@@ -413,7 +524,7 @@ def verify(nup_path, seed_dir):
                 original = skip_kokiri_sword_cutscene(original)[0]
                 report['comfort_flows'] = report.get('comfort_flows', 0) + 1
             from oot_rando.patching import story_fixes
-            for fixed_path, key, fix in story_fixes.flow_fixes(stones):
+            for fixed_path, key, fix in story_fixes.flow_fixes(stones, npc_gifts):
                 if path == fixed_path and key in (skips.get('story_fixes') or {}):
                     original = fix(original)[0]
                     report['story_fixes'] = report.get('story_fixes', 0) + 1
@@ -460,6 +571,27 @@ def verify(nup_path, seed_dir):
                 original = story_fixes.first_arrival_forward(
                     path, original, challenge_steps(decompress(nup.read(members[CHALLENGES]), d)))[0]
                 report['story_fixes'] = report.get('story_fixes', 0) + 1
+            # Opening floors are applied after the general story repairs by the
+            # generator. Rebuild them too before comparing the event snapshot.
+            from oot_rando.patching import quest_guard, world_openings
+            if path == gerudo_fortress.SPIRIT_FLOW and 'freed' in openings.get('gerudo_fortress', {}):
+                original = gerudo_fortress.free_remaining_carpenters(original)[0]
+            for option, quest, floor, flows in (
+                    ('zora_fountain', world_openings.ZORA_QUEST, world_openings.ZORA_FLOOR,
+                     world_openings.ZORA_FLOWS),
+                    ('open_kakariko', world_openings.KAKARIKO_QUEST, world_openings.KAKARIKO_FLOOR,
+                     world_openings.KAKARIKO_FLOWS),
+                    ('zelda_escape', world_openings.ESCAPE_QUEST, world_openings.ESCAPE_FLOOR,
+                     world_openings.ESCAPE_FLOWS)):
+                if option in openings and path in flows:
+                    steps = quest_guard.challenge_steps(decompress(nup.read(members[quest_guard.CHALLENGES]), d))
+                    original, guarded = quest_guard.guard_regressions(original, quest, steps, floor,
+                        gamedata_raw=out(GAMEDATA),
+                        prefix=openings[option].get('prefix', quest_guard.PREFIX))
+                    expected = openings[option]['guarded'].get(path)
+                    if json.loads(json.dumps(guarded['guarded'])) != expected:
+                        raise ValueError('World opening guards differ from the spoiler: ' + path)
+                    report['story_fixes'] = report.get('story_fixes', 0) + 1
             gifts = skips.get('gift_get', {})
             if path in gifts:
                 # Cutscene whose own add is bypassed: never reached any more.
@@ -491,7 +623,8 @@ def verify(nup_path, seed_dir):
             from oot_rando.patching import ap_mailbox
             if path == ap_mailbox.FLOW_PATH and skips.get('ap_mailbox'):
                 # Archipelago reception: the item-get entry the global sequence starts.
-                original = ap_mailbox.add_entries(original, skips['ap_mailbox']['items'])
+                original = ap_mailbox.add_entries(original, skips['ap_mailbox']['items'],
+                                                 dispatch='signal' in skips['ap_mailbox'])
             if skips.get('big_poes'):
                 from oot_rando.patching import big_poes
                 if path in {f'Event/EventFlow/{big_poes.FLOW}.bfevfl.zs', f'Event/EventFlow/{big_poes.FLOW}.110.bfevfl.zs'}:
@@ -583,7 +716,8 @@ def verify(nup_path, seed_dir):
                 if child_castle_skip.enabled((manifest.get('settings') or {}).get('full')):
                     values = dict(values, **child_castle_skip.START_VALUES)
                     # The castle quests replayed at the start (native requests, copied).
-                    steps = child_castle_skip.start_step_params(lambda p: decompress(nup.read(members[p]), d))
+                    steps = child_castle_skip.start_step_params(
+                        lambda p: decompress(nup.read(members[p]), d), door_ready=not stones)
                     if [name for name, _ in steps] != (skips.get('story_fixes') or {}).get('child_castle_start'):
                         raise ValueError('Child castle start requests differ from the settings.')
                     for name, params in steps:
@@ -599,6 +733,14 @@ def verify(nup_path, seed_dir):
             continue
         before = Byml(decompress(nup.read(members[path]), d)).root
         after = Byml(out(path)).root
+        shop_actors = (manifest.get('skips', {}).get('story_fixes') or {}).get('bombchu_shop_actors') or {}
+        if path in shop_actors:
+            from oot_rando.formats.byml_writer import patch_strings
+            edits, details = story_fixes.bombchu_shop_actor_edits(before, path)
+            if shop_actors[path] != details:
+                raise ValueError('Unexpected Bombchu Shop actor report: ' + path)
+            before = Byml(patch_strings(decompress(nup.read(members[path]), d), edits)).root
+            report['story_fixes'] = report.get('story_fixes', 0) + len(details['actors'])
         if path in repeat_fallback:
             expected_fallbacks = {}
             for record, variant in repeat_fallback[path]:
@@ -656,6 +798,11 @@ def verify(nup_path, seed_dir):
             if index in repeat_first.get(path, {}):
                 record = repeat_first[path][index]
                 a2['Presence'] = {'FlagName': record['flag'], 'IsNegation': True, 'IsCheckLazy': _seed_lazy(b2)}
+            if index in textured_sources.get(path, {}):
+                variant = textured_sources[path][index]
+                if a2['Gyaml'] != variant['source']:
+                    raise ValueError('Unexpected original textured source: ' + path)
+                a2['Gyaml'] = variant['textured_actor']
             for field, actor in edits.get(index, {}).items():
                 if field == 'Gyaml':
                     from oot_rando.game.item_forms import ground_lift, lifted, world_scale
@@ -761,7 +908,9 @@ def verify(nup_path, seed_dir):
         soul_actors.add(native['token'])
         if is_derived(native['after']):
             derived.add(native['after'])
-    generated = soul_actors | derived | master_actors
+    source_actors = {variant['textured_actor'] for variants in textured_sources.values()
+                     for variant in variants.values()}
+    generated = soul_actors | derived | master_actors | source_actors
     if generated:
         rest = decompress((seed_dir / 'romfs' / RESTBL).read_bytes(), d)
         count = struct.unpack_from('<I', rest, 14)[0]
@@ -788,10 +937,12 @@ def verify(nup_path, seed_dir):
             Byml(pack[f'Actor/{actor}.engine__actor__ActorParam.bgyml'])
             if zlib.crc32(pack_path[:-3].encode()) not in crcs:
                 raise ValueError('Missing RESTBL entry: ' + actor)
-            if any(actor not in rows for rows in tables.values()):
+            required = (tables['ActorInfo'], tables['GameActorInfo']) if actor in source_actors else tables.values()
+            if any(actor not in rows for rows in required):
                 raise ValueError('Missing RSDB row: ' + actor)
             if actor in soul_actors and murmur3(FLAG_PREFIX + actor) not in flags:
                 raise ValueError('Missing save flag: ' + actor)
+        report['textured_sources'] = len(source_actors)
     multiworld = manifest.get('archipelago')
     if multiworld is not None:
         # Placed by Archipelago: victory may need items of other worlds (checked by
@@ -812,6 +963,9 @@ def verify(nup_path, seed_dir):
                                    'items_in_other_worlds': len(multiworld.get('remote', []))})
         nup.stream.close()
         return report
+    if plan.get('before_adult_missing'):
+        raise ValueError('Logic replay: Door of Time items unavailable before adulthood: '
+                         + ', '.join(plan['before_adult_missing']))
     if not plan['beatable']:
         raise ValueError('Logic replay: victory not reached.')
     report.update(souls=len(soul_actors), derived=len(derived), beatable=True, spheres=plan['sphere_count'],

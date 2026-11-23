@@ -221,21 +221,25 @@ class GameTests(unittest.TestCase):
         start = choose(nodes, selector, True)
         save = nodes[start]['Plugs']['Transition'][0]['Node Index']
         steps = [p['Node Index'] for p in nodes[save]['Plugs']['Child']]
-        self.assertEqual(steps[1:], [54, 25, 27])                        # as Save, after clearing the flag
+        self.assertEqual(steps[1:3] + steps[4:], [54, 25, 27])  # native save, plus slot capture
         self.assertEqual((strings(nodes[steps[0]])['GameDataFullName'], bools(nodes[steps[0]])['Value']),
                          (sw.SAVE_WARP_FLAG, False))
-        after = nodes[save]['Plugs']['Transition'][0]['Node Index']
-        steps = [p['Node Index'] for p in nodes[after]['Plugs']['Child']]
-        self.assertEqual(steps[:3], [35, 23, 56])
-        # The save just written is the one loaded.
+        # Capture the written slot before the save can advance its manual index.
         select = nodes[steps[3]]
         self.assertEqual(strings(select)['GameDataName'], 'SelectedSavePathIndex')
         self.assertEqual(nodes[select['Parameters']['Inputs']['Int'][1]['Node Index']]['Name'],
-                         'SeqQueryGetLatestSaveIndex')
+                         'SeqQueryGameDataGetManualSaveIndex')
+        written_slot = next(p['Node Index'] for p in nodes[5]['Parameters']['Inputs']['Int']
+                            if p['Name'] == 'SlotIndex')
+        self.assertEqual(select['Parameters']['Inputs']['Int'][1]['Node Index'], written_slot)
+        self.assertFalse(any(n['Name'] == 'SeqQueryGetLatestSaveIndex' for n in nodes))
         caption = nodes[select['Parameters']['Inputs']['Pointer'][0]['Node Index']]
         self.assertEqual(strings(caption)['GameDataFullName'], 'CaptionData')
+        after = nodes[save]['Plugs']['Transition'][0]['Node Index']
+        steps = [p['Node Index'] for p in nodes[after]['Plugs']['Child']]
+        self.assertEqual(steps[:3], [35, 23, 56])
         # Leaving the menu, as LoadCheck.module before the menu's load.
-        overlay, paused = [p['Node Index'] for p in nodes[steps[4]]['Plugs']['Child']]
+        overlay, paused = [p['Node Index'] for p in nodes[steps[3]]['Plugs']['Child']]
         self.assertEqual(strings(nodes[overlay])['ScreenName'], 'SystemOverlay_00')
         query = nodes[nodes[paused]['Parameters']['Inputs']['Bool'][0]['Node Index']]
         self.assertEqual(strings(query)['GameDataFullName'], 'Sequence_IsPreGamePause')
@@ -245,7 +249,7 @@ class GameTests(unittest.TestCase):
                                                       'SeqOneShotRequestCancelGameScreenCapture', 'GamePauseOn.module'])
         self.assertIs(bools(pause[0])['IsPause'], False)
         self.assertIs(bools(pause[1])['IsForce'], True)
-        self.assertEqual((strings(nodes[steps[5]])['GameDataFullName'], bools(nodes[steps[5]])['Value']),
+        self.assertEqual((strings(nodes[steps[4]])['GameDataFullName'], bools(nodes[steps[4]])['Value']),
                          (sw.SAVE_WARP_FLAG, True))
         end = nodes[nodes[after]['Plugs']['Transition'][0]['Node Index']]
         self.assertEqual(end['Properties']['String'][0]['Default Value'], 'Warp')
@@ -259,6 +263,53 @@ class GameTests(unittest.TestCase):
         import ainb
         modules = {m['Path'] for m in ainb.AINB.from_binary(self.files[sw.SAVE_MODULE]).as_dict()['Modules']}
         self.assertLessEqual({'ChangePreGamePause.module.ainb', 'GamePauseOn.module.ainb'}, modules)
+
+    def test_repeated_warps_load_the_slot_just_written(self):
+        """A stale latest/loaded index must never replace the new manual save."""
+        sw = self.sw
+        nodes = self.nodes(self.files[sw.SAVE_MODULE])
+        selector = choose(nodes, 0, 'Pa_CheckButton_00')
+        start = choose(nodes, selector, True)
+        save = nodes[start]['Plugs']['Transition'][0]['Node Index']
+        after = nodes[save]['Plugs']['Transition'][0]['Node Index']
+        selected = None
+        disk = {i: ('old', i) for i in range(6)}
+        latest = 3
+
+        def run(index, state, progress):
+            nonlocal selected
+            node = nodes[index]
+            if node['Name'] == 'SeqOneShotSetGameDataInt' and strings(node).get('GameDataName') == 'SelectedSavePathIndex':
+                source = nodes[node['Parameters']['Inputs']['Int'][1]['Node Index']]
+                if source['Name'] == 'SeqQueryGameDataGetManualSaveIndex':
+                    selected = state['manual']
+                else:
+                    self.assertEqual(source['Name'], 'SeqQueryGetLatestSaveIndex')
+                    selected = latest
+            elif node['Name'] == 'SeqExecuteSaveGameData':
+                slot_source = next(p['Node Index'] for p in node['Parameters']['Inputs']['Int']
+                                   if p['Name'] == 'SlotIndex')
+                self.assertEqual(nodes[slot_source]['Name'], 'SeqQueryGameDataGetManualSaveIndex')
+                disk[state['manual']] = progress
+            elif node['Name'] == 'SeqOneShotManualSsetCaptionData':
+                # Also cover engines that advance the writable slot after saving.
+                state['manual'] = (state['manual'] + 1) % 3
+            else:
+                for child in node['Plugs'].get('Child', []):
+                    # Story/UI selectors have no bearing on the saved slot.
+                    if node['Node Type'] not in ('Element_BoolSelector', 'Element_StringSelector'):
+                        run(child['Node Index'], state, progress)
+
+        for slot, progress in [(0, ('warp', 1)), (1, ('warp', 2)), (2, ('warp', 3)), (0, ('warp', 4))]:
+            with self.subTest(slot=slot, progress=progress):
+                state = {'manual': slot}
+                run(save, state, progress)
+                run(after, state, progress)
+                self.assertEqual(disk[selected], progress)
+                latest = selected
+                # Another manual/auto save may become latest between warps.
+                disk[3] = ('unrelated save', progress)
+                latest = 3
 
     def test_plus_menu_button(self):
         sw = self.sw

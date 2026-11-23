@@ -21,6 +21,9 @@ FILLER_PRIORITY = ('Rupee (1)', 'Rupees (5)', 'Deku Nuts (5)', 'Deku Stick (1)',
                    'Rupees (20)', 'Arrows (10)', 'Deku Seeds (30)', 'Bombchus (5)', 'Arrows (30)',
                    'Remake: Scrub Seed', 'Rupees (50)', 'Remake: Magic Jar', 'Rupees (200)')
 MAX_ATTEMPTS = int(__import__("os").environ.get("OOT_MAX_ATTEMPTS", "300"))
+# A crate deep under water (``underwater.mark_deep``): adult Link walks to it with
+# the Iron Boots and breaks it with the Hookshot (AP's "LH GS Lab Crate" rule).
+DEEP_GUARD = 'Souls|Iron Boots|Progressive Hookshot'
 SHOP_FILLER = 'Rupees (5)'
 POOL_FILLER = 'Rupees (5)'
 EMPTY_BOTTLES = ('Bottle', 'Bottle with Milk')
@@ -266,6 +269,8 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
                 entry['ap'] = area_locations(data, probe, entry['folder'])
                 if not entry['ap']:
                     entry.update(kind='junk', reason='no_reliable_ap_match')
+            if any(v.get('deep') for v in entry['variants']) and DEEP_GUARD not in entry['guards']:
+                entry['guards'] = list(entry['guards']) + [DEEP_GUARD]
         matches.update(chosen)
     souls = plan_souls(options['shuffle_enemy_spawns'], enemies, data.regions)
     location_requirements = {k: set(v) for k, v in souls['location_requirements'].items()}
@@ -480,6 +485,11 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             item = 'Rupees (5)'
         if entry['source'] == 'shop':
             item = SHOP_FILLER  # the displaced purchase stays sold in other slots
+            # Full shopsanity removes even the last tunic shelf. Move those
+            # equipment items into the pool instead of deleting their copies.
+            if options['shopsanity'] == 'all':
+                item = {'Buy Goron Tunic': 'Goron Tunic',
+                        'Buy Zora Tunic': 'Zora Tunic'}.get(entry['vanilla'], SHOP_FILLER)
         if item in ring_keys:
             item = 'Rupees (5)'
         if item == 'Zeldas Letter' and letter_removed(options):
@@ -593,14 +603,21 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             and 'Small Key (Fire Temple)' not in removed_keys):
         starting['Small Key (Fire Temple)'] += 1
 
-    def sweep(placed, counts=None):
+    def sweep(placed, counts=None, before_adult=False):
         placements = dict(base)
         for gid in logic_locations:
             placements.setdefault(vname(gid), None)
         for gid, item in placed.items():
             if vname(gid) in logic.virtual:
                 placements[vname(gid)] = item
-        state = logic.new_state(Counter(counts or {}) + starting)
+        inventory = Counter(counts or {}) + starting
+        if before_adult:
+            # Prove a child route from actual pickups, never from a first trip
+            # through the pedestal (or an assumed Time Travel item).
+            placements = {loc: None if item == 'Time Travel' else item
+                          for loc, item in placements.items()}
+            inventory.pop('Time Travel', None)
+        state = logic.new_state(inventory)
         return _sweep_with_requirements(logic, placements, state)
 
     return SimpleNamespace(
@@ -626,9 +643,11 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
     rng = DetRandom(hashlib.sha256((seed_key + '\0full-fill-v1').encode()).digest())
     if forced is not None:
         state, collected, spheres = sweep(forced)
+        child_missing = child_door_missing(c, forced)
         sphere_of = {loc[len('Remake|'):]: index for index, sphere in enumerate(spheres)
                      for loc in sphere if loc.startswith('Remake|')}
-        return {'beatable': state.has('Triforce'), 'spheres': sphere_of, 'sphere_count': len(spheres),
+        return {'beatable': state.has('Triforce') and not child_missing,
+                'before_adult_missing': child_missing, 'spheres': sphere_of, 'sphere_count': len(spheres),
                 'unreachable': sorted(g for g in logic_locations if vname(g) not in collected),
                 'progressive': progressive_plan(forced, c.natives),
                 # Read by verify: the chests left in place get their opening flag too.
@@ -681,6 +700,10 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
             raise FillError('Item and chest counts do not match.')
         placed.update(zip(free, filler))
         # --- independent verification -----------------------------------------
+        child_missing = child_door_missing(c, placed)
+        if child_missing:
+            last_error = 'Door of Time items unavailable before adulthood: ' + ', '.join(child_missing)
+            continue
         state, collected, spheres = sweep(placed)
         if not state.has('Triforce'):
             last_error = 'victory not guaranteed'
@@ -699,6 +722,21 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
         return result
     raise FillError('No beatable seed in ' + str(MAX_ATTEMPTS) + ' attempts (' + last_error
                     + '). Change the seed or the options.')
+
+
+def child_door_missing(c, placed):
+    """Required door items the child cannot collect without ever becoming adult.
+
+    One ocarina suffices; spare copies may remain on adult maps. A real sweep
+    also rules out child pickups whose dependencies require an adult visit.
+    """
+    if c.settings['open_door_of_time'] or c.settings['starting_age'] != 'child':
+        return []
+    stones = {'song': (), 'vanilla': ('Goron Ruby', 'Zora Sapphire'),
+              'all': ('Kokiri Emerald', 'Goron Ruby', 'Zora Sapphire')}
+    required = ('Ocarina', 'Song of Time') + stones[c.settings['door_of_time_requirement']]
+    state, _, _ = c.sweep(placed, before_adult=True)
+    return [item for item in required if not state.has(item)]
 
 
 # Starting items that cannot be handed over silently at the end of the opening:
