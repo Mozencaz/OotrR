@@ -13,6 +13,7 @@ from oot_rando.formats.inspect_resources import Byml, decompress, dictionaries
 from oot_rando.randomizer.randomizer_core import Settings, generate, placements_for, ADULT_MAP
 from oot_rando.randomizer.randomizer_services import read_artifact, ManualTracker
 from oot_rando.patching.randomize_kokiri import MAP, RESTBL, CHESTS
+from oot_rando.tracker.ingame_bundle import SEED_FILE
 from oot_rando.patching.qol_patches import (STATIC, INTRO, PHYSICS, EVENT_SETTINGS, LOCKED_CUTSCENES, list_path,
                          AREA_PRESENTATIONS, flow_path)
 
@@ -35,7 +36,7 @@ def verify(nup_path):
             read_artifact(output)
             # Area presentations never play and their rows pause: always written.
             expected_files = {MAP, ADULT_MAP, RESTBL, 'GameData/GameDataList.Product.110.byml.zs',
-                              'Event/EventFlow/OpeningEvent.bfevfl.zs', EVENT_SETTINGS} | {
+                              'Event/EventFlow/OpeningEvent.bfevfl.zs', EVENT_SETTINGS, SEED_FILE} | {
                 flow_path(name) for name in AREA_PRESENTATIONS}
             # Always on: the Save Warp button (pause menu, its text in every language, the
             # bancs it starts from) and the title badge.

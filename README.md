@@ -110,6 +110,49 @@ never changes it.
 The **in-game overlay** (Windows, Hookshot) shows the item grid plus the soul and
 check counts over the game window; toggle it with **Ctrl + Shift + O**.
 
+## In-game tracker
+
+On an emulator or a Switch, every seed carries a small module that draws a tracker inside the game, in
+the game's own style: press **R + right stick up** to open it and again (or **B**) to close it; it opens again where it was. It shows the
+items (with the game's own icons and their levels), the twelve ocarina songs, the dungeons' small keys and boss keys, the checks found per region and in total,
+the enemy souls, and a warning when the loaded save is not from this seed. The D-pad or the left stick moves
+over the regions, **A** opens a region's checks by name (ticked when collected), **B** goes back. In a region's
+list, the highlighted check's internal key (its id) shows under the list, **A** ticks the check by hand (it counts as found,
+as the desktop tracker's manual ticks do, and is kept for each seed on the SD card) and **Y** shows where the check is in the
+world: a box and a beam over the picture with how far it is, or the name of the map it's in (only the place, never
+what it holds). While it is open the game does not see R, the right stick, A, B, Y, the D-pad or the left stick. The last entry of the
+regions, **Settings**, has two pages. **Postcard** turns on a small card with only the icons (items, songs, temples, dungeon keys) in a
+corner of the screen; its position, size and opacity are set there. **Console** shows Archipelago messages over the game (on by
+default for an Archipelago seed, see [below](#archipelago-multiworld)); its position, opacity, lines, fade and the kinds of message
+shown are set there. Both are kept in small files on the SD card; the card and the console hide while the game is paused (0.6.2). It only
+reads the game's save data; it never changes the game or the save.
+
+The seed folder gets `romfs/RandoTracker/seed.trk` (the flags to watch, the checks' ids and places in the game's maps, no
+item placements; the format is in
+[docs/ingame-tracker-format.md](docs/ingame-tracker-format.md)), `exefs/subsdk7`, the module, and
+`romfs/RandoTracker/icons.bin`, the items' and songs' icons, copied from your game file as the game stores them (nothing of the
+game ships with the application; without that file the items show as letters). They are listed in the seed's
+`manifest.json` and verified with the rest, and the module is only active while the seed
+is enabled in the game's add-ons. It is a **GPL-3** program, not covered by this project's MIT licence: its
+licence and source note are in `src/oot_rando/resources/ingame_tracker/` (`LICENSE`, `SOURCE.md`), and its
+source is in this repository, in [`ingame_tracker/`](ingame_tracker/) (a GPL-3 folder with its own `LICENSE`; see its README for how to
+build it). It does not apply to a PC port (Hookshot,
+Longshot), which keeps its own overlay.
+
+To leave it out, untick **In-game tracker** in Settings > Customize settings > Quality of life, or add
+`--no-ingame-tracker` to `ap-install`. A seed generated before this feature, or without the tracker, can get
+it with `update-tracker --add` (below); if its data is too old for it, generate it again.
+
+A newer version of the application brings a newer tracker. **Update the in-game tracker** (Setup > Save,
+next to **Reload the tracker**), or `python -m oot_rando update-tracker SEED_OR_MODS_FOLDER [--nup GAME.nup]`,
+gives the installed seed this version's `seed.trk` and module without generating it again, and the icons and the
+checks' places from the game file (the window uses the one set in Setup; without it, the seed keeps the icons and places it
+has): those files and
+their entries in `manifest.json` are rewritten (staged, then moved into place), nothing else in the folder changes,
+so saves of the seed carry on. It refuses a folder that isn't a seed or whose data doesn't match its manifest.
+A seed made without the tracker gets it only when asked (`--add`). Close the game first: the new module loads
+the next time the game starts.
+
 ## Skippable cutscenes and quality of life
 
 Code: [qol_patches.py](src/oot_rando/patching/qol_patches.py).
@@ -155,6 +198,20 @@ world, with the same locations, item pool and glitchless rules as the built-in f
    Windows and Linux) and the goal (Ganon defeated, read live: set just before the ending). The row
    also shows the server messages and takes chat or server commands (`!hint`…).
    Checks ticked by hand in the tracker are sent too.
+6. **Connect automatically when the game runs this seed** (under Connect) writes the server, slot and
+   password to `archipelago.json` in the seed folder, fills the row from it whenever the seed is opened,
+   and connects by itself once the emulator runs the seed. **The password is kept there as plain text**:
+   leave the box unticked on a shared PC, or remove the password from the file. A disconnect by hand
+   pauses it until the seed is opened again. The file can be edited by hand and is kept when the seed
+   is generated again from the same patch (format in [docs/ingame-tracker-format.md](docs/ingame-tracker-format.md#archipelagojson)).
+
+**In-game console.** While the client is connected and the emulator runs the seed (in-game tracker
+0.5.0 or later; Windows), the room's messages show over the game: items you
+receive (gold) and send (green), other players' items (lavender, 0.6.0 and later), hints (blue), chat
+(white) and the server's notices (grey), each fading after 10 s. A line at the bottom says when the
+client is connecting, not connected, or not running.
+The client writes them into the in-game tracker's memory; Settings > Console in the game's tracker
+turns it off or changes its place, size and fading. Characters the game's font lacks show as `?`.
 
 Items of other players show in game as an Archipelago medallion with the item and player
 name. Items of this game found in other worlds are handed over in game by the client
@@ -238,7 +295,7 @@ it. A randomizer seed already contains these patches: while a seed is enabled, t
 
 ```
 src/oot_rando/
-  __main__.py      entry point (GUI; audit, verify, memory, selftest, apworld, ap-install, qol-install, ap-client)
+  __main__.py      entry point (GUI; audit, verify, memory, selftest, apworld, ap-install, qol-install, update-tracker, ap-client)
   paths.py         application folders (sources: build/; portable: data/)
   formats/         NUP, zstd/SARC resources, BYML, MSBT
   game/            remake map reading, matching, item forms
@@ -250,6 +307,7 @@ src/oot_rando/
   gui/             Tk interface
 tests/             unit tests and verifiers
 tools/             development tools (base world import)
+ingame_tracker/    in-game tracker module (GPL-3): C source of the subsdk7 shipped in each seed
 packaging/         Windows and Linux portable builds
 docs/              design notes
 ```
@@ -259,5 +317,5 @@ distribute them.
 
 ## License
 
-[MIT](LICENSE). The logic data derived from the Archipelago OoT world keeps its own
+[MIT](LICENSE), except the in-game tracker module in `ingame_tracker/`, which is GPL-3 (`ingame_tracker/LICENSE`). The logic data derived from the Archipelago OoT world keeps its own
 MIT licence (`src/oot_rando/logic/world/LICENSE-archipelago-oot.txt`).

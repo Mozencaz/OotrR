@@ -43,11 +43,12 @@ def run_in_process(function, args, progress):
             process.close()
 
 
-def _generate(nup, mods, settings, archive, progress):
+def _generate(nup, mods, settings, archive, ingame_tracker, progress):
     from oot_rando.randomizer.randomizer_core import Settings
     from oot_rando.randomizer.randomizer_services import generate_in_mods
-    return generate_in_mods(nup, mods, Settings.from_dict(settings), progress, archive=archive)
+    return generate_in_mods(nup, mods, Settings.from_dict(settings), progress, archive=archive,
+                            ingame_tracker=ingame_tracker)
 
 
-def generate_isolated(nup, mods, settings, archive, progress):
-    return run_in_process(_generate, (nup, mods, settings.to_dict(), archive), progress)
+def generate_isolated(nup, mods, settings, archive, progress, ingame_tracker=True):
+    return run_in_process(_generate, (nup, mods, settings.to_dict(), archive, ingame_tracker), progress)

@@ -33,6 +33,7 @@ from oot_rando.game.world_maps import SAFE_CATEGORIES, build_world, effective_me
 from oot_rando.game.resource_allocations import allocation, grow_resources, add_resources
 from oot_rando.formats.byml_writer import lift_actors, patch_strings
 from oot_rando.logic import rando_options
+from oot_rando.tracker import check_places, ingame_bundle, ingame_icons
 
 GENERATOR_VERSION = '0.12.8'  # Optional ice arrows melting red ice; shops open day and night
 ADAPTER_VERSION = 'ap-glitchless-v5'   # v5: progressive tokens (every copy gives the next level)
@@ -308,9 +309,10 @@ def grow_resource_table(files, growths, new_sizes, read, d):
     return allocations
 
 
-def publish_mod(output, files, documents, finish=None):
-    """Write a mod folder atomically: ``romfs/<path>`` for ``files``, then ``documents``
-    (name to bytes or text), then whatever ``finish(staging)`` adds. ``output`` must not exist."""
+def publish_mod(output, files, documents, finish=None, exefs=None):
+    """Write a mod folder atomically: ``romfs/<path>`` for ``files``, ``exefs/<name>`` for ``exefs``,
+    then ``documents`` (name to bytes or text), then whatever ``finish(staging)`` adds.
+    ``output`` must not exist."""
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.oot-stage-', dir=output.parent) as temporary:
@@ -320,6 +322,9 @@ def publish_mod(output, files, documents, finish=None):
             destination = staging / 'romfs' / path
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(data)
+        for name, data in (exefs or {}).items():
+            (staging / 'exefs').mkdir(exist_ok=True)
+            (staging / 'exefs' / name).write_bytes(data)
         for name, data in documents.items():
             if isinstance(data, bytes):
                 (staging / name).write_bytes(data)
@@ -334,13 +339,14 @@ def json_document(value):
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
-def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves_from=None):
+def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves_from=None, ingame_tracker=True):
     """Publish a complete new mod directory, never install or modify a game/save.
 
     ``save_seed_id``: an earlier seed of the same Archipelago slot whose saves this one
     continues (its save marker is kept); by default the seed binds its own saves.
     ``saves_from``: oldest application version these saves may come from, when the seed
-    replaces an older one (tracker/save_patch.py, ``saves_from``)."""
+    replaces an older one (tracker/save_patch.py, ``saves_from``).
+    ``ingame_tracker``: ship the in-game tracker module and its data file with the seed."""
     settings.validate_supported()
     output = Path(output)
     if output.exists():
@@ -369,8 +375,10 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
             sources.update(world['sources'])
         full = None
         extra_raw, new_files = {}, {}
+        located = {}   # the in-game tracker's places of the full randomizer's checks (check_places.py), by id
         if settings.full is not None:
-            full, extra_raw, new_files = _build_full(nup, d, members, settings, raw_maps, sources, read, report)
+            full, extra_raw, new_files = _build_full(nup, d, members, settings, raw_maps, sources, read, report,
+                                                     located if ingame_tracker else None)
         chests = []
         active = settings.randomize_chests and len(settings.excluded_checks) < len(CHESTS)
         if active or settings.open_forest:
@@ -920,6 +928,15 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
                 if row:
                     actor = placement.get('after', '')
                     row['reward'] = reward_label(actor_item(actor, placement.get('folder', '')), actor)
+        exefs = {}
+        if ingame_tracker:
+            report('In-game tracker: the items\' icons from the game…')
+            icons = ingame_icons.nup_icons(nup, d)
+            report('In-game tracker: where the checks are in the game\'s maps…')
+            rest = [check['id'] for check in checks['checks'] if check['id'] not in located]
+            places = {ident: rows for ident, rows in located.items() if rows}
+            places.update(check_places.places(rest, check_places.nup_maps(nup, d, check_places.folders(rest))))
+            ingame_bundle.attach(manifest, files, exefs, checks['checks'], tracking, icons, places=places)
         tracking_bytes = json.dumps(tracking, ensure_ascii=False, indent=2).encode('utf-8')
         manifest['tracking'] = {'schema_version': 1, 'sha256': sha256(tracking_bytes),
                                 'new_save_required': True, 'mode': 'save'}
@@ -930,15 +947,16 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
             write_text(load_report(staging), staging / SPOILER_TEXT)
         publish_mod(output, files, {'manifest.json': json_document(manifest), 'checks.json': json_document(checks),
                                     'spoiler.json': json_document(spoiler), 'tracking.json': tracking_bytes},
-                    write_spoiler_text)
+                    write_spoiler_text, exefs)
         report('Generation done.')
         return manifest
     finally:
         nup.stream.close()
 
 
-def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, report):
-    """Plan and compose the complete randomizer. Returns (plan, modified, new)."""
+def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, report, located=None):
+    """Plan and compose the complete randomizer. Returns (plan, modified, new). ``located`` (a dict) gets each
+    planned check's places in the game's maps (check_places.places; [] for none), while the maps are decoded."""
     from collections import defaultdict
     from oot_rando.logic.world import World
     from oot_rando.formats import byml_codec
@@ -1278,4 +1296,8 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
     plan['derived_actors'] = derived + sorted(repeatable_actors)
     plan['logic_world_version'] = data.version
     plan['logic_world_sha256'] = data.fingerprint()
+    if located is not None:
+        ids = [check['id'] for check in plan['checks']]
+        found = check_places.places(ids, maps)
+        located.update({ident: found.get(ident, []) for ident in ids})
     return plan, modified, new

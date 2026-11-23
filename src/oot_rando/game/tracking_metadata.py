@@ -66,6 +66,51 @@ ITEM_LABELS = {
 }
 
 
+# The ocarina songs as the in-game tracker names them (the Archipelago item names), in its grid's order (the quest
+# status screen's: the warp songs, then the others), with the game's saved Bool that says each is learned (IsGet.<flag>).
+SONGS = (
+    ('Minuet of Forest', 'Item_Melody_ForestMinuet'), ('Bolero of Fire', 'Item_Melody_FireBolero'),
+    ('Serenade of Water', 'Item_Melody_WaterSerenade'), ('Requiem of Spirit', 'Item_Melody_SpiritRequiem'),
+    ('Nocturne of Shadow', 'Item_Melody_ShadowNocturne'), ('Prelude of Light', 'Item_Melody_LightPrelude'),
+    ('Zeldas Lullaby', 'Item_Melody_ZeldaLullaby'), ('Eponas Song', 'Item_Melody_EponaSong'),
+    ('Sarias Song', 'Item_Melody_SariaSong'), ('Suns Song', 'Item_Melody_SunSong'),
+    ('Song of Time', 'Item_Melody_TimeSong'), ('Song of Storms', 'Item_Melody_StormSong'),
+)
+
+# Get flags no chest actor leads to: the strength upgrades' and the Lens's pouch names differ from their
+# actors' (IsGet.Armor_GlassTruth, not ...Child_/Adult_GlassTruth), no actor gives the Fire Arrows, and the songs
+# are learned in cutscenes. These are the game's saved Bools (GameDataList 1.1), named as the items' icons are.
+EXTRA_INVENTORY = (
+    ('Progressive Strength Upgrade', 'Armor_Child_Gauntlet_Goron', 1),
+    ('Progressive Strength Upgrade', 'Armor_Adult_Gauntlet_Silver', 2),
+    ('Progressive Strength Upgrade', 'Armor_Adult_Gauntlet_Gold', 3),
+    ('Lens of Truth', 'Armor_GlassTruth', 1),
+    ('Fire Arrows', 'Item_Arrow_Fire', 1),
+) + tuple((item, flag, 1) for item, flag in SONGS)
+
+# The Bottle item is counted, not looked up: the game has five bottle slots, A to E, each with a saved Bool that says
+# it holds a bottle (sloperinaGZ's "Bottle X / available"; the first is 0xf39ce410). The item's rules are those five
+# flags, at levels 1 to 5 (a module that takes the highest set one, as the Bottle's cell once did, shows it owned; the
+# current one counts them). The seed's own rule for it (IsGet.Item_Bottle, one bottle's pickup) is dropped: it says nothing of the others.
+BOTTLE_ITEM = 'Bottle'
+BOTTLE_SLOT_FLAGS = tuple(f'PlayerStatus.AssignableItem.BottleInfo.Bottle{slot}.IsValid' for slot in 'ABCDE')
+BOTTLE_RULES = tuple((BOTTLE_ITEM, flag, level) for level, flag in enumerate(BOTTLE_SLOT_FLAGS, 1))
+
+
+def inventory_rules(inventory, known=None):
+    """A seed's inventory rules, with its Bottle rules replaced by the slots', plus the EXTRA_INVENTORY ones it lacks
+    (seeds made before they were known get them when read). ``known``: the saved Bool hashes, to add only flags the
+    game has."""
+    rules = [rule for rule in inventory or () if rule['item'] != BOTTLE_ITEM]
+    have = {(rule['item'], str(rule['hash'])) for rule in rules}
+    extra = [(item, 'IsGet.' + name, level) for item, name, level in EXTRA_INVENTORY]
+    for item, name, level in extra + list(BOTTLE_RULES):
+        key = murmur3(name)
+        if (item, str(key)) not in have and (known is None or key in known):
+            rules.append({'item': item, 'hash': str(key), 'count': level})
+    return rules
+
+
 DUNGEON_ITEM_KINDS = {'Small Key Ring': 'Key Ring', 'Small Key': 'Small Key', 'Boss Key': 'Boss Key', 'Map': 'Map', 'Compass': 'Compass'}
 DUNGEON_LABELS = {
     'Deku Tree': 'Deku Tree', 'Dodongos Cavern': 'Dodongo\'s Cavern', 'Jabu Jabus Belly': 'Jabu-Jabu\'s Belly',
@@ -163,13 +208,13 @@ def build_tracking(seed_id, checks, full, read_raw):
             # The seed bag is given at the start: it no longer proves the slingshot.
             'Item_Range_SlingShot': ['Weapon_Range_SlingShot'],
             'Item_HeavyBoot': ['Armor_Adult_HeavyBoot'], 'Item_HoverBoot': ['Armor_Adult_HoverBoot'],
-            'Item_GlassTruth': ['Armor_Child_GlassTruth', 'Armor_Adult_GlassTruth'],
         }
         level = PROGRESSIVE[item].index(actor) + 1 if actor in PROGRESSIVE.get(item, []) else 1
         for candidate in set([canonical] + aliases.get(actor, [])):
             key = murmur3('IsGet.' + candidate)
             if key in keys.get('Bool', set()):
                 inventory.append({'item': item, 'hash': str(key), 'count': level})
+    inventory = inventory_rules(inventory, keys.get('Bool', set()))
     # Zones (map folders) where the enemies of each soul appear, for the tracker.
     families = (full or {}).get('souls', {}).get('families', {})
     souls = [{'item': soul_item(key), 'zones': list(folders)} for key, folders in sorted(families.items())]
