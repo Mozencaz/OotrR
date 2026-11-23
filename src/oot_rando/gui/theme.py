@@ -506,6 +506,23 @@ class Sidebar(tk.Frame):
             widget.bind('<Enter>', lambda _e, k=key: self.paint(k, hover=True))
             widget.bind('<Leave>', lambda _e, k=key: (self.paint(k), bar.configure(background=c['gold']), label.configure(foreground='#fbf6e6', font=self.fonts.nav_active), [w.configure(background=c['sidebar_hover']) for w in (row, icon, label)]))
 
+    def add_note(self, text):
+        c = COLORS
+        box = tk.Frame(self, background="#122e24", highlightbackground=c["hero_line"], highlightthickness=1)
+        box.pack(fill="x", padx=12, pady=(2, 6))
+        bar = tk.Frame(box, background=c["gold"], width=2)
+        bar.pack(side="left", fill="y")
+        tk.Label(
+            box,
+            text=text,
+            font=self.fonts.small,
+            foreground=c["sidebar_text"],
+            background="#122e24",
+            justify="left",
+            anchor="w",
+            wraplength=168,
+        ).pack(side="left", fill="x", expand=True, padx=(8, 8), pady=7)
+
     def select(self, key):
         previous, self.current = self.current, key
         if previous:

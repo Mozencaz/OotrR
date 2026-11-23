@@ -339,8 +339,12 @@ class Application:
         self.sidebar.pack(side='left', fill='y')
         outer = ttk.Frame(root, padding=(34, 26, 34, 18), style='Page.TFrame')
         outer.pack(side='left', fill='both', expand=True)
+        self._outer = outer
         header = ttk.Frame(outer, style='Page.TFrame')
         header.pack(fill='x', pady=(0, 18))
+        self._header = header
+        self._midna_host = None
+        self._chrome_hidden = False
         self.page_title, self.page_subtitle = tk.StringVar(), tk.StringVar()
         titles = ttk.Frame(header, style='Page.TFrame')
         titles.pack(side='left', fill='x', expand=True)
@@ -356,6 +360,10 @@ class Application:
         self.tracker_tab = self.tab('tracker', 'Tracker', 'Tracker', 'What you found, and what you can reach now.')
         self.multiworld_tab = self.tab('multiworld', 'Multiworld', 'Multiworld', 'Play with friends through Archipelago. Three steps.')
         self.midna_guide_tab = self.tab('midna_guide', 'Midna Setup', "Midna's Devotion Workflow", 'Apply mods after generating a seed and before launching the game or starting a new save.')
+        self.midna_tab = ttk.Frame(self.tabs, style='Page.TFrame')
+        self.tabs.add(self.midna_tab, text="Midna's Devotion")
+        self.pages['midnas_devotion'] = (self.midna_tab, "Midna's Devotion", '')
+        self._build_midna_embedded_tab()
         self._add_mod_manager_sidebar_action()
         self.sidebar.gap()
         self.setup_tab = self.tab('setup', 'Setup', 'Setup', 'Where your game lives. Set once.')
@@ -377,6 +385,7 @@ class Application:
         self.update_home()
         bottom = ttk.Frame(outer, style='Page.TFrame')
         bottom.pack(side='bottom', fill='x', pady=(12, 0), before=self.tabs)
+        self._bottom = bottom
         self.progress = ttk.Progressbar(bottom, mode='indeterminate', length=120)
         ttk.Label(bottom, textvariable=self.status, style='Page.TLabel', wraplength=760).pack(side='left', fill='x')
         self.show_page('home')
@@ -492,13 +501,35 @@ class Application:
         self.tabs.select(self.pages[key][0])
         self.page_changed()
 
+    def _set_full_bleed_chrome(self, full_bleed: bool) -> None:
+        if full_bleed == self._chrome_hidden:
+            return
+        self._chrome_hidden = full_bleed
+        if full_bleed:
+            self._header.pack_forget()
+            self._bottom.pack_forget()
+            self._outer.configure(padding=(0, 0, 0, 0))
+        else:
+            self._outer.configure(padding=(34, 26, 34, 18))
+            self._header.pack(fill='x', pady=(0, 18), before=self.tabs)
+            self._bottom.pack(side='bottom', fill='x', pady=(12, 0), before=self.tabs)
+
     def page_changed(self):
         current = self.tabs.select()
+        active_key = None
         for key, (frame, title, subtitle) in self.pages.items():
             if str(frame) == current:
+                active_key = key
                 self.sidebar.select(key)
                 self.page_title.set(title)
                 self.page_subtitle.set(subtitle)
+        is_midna = active_key == 'midnas_devotion'
+        self._set_full_bleed_chrome(is_midna)
+        if self._midna_host is not None:
+            if is_midna:
+                self._midna_host.show()
+            else:
+                self._midna_host.hide()
 
     def path_row(self, parent, text, variable, kind):
         frame = ttk.Frame(parent)
@@ -1626,10 +1657,24 @@ class Application:
             except Exception:
                 img = None
         self.sidebar.add_action('midnas_devotion', "Midna's Devotion", self.launch_mod_manager, icon_image=img)
+        if hasattr(self.sidebar, "add_note"):
+            self.sidebar.add_note("Midna's Devotion is developed independently by Arararagi. Huge thanks to Mozencaz for welcoming it into his amazing randomizer!")
+
+    def _build_midna_embedded_tab(self) -> None:
+        from oot_rando.midnas_devotion.ui.embedded_host import EmbeddedMidnaHost
+        container = tk.Frame(self.midna_tab, background='#161a21', highlightthickness=0, bd=0)
+        container.pack(fill='both', expand=True)
+        self._midna_host = EmbeddedMidnaHost(
+            self.root,
+            container,
+            on_fallback_window=self.launch_mod_manager_external,
+        )
 
     def launch_mod_manager(self) -> None:
+        self.show_page('midnas_devotion')
+
+    def launch_mod_manager_external(self) -> None:
         import subprocess
-        import sys
         import sys
         from oot_rando.paths import FROZEN
         try:
@@ -2311,6 +2356,9 @@ class Application:
         if self.busy:
             messagebox.showinfo('Operation running', 'Wait for the generation or analysis to finish before closing.')
             return False
+        if self._midna_host is not None and self._midna_host.is_busy():
+            messagebox.showinfo('Operation running', "Wait for Midna's Devotion to finish applying mods before closing.")
+            return False
         if self.hotkey_thread_id:
             ctypes.windll.user32.PostThreadMessageW(self.hotkey_thread_id, 0x0012, 0, 0)
             self.hotkey_thread.join(timeout=1)
@@ -2324,6 +2372,8 @@ class Application:
         if self.ap_client:
             self.ap_client.stop()
         self.save_extra_emulators()
+        if self._midna_host is not None:
+            self._midna_host.destroy()
         self.closed = True
         self.root.destroy()
         return True

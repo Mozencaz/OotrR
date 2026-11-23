@@ -201,6 +201,7 @@ class AppConfig:
         self.longshot_binary: str = ""
         self.workspace_dir: str = default_workspace_dir()
 
+        self.ui_theme: str = ""
         self.sandbox_mode: bool = True
         self.saved_state: Dict = {}
         self._codec_cache: Tuple[str, Optional[CodecBundle]] = ("", None)
@@ -245,6 +246,14 @@ class AppConfig:
         return os.path.expanduser("~")
 
     @property
+    def has_ui_theme_choice(self) -> bool:
+        return self.ui_theme in ("mozencaz", "araragi")
+
+    @property
+    def effective_ui_theme(self) -> str:
+        return self.ui_theme if self.ui_theme in ("mozencaz", "araragi") else "mozencaz"
+
+    @property
     def is_configured(self) -> bool:
         return bool(
             self.romfs_dir
@@ -287,6 +296,8 @@ class AppConfig:
             self.longshot_binary = str(data.get("longshot_binary", "") or "")
             ws = str(data.get("workspace_dir", "") or "")
             self.workspace_dir = ws if ws else default_workspace_dir()
+            raw_theme = str(data.get("ui_theme", "") or "").strip().lower()
+            self.ui_theme = raw_theme if raw_theme in ("mozencaz", "araragi") else ""
         except Exception:
             self.saved_state = {}
 
@@ -299,6 +310,8 @@ class AppConfig:
         self.saved_state["uninstalled_seeds_dir"] = self.uninstalled_seeds_dir
         self.saved_state["longshot_binary"] = self.longshot_binary
         self.saved_state["workspace_dir"] = self.workspace_dir
+        if self.ui_theme in ("mozencaz", "araragi"):
+            self.saved_state["ui_theme"] = self.ui_theme
         os.makedirs(os.path.dirname(self.settings_path), exist_ok=True)
         with open(self.settings_path, "w", encoding="utf-8") as f:
             json.dump(self.saved_state, f, indent=2)

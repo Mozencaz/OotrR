@@ -64,6 +64,13 @@ from oot_rando.midnas_devotion.core.preflight import (
 from oot_rando.midnas_devotion.ui.mod_files_dialog import ModFilesDialog
 from oot_rando.midnas_devotion.ui.preflight_dialog import PreflightDialog
 from oot_rando.midnas_devotion.ui.settings_dialog import SettingsDialog
+from oot_rando.midnas_devotion.ui.ui_theme import (
+    THEME_ARARAGI,
+    THEME_MOZENCAZ,
+    UiExperienceDialog,
+    central_stylesheet,
+    status_color,
+)
 
 
 def _find_asset(filename: str) -> Optional[str]:
@@ -81,15 +88,24 @@ def _find_app_icon() -> Optional[str]:
 
 
 class BackdropWidget(QWidget):
-    '''Central widget painting a dimmed, aspect-scaled Midna backdrop.'''
+    '''Central widget painting either plain parchment or a dimmed Midna backdrop.'''
 
     def __init__(self, image_path: Optional[str], parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._pixmap = QPixmap(image_path) if image_path and os.path.isfile(image_path) else QPixmap()
+        self._plain_mode: bool = False
+
+    def set_plain_mode(self, plain: bool) -> None:
+        self._plain_mode = plain
+        self.update()
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         rect = self.rect()
+        if self._plain_mode:
+            painter.fillRect(rect, QColor("#f2eee3"))
+            super().paintEvent(event)
+            return
         painter.fillRect(rect, QColor(16, 20, 26))
         if not self._pixmap.isNull():
             scaled = self._pixmap.scaled(
@@ -129,9 +145,18 @@ class DropZoneFrame(QFrame):
     ACTIVE_STYLE = (
         "QFrame#dropZone { background: rgba(22, 51, 74, 180); border: 2px dashed #64b5f6; border-radius: 7px; }"
     )
+    PLAIN_IDLE_STYLE = (
+        "QFrame#dropZone { background: #f7f3ea; border: 2px dashed #cfc5ad; border-radius: 7px; }"
+        "QFrame#dropZone:hover { background: #efe9db; border-color: #2f7a55; }"
+    )
+    PLAIN_ACTIVE_STYLE = (
+        "QFrame#dropZone { background: #e4efe7; border: 2px dashed #2f7a55; border-radius: 7px; }"
+    )
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self._plain_mode: bool = False
+        self._drag_active: bool = False
         self.setObjectName("dropZone")
         self.setAcceptDrops(True)
         self.setStyleSheet(self.IDLE_STYLE)
@@ -161,7 +186,26 @@ class DropZoneFrame(QFrame):
         lay.addLayout(text_col, 1)
         lay.addWidget(self.browse_btn)
 
+    def set_plain_mode(self, plain: bool) -> None:
+        self._plain_mode = plain
+        self.sub_lbl.setStyleSheet(
+            "border: none; color: #6c766d; font-size: 11px;"
+            if plain
+            else "border: none; color: #90a4ae; font-size: 11px;"
+        )
+        self.set_drag_active(self._drag_active)
+
     def set_drag_active(self, active: bool) -> None:
+        self._drag_active = active
+        if self._plain_mode:
+            self.setStyleSheet(self.PLAIN_ACTIVE_STYLE if active else self.PLAIN_IDLE_STYLE)
+            if active:
+                self.title_lbl.setText("Release to check mod compatibility!")
+                self.title_lbl.setStyleSheet("border: none; color: #2f7a55;")
+            else:
+                self.title_lbl.setText("Drop any mod archive here to check & add")
+                self.title_lbl.setStyleSheet("border: none; color: #1f2a24;")
+            return
         self.setStyleSheet(self.ACTIVE_STYLE if active else self.IDLE_STYLE)
         if active:
             self.title_lbl.setText("Release to check mod compatibility!")
@@ -299,6 +343,11 @@ def _make_step_card(step_num: int, title: str, subtitle: str) -> Tuple[QFrame, Q
     body = QVBoxLayout()
     body.setSpacing(8)
     card.setMinimumWidth(0)
+    card._step_num = step_num  # type: ignore[attr-defined]
+    card._step_badge = badge  # type: ignore[attr-defined]
+    card._step_title = title_lbl  # type: ignore[attr-defined]
+    card._step_sub = sub_lbl  # type: ignore[attr-defined]
+    card._step_sep = sep  # type: ignore[attr-defined]
     outer.addLayout(body, 1)
     return card, body
 
@@ -314,6 +363,10 @@ class MainWindow(QMainWindow):
         self.worker: Optional[BuildWorker] = None
         self._ui_ready: bool = False
         self._initial_restored: bool = False
+        self._status_tone: str = "neutral"
+        self._step_cards: List[QFrame] = []
+        self._section_labels: List[QLabel] = []
+        self._theme_change_callback = None
 
         self.setWindowTitle("Midna's Devotion — Ocarina of Time Mod Manager & Merger (for Longshot + Mozencaz's Randomizer)")
         icon_path = _find_app_icon()
@@ -323,13 +376,17 @@ class MainWindow(QMainWindow):
         self.resize(1220, 840)
         self.setAcceptDrops(True)
         self._build_ui()
+        self.apply_ui_theme(self.cfg.effective_ui_theme, persist=False)
         self.refresh_all()
 
-        if not self.cfg.is_configured:
+        if not self.cfg.has_ui_theme_choice:
+            QTimer.singleShot(180, self._prompt_first_launch)
+        elif not self.cfg.is_configured:
             QTimer.singleShot(250, self._prompt_initial_setup)
 
     def _build_ui(self) -> None:
         central = BackdropWidget(_find_asset("backdrop.png"))
+        self.central_widget = central
         central.setObjectName("backdropCentral")
         central.setStyleSheet(
             "QWidget#backdropCentral, QWidget#backdropCentral QLabel { color: #FFFFFF; background-color: transparent; } "
@@ -352,7 +409,9 @@ class MainWindow(QMainWindow):
 
         # --- Top Mode & Folder Bar ---
         top_frame = QFrame()
+        self.top_frame = top_frame
         top_frame.setObjectName("topBar")
+        top_frame.setMinimumWidth(0)
         top_frame.setStyleSheet(
             "QFrame#topBar { background: rgba(22, 26, 33, 155); border: 1px solid #353535; border-radius: 7px; }"
         )
@@ -365,8 +424,14 @@ class MainWindow(QMainWindow):
         self.mode_btn.clicked.connect(self._toggle_mode)
 
         self.path_label = QLabel()
+        self.path_label.setMinimumWidth(0)
+        self.path_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.path_label.setStyleSheet("border: none; color: #9e9e9e; font-size: 11px;")
         self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+        self.ui_style_btn = QPushButton("UI Style…")
+        self.ui_style_btn.setToolTip("Switch between Mozencaz' Default UI Experience and Arararagi's UI Experience.")
+        self.ui_style_btn.clicked.connect(self._open_ui_style_picker)
 
         self.settings_btn = QPushButton("Configure Folders…")
         self.settings_btn.clicked.connect(self._open_settings)
@@ -377,6 +442,7 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.mode_badge)
         top_bar.addWidget(self.mode_btn)
         top_bar.addWidget(self.path_label, 1)
+        top_bar.addWidget(self.ui_style_btn)
         top_bar.addWidget(self.settings_btn)
         top_bar.addWidget(refresh_btn)
         root.addWidget(top_frame)
@@ -399,14 +465,19 @@ class MainWindow(QMainWindow):
             "Choose Character & Randomizer Seed",
             "Pick who you want to play as and which Randomizer seed to load.",
         )
+        self._step_cards.append(step1_card)
 
         char_lbl = QLabel("Playable Character")
         char_lbl.setStyleSheet("border: none; font-weight: bold; color: #cfd8dc;")
+        self._section_labels.append(char_lbl)
         s1.addWidget(char_lbl)
 
         char_row = QHBoxLayout()
         char_row.setSpacing(6)
         self.char_combo = QComboBox()
+        self.char_combo.setMinimumWidth(0)
+        self.char_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.char_combo.setMinimumContentsLength(12)
         self.char_combo.setMinimumHeight(30)
         self.char_combo.currentIndexChanged.connect(self._on_step1_changed)
         self.btn_add_char = QPushButton("+ Add…")
@@ -426,11 +497,15 @@ class MainWindow(QMainWindow):
         s1.addSpacing(4)
         seed_lbl = QLabel("Randomizer Seed (newest is starred at the top)")
         seed_lbl.setStyleSheet("border: none; font-weight: bold; color: #cfd8dc;")
+        self._section_labels.append(seed_lbl)
         s1.addWidget(seed_lbl)
 
         seed_row = QHBoxLayout()
         seed_row.setSpacing(6)
         self.seed_combo = QComboBox()
+        self.seed_combo.setMinimumWidth(0)
+        self.seed_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.seed_combo.setMinimumContentsLength(12)
         self.seed_combo.setMinimumHeight(30)
         self.seed_combo.currentIndexChanged.connect(self._on_step1_changed)
         self.btn_add_seed = QPushButton("Browse…")
@@ -448,9 +523,11 @@ class MainWindow(QMainWindow):
             "Browse & Add Mods",
             "Add any UI, model, texture, or audio mods from your library or PC to your active list on the right.",
         )
+        self._step_cards.append(step2_card)
 
         lib_lbl = QLabel("Available in Your Mod Library (double-click or click Add →)")
         lib_lbl.setStyleSheet("border: none; font-weight: bold; color: #cfd8dc;")
+        self._section_labels.append(lib_lbl)
         s2.addWidget(lib_lbl)
 
         self.visual_lib_list = QListWidget()
@@ -505,6 +582,7 @@ class MainWindow(QMainWindow):
             "Active Mod List",
             "Check everything you want enabled. Green = safe · Blue = auto-merged · Amber = conflict. Lower items take priority if two UI mods overlap.",
         )
+        self._step_cards.append(step3_card)
 
         self.drop_zone = DropZoneFrame()
         self.drop_zone.files_dropped.connect(self._handle_dropped_archives)
@@ -587,6 +665,7 @@ class MainWindow(QMainWindow):
         left_scroll = QScrollArea()
         left_scroll.setWidgetResizable(True)
         left_scroll.setMinimumWidth(0)
+        left_scroll.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
         left_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         left_scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }")
         left_scroll.viewport().setAutoFillBackground(False)
@@ -595,6 +674,7 @@ class MainWindow(QMainWindow):
         right_scroll = QScrollArea()
         right_scroll.setWidgetResizable(True)
         right_scroll.setMinimumWidth(0)
+        right_scroll.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
         right_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         right_scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }")
         right_scroll.viewport().setAutoFillBackground(False)
@@ -602,7 +682,9 @@ class MainWindow(QMainWindow):
 
         mid_split.addWidget(left_scroll)
         mid_split.addWidget(right_scroll)
-        mid_split.setSizes([500, 680])
+        mid_split.setStretchFactor(0, 4)
+        mid_split.setStretchFactor(1, 6)
+        mid_split.setSizes([420, 560])
         root.addWidget(mid_split, 1)
 
         # --- STEP 4: Build & Play ---
@@ -611,8 +693,10 @@ class MainWindow(QMainWindow):
             "Apply Changes & Play",
             "Review your loadout summary, click Apply to build your mods, then launch Longshot.",
         )
+        self._step_cards.append(step4_card)
 
         self.summary_label = QLabel()
+        self.summary_label.setMinimumWidth(0)
         self.summary_label.setWordWrap(True)
         self.summary_label.setStyleSheet(
             "background: rgba(26, 36, 47, 155); border: 1px solid #34495e; color: #d6e4f0; "
@@ -654,7 +738,9 @@ class MainWindow(QMainWindow):
 
         prog_row = QHBoxLayout()
         self.status_lbl = QLabel("Ready — follow Steps 1–3 above, then click Apply.")
-        self.status_lbl.setStyleSheet("border: none; font-weight: bold; color: #dddddd;")
+        self.status_lbl.setMinimumWidth(0)
+        self.status_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._set_status_style("neutral")
         self.log_toggle_btn = QPushButton("Show Technical Log ▾")
         self.log_toggle_btn.setCheckable(True)
         self.log_toggle_btn.toggled.connect(self._toggle_log_view)
@@ -681,6 +767,155 @@ class MainWindow(QMainWindow):
         self._ui_ready = True
         self._update_mode_ui()
         self._update_mod_action_buttons()
+
+    def _is_plain_ui(self) -> bool:
+        return self.cfg.effective_ui_theme == THEME_MOZENCAZ
+
+    def set_theme_change_callback(self, callback) -> None:
+        self._theme_change_callback = callback
+
+    def _set_status_style(self, tone: str) -> None:
+        self._status_tone = tone
+        color = status_color(self._is_plain_ui(), tone)
+        self.status_lbl.setStyleSheet(f"border: none; font-weight: bold; color: {color};")
+
+    def apply_ui_theme(self, theme_id: str, persist: bool = True) -> None:
+        chosen = THEME_MOZENCAZ if theme_id == THEME_MOZENCAZ else THEME_ARARAGI
+        if persist:
+            self.cfg.ui_theme = chosen
+            self.cfg.save_settings()
+        plain = chosen == THEME_MOZENCAZ
+
+        self.central_widget.set_plain_mode(plain)
+        self.central_widget.setStyleSheet(central_stylesheet(plain))
+        self.drop_zone.set_plain_mode(plain)
+
+        if plain:
+            self.top_frame.setStyleSheet(
+                "QFrame#topBar { background: #fffdf8; border: 1px solid #e3dccb; border-radius: 7px; }"
+            )
+            self.path_label.setStyleSheet("border: none; color: #6c766d; font-size: 11px;")
+            for card in self._step_cards:
+                num = getattr(card, "_step_num", 0)
+                card.setStyleSheet(
+                    f"QFrame#stepCard{num} {{ background: #fffdf8; border: 1px solid #e3dccb; border-radius: 8px; }}"
+                )
+                card._step_badge.setStyleSheet(
+                    "background: #e4efe7; color: #2f7a55; font-weight: bold; font-size: 11px; "
+                    "padding: 4px 9px; border-radius: 4px; border: 1px solid #c5dccb;"
+                )
+                card._step_title.setStyleSheet("border: none; color: #1f2a24;")
+                card._step_sub.setStyleSheet("border: none; color: #6c766d; font-size: 11px;")
+                card._step_sep.setStyleSheet("background: #e3dccb; max-height: 1px; border: none;")
+            for lbl in self._section_labels:
+                lbl.setStyleSheet("border: none; font-weight: bold; color: #1f2a24;")
+            self.btn_add_lib_vis.setStyleSheet(
+                "QPushButton { background: #2f7a55; color: #ffffff; font-weight: bold; "
+                "border: 1px solid #246042; border-radius: 4px; padding: 0 12px; }"
+                "QPushButton:hover { background: #266948; }"
+                "QPushButton:disabled { background: #f2eee3; color: #a3a99f; border: 1px solid #e3dccb; }"
+            )
+            self.btn_delete_mod.setStyleSheet(
+                "QPushButton { background: #fbeaea; color: #8e2c2c; border: 1px solid #e2b8b8; "
+                "border-radius: 4px; padding: 5px 12px; font-weight: bold; }"
+                "QPushButton:hover { background: #f5d8d8; }"
+                "QPushButton:disabled { background: #f2eee3; color: #a3a99f; border: 1px solid #e3dccb; }"
+            )
+            self.summary_label.setStyleSheet(
+                "background: #f7f3ea; border: 1px solid #e3dccb; color: #1f2a24; "
+                "border-radius: 5px; padding: 8px 10px; font-weight: bold;"
+            )
+            self.build_btn.setStyleSheet(
+                "QPushButton { background: #2f5f8f; color: #ffffff; font-weight: bold; "
+                "font-size: 14px; border: 1px solid #254c73; border-radius: 5px; padding: 0 18px; }"
+                "QPushButton:hover { background: #27517a; }"
+                "QPushButton:disabled { background: #e3dccb; color: #8d948a; border: 1px solid #d5ccb7; }"
+            )
+            self.launch_btn.setStyleSheet(
+                "QPushButton { background: #2f7a55; color: #ffffff; font-weight: bold; "
+                "font-size: 14px; border: 1px solid #246042; border-radius: 5px; padding: 0 20px; }"
+                "QPushButton:hover { background: #266948; }"
+                "QPushButton:disabled { background: #e3dccb; color: #8d948a; border: 1px solid #d5ccb7; }"
+            )
+        else:
+            self.top_frame.setStyleSheet(
+                "QFrame#topBar { background: rgba(22, 26, 33, 155); border: 1px solid #353535; border-radius: 7px; }"
+            )
+            self.path_label.setStyleSheet("border: none; color: #9e9e9e; font-size: 11px;")
+            for card in self._step_cards:
+                num = getattr(card, "_step_num", 0)
+                card.setStyleSheet(
+                    f"QFrame#stepCard{num} {{ background: rgba(26, 30, 38, 150); border: 1px solid #3a3a3a; border-radius: 8px; }}"
+                )
+                card._step_badge.setStyleSheet(
+                    "background: rgba(21, 101, 192, 195); color: #ffffff; font-weight: bold; font-size: 11px; "
+                    "padding: 4px 9px; border-radius: 4px; border: none;"
+                )
+                card._step_title.setStyleSheet("border: none; color: #f5f5f5;")
+                card._step_sub.setStyleSheet("border: none; color: #9e9e9e; font-size: 11px;")
+                card._step_sep.setStyleSheet("background: #333333; max-height: 1px; border: none;")
+            for lbl in self._section_labels:
+                lbl.setStyleSheet("border: none; font-weight: bold; color: #cfd8dc;")
+            self.btn_add_lib_vis.setStyleSheet(
+                "QPushButton { background: rgba(21, 101, 192, 195); color: #ffffff; font-weight: bold; border-radius: 4px; padding: 0 12px; }"
+                "QPushButton:hover { background: rgba(25, 118, 210, 200); }"
+                "QPushButton:disabled { background: rgba(44, 48, 54, 140); color: #777777; }"
+            )
+            self.btn_delete_mod.setStyleSheet(
+                "QPushButton { background: rgba(74, 28, 28, 185); color: #ffcdd2; border: 1px solid #8e2c2c; "
+                "border-radius: 4px; padding: 5px 12px; font-weight: bold; }"
+                "QPushButton:hover { background: rgba(107, 34, 34, 200); }"
+                "QPushButton:disabled { background: rgba(44, 48, 54, 140); color: #777777; border: 1px solid #3c3c3c; }"
+            )
+            self.summary_label.setStyleSheet(
+                "background: rgba(26, 36, 47, 155); border: 1px solid #34495e; color: #d6e4f0; "
+                "border-radius: 5px; padding: 8px 10px; font-weight: bold;"
+            )
+            self.build_btn.setStyleSheet(
+                "QPushButton { background: rgba(25, 118, 210, 200); color: #ffffff; font-weight: bold; "
+                "font-size: 14px; border-radius: 5px; padding: 0 18px; }"
+                "QPushButton:hover { background: rgba(30, 136, 229, 215); }"
+                "QPushButton:disabled { background: rgba(58, 62, 68, 140); color: #888888; }"
+            )
+            self.launch_btn.setStyleSheet(
+                "QPushButton { background: rgba(46, 125, 50, 195); color: #ffffff; font-weight: bold; "
+                "font-size: 14px; border-radius: 5px; padding: 0 20px; }"
+                "QPushButton:hover { background: rgba(56, 142, 60, 215); }"
+                "QPushButton:disabled { background: rgba(58, 62, 68, 140); color: #888888; }"
+            )
+
+        self._set_status_style(self._status_tone)
+        if self._ui_ready:
+            self._update_mode_ui()
+            self._sync_character_list_row()
+            self._refresh_visual_library_picker()
+            self._update_overlap_panel()
+
+        if self._theme_change_callback is not None:
+            try:
+                self._theme_change_callback(chosen)
+            except Exception:
+                pass
+
+    def _prompt_first_launch(self) -> None:
+        dlg = UiExperienceDialog(
+            current_theme=self.cfg.ui_theme,
+            first_launch=True,
+            parent=self,
+        )
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected_theme:
+            self.apply_ui_theme(dlg.selected_theme, persist=True)
+        if not self.cfg.is_configured:
+            self._prompt_initial_setup()
+
+    def _open_ui_style_picker(self) -> None:
+        dlg = UiExperienceDialog(
+            current_theme=self.cfg.effective_ui_theme,
+            first_launch=False,
+            parent=self,
+        )
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected_theme:
+            self.apply_ui_theme(dlg.selected_theme, persist=True)
 
     def _prompt_initial_setup(self) -> None:
         ans = QMessageBox.information(
@@ -796,8 +1031,12 @@ class MainWindow(QMainWindow):
             font.setBold(True)
             item.setText(row_text)
             item.setFont(font)
-            item.setForeground(QBrush(QColor("#80cbc4")))
-            item.setBackground(QBrush(QColor(16, 46, 41, 185)))
+            if self._is_plain_ui():
+                item.setForeground(QBrush(QColor("#1b5e50")))
+                item.setBackground(QBrush(QColor("#e0f2ef")))
+            else:
+                item.setForeground(QBrush(QColor("#80cbc4")))
+                item.setBackground(QBrush(QColor(16, 46, 41, 185)))
             item.setToolTip("Selected in Step 1 — automatically included when you click Apply in Step 4.")
         finally:
             self.mod_list.blockSignals(False)
@@ -822,7 +1061,7 @@ class MainWindow(QMainWindow):
         if not self.library_visual_mods:
             empty = QListWidgetItem("No extra mods found in Mod Library — use '+ Import' or '+ Link' below.")
             empty.setFlags(Qt.ItemFlag.NoItemFlags)
-            empty.setForeground(QBrush(QColor("#888888")))
+            empty.setForeground(QBrush(QColor("#6c766d" if self._is_plain_ui() else "#888888")))
             self.visual_lib_list.addItem(empty)
             self._update_visual_picker_buttons()
             return
@@ -833,10 +1072,10 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, entry.path)
             item.setToolTip(entry.path)
-            if already:
-                item.setForeground(QBrush(QColor("#81c784")))
+            if self._is_plain_ui():
+                item.setForeground(QBrush(QColor("#2f7a55" if already else "#1f2a24")))
             else:
-                item.setForeground(QBrush(QColor("#e3f2fd")))
+                item.setForeground(QBrush(QColor("#81c784" if already else "#e3f2fd")))
             self.visual_lib_list.addItem(item)
         self._update_visual_picker_buttons()
 
@@ -869,7 +1108,7 @@ class MainWindow(QMainWindow):
             return
         self.refresh_all()
         self._check_and_select_mods_in_list(added_names)
-        self.status_lbl.setStyleSheet("border: none; font-weight: bold; color: #a5d6a7;")
+        self._set_status_style("ok")
         self.status_lbl.setText(f"✓  Added {', '.join(pretty_mod_name(n) for n in added_names)} to your Mod List.")
 
     def _link_visual_folder_to_list(self) -> None:
@@ -886,7 +1125,7 @@ class MainWindow(QMainWindow):
             return
         self.refresh_all()
         self._check_and_select_mods_in_list([name])
-        self.status_lbl.setStyleSheet("border: none; font-weight: bold; color: #a5d6a7;")
+        self._set_status_style("ok")
         self.status_lbl.setText(f"✓  Added '{pretty_mod_name(name)}' to your Mod List.")
 
     def _import_visual_archive_to_list(self) -> None:
@@ -971,11 +1210,11 @@ class MainWindow(QMainWindow):
         self.refresh_all()
         if select_in_char:
             self._select_combo_by_path(self.char_combo, os.path.abspath(dst))
-            self.status_lbl.setStyleSheet("border: none; font-weight: bold; color: #a5d6a7;")
+            self._set_status_style("ok")
             self.status_lbl.setText(f"✓  Imported character mod '{os.path.basename(dst)}'.")
         else:
             self._check_and_select_mods_in_list([os.path.basename(dst)])
-            self.status_lbl.setStyleSheet("border: none; font-weight: bold; color: #a5d6a7;")
+            self._set_status_style("ok")
             self.status_lbl.setText(f"✓  Added '{os.path.basename(dst)}' to your Mod List.")
 
     def _check_and_select_mods_in_list(self, names: List[str]) -> None:
@@ -1157,7 +1396,7 @@ class MainWindow(QMainWindow):
             if it.data(Qt.ItemDataRole.UserRole) == new_name:
                 self.mod_list.setCurrentItem(it)
                 break
-        self.status_lbl.setStyleSheet("border: none; font-weight: bold; color: #a5d6a7;")
+        self._set_status_style("ok")
         self.status_lbl.setText(f"✓  Renamed '{mod.name}' to '{new_name}'.")
 
     def _delete_selected_mod(self) -> None:
@@ -1178,7 +1417,7 @@ class MainWindow(QMainWindow):
                 return
             self.cfg.delete_standalone_mod(mod)
             self.refresh_all()
-            self.status_lbl.setStyleSheet("border: none; font-weight: bold; color: #ffcc80;")
+            self._set_status_style("warn")
             self.status_lbl.setText(f"Removed '{pretty_mod_name(mod.name)}' from the Mod List (files kept intact).")
             return
 
@@ -1218,7 +1457,7 @@ class MainWindow(QMainWindow):
             return
 
         self.refresh_all()
-        self.status_lbl.setStyleSheet("border: none; font-weight: bold; color: #ffcc80;")
+        self._set_status_style("warn")
         self.status_lbl.setText(f"Deleted '{mod.name}' ({len(removed)} folder copy(s) removed).")
 
     # --- Window-Wide Drag-and-Drop ---
@@ -1298,12 +1537,20 @@ class MainWindow(QMainWindow):
 
     def _update_mode_ui(self) -> None:
         configured = self.cfg.is_configured
+        plain = self._is_plain_ui()
         if not configured:
-            self.settings_btn.setStyleSheet(
-                "QPushButton { background: rgba(239, 108, 0, 200); color: #fff; font-weight: bold; padding: 5px 10px; border-radius: 4px; }"
-                "QPushButton:hover { background: rgba(245, 124, 0, 215); }"
-            )
-            self.status_lbl.setStyleSheet("border: none; font-weight: bold; color: #ffcc80;")
+            if plain:
+                self.settings_btn.setStyleSheet(
+                    "QPushButton { background: #d5a62b; color: #2b2108; border: 1px solid #c0921c; "
+                    "font-weight: bold; padding: 5px 10px; border-radius: 4px; }"
+                    "QPushButton:hover { background: #e2b746; }"
+                )
+            else:
+                self.settings_btn.setStyleSheet(
+                    "QPushButton { background: rgba(239, 108, 0, 200); color: #fff; font-weight: bold; padding: 5px 10px; border-radius: 4px; }"
+                    "QPushButton:hover { background: rgba(245, 124, 0, 215); }"
+                )
+            self._set_status_style("warn")
             self.status_lbl.setText("⚠  Click 'Configure Folders…' at the top right to point to your Longshot installation.")
         else:
             self.settings_btn.setStyleSheet("")
@@ -1312,6 +1559,9 @@ class MainWindow(QMainWindow):
             self.mode_badge.setText("TEST MODE · Safe (Won't Touch Your Live Game)")
             self.mode_badge.setStyleSheet(
                 "font-weight: bold; padding: 6px 12px; border-radius: 5px; "
+                "background: #f8eecf; border: 1px solid #d5a62b; color: #7a520b;"
+                if plain
+                else "font-weight: bold; padding: 6px 12px; border-radius: 5px; "
                 "background: rgba(58, 36, 9, 175); border: 1px solid #ef6c00; color: #ffcc80;"
             )
             self.mode_btn.setText("Switch to Live Game")
@@ -1321,6 +1571,9 @@ class MainWindow(QMainWindow):
             self.mode_badge.setText("LIVE MODE · Applies Directly to Longshot")
             self.mode_badge.setStyleSheet(
                 "font-weight: bold; padding: 6px 12px; border-radius: 5px; "
+                "background: #e4efe7; border: 1px solid #2f7a55; color: #1f5439;"
+                if plain
+                else "font-weight: bold; padding: 6px 12px; border-radius: 5px; "
                 "background: rgba(22, 51, 27, 175); border: 1px solid #2e7d32; color: #a5d6a7;"
             )
             self.mode_btn.setText("Switch to Test Mode")
@@ -1509,18 +1762,19 @@ class MainWindow(QMainWindow):
                 f_word = "file" if mod.file_count == 1 else "files"
                 merge_kind = self.cfg.mod_merge_kind(mod)
 
+                plain = self._is_plain_ui()
                 if not is_checked:
                     it.setText(f"○   {disp}   —   Off ({mod.file_count} {f_word})")
                     it.setFont(normal_font)
-                    it.setForeground(QBrush(QColor("#9e9e9e")))
-                    it.setBackground(QBrush(QColor("#222222")))
+                    it.setForeground(QBrush(QColor("#6c766d" if plain else "#9e9e9e")))
+                    it.setBackground(QBrush(QColor("#f2eee3" if plain else "#222222")))
                     it.setToolTip("Turned off — will not be loaded in-game.")
                 elif self.cfg.is_malon_skeleton_conflict(char_path, mod.source_path):
                     malon_skipped.append(disp)
                     it.setText(f"⚠   {disp}   —   Auto-Skipped on Playable Malon")
                     it.setFont(bold_font)
-                    it.setForeground(QBrush(QColor("#ffcc80")))
-                    it.setBackground(QBrush(QColor("#33220d")))
+                    it.setForeground(QBrush(QColor("#8a540b" if plain else "#ffcc80")))
+                    it.setBackground(QBrush(QColor("#f8eecf" if plain else "#33220d")))
                     it.setToolTip(
                         "Automatically skipped while Playable Malon is selected in Step 1 to prevent Adult Malon skeleton glitches."
                     )
@@ -1529,8 +1783,8 @@ class MainWindow(QMainWindow):
                     bad_files = sorted({f for fl in mod_conflicts[name].values() for f in fl})
                     it.setText(f"⚠   {disp}   —   Conflicts with {', '.join(other_names)}")
                     it.setFont(bold_font)
-                    it.setForeground(QBrush(QColor("#ffcc80")))
-                    it.setBackground(QBrush(QColor("#33220d")))
+                    it.setForeground(QBrush(QColor("#8a540b" if plain else "#ffcc80")))
+                    it.setBackground(QBrush(QColor("#f8eecf" if plain else "#33220d")))
                     preview = "\n".join(f"• {f}" for f in bad_files[:8])
                     if len(bad_files) > 8:
                         preview += f"\n… and {len(bad_files) - 8} more"
@@ -1544,8 +1798,8 @@ class MainWindow(QMainWindow):
                     )
                     it.setText(f"⇄   {disp}   —   {tag} ({mod.file_count} {f_word})")
                     it.setFont(bold_font)
-                    it.setForeground(QBrush(QColor("#81d4fa")))
-                    it.setBackground(QBrush(QColor("#102938")))
+                    it.setForeground(QBrush(QColor("#244c73" if plain else "#81d4fa")))
+                    it.setBackground(QBrush(QColor("#e6eff7" if plain else "#102938")))
                     it.setToolTip(
                         "Safely merged into your main game on Apply (handles UI layouts, dialogue, memory headroom, and audio tables)."
                     )
@@ -1553,26 +1807,31 @@ class MainWindow(QMainWindow):
                     tag = "Ready · Safe" if mod.origin == "staged" else "Active · Safe"
                     it.setText(f"✓   {disp}   —   {tag} ({mod.file_count} {f_word})")
                     it.setFont(bold_font)
-                    it.setForeground(QBrush(QColor("#a5d6a7")))
-                    it.setBackground(QBrush(QColor("#122616")))
+                    it.setForeground(QBrush(QColor("#225c3e" if plain else "#a5d6a7")))
+                    it.setBackground(QBrush(QColor("#e4efe7" if plain else "#122616")))
                     it.setToolTip("Drop-in safe — zero conflicts with your main game or other enabled mods.")
         finally:
             self.mod_list.blockSignals(False)
 
+        plain = self._is_plain_ui()
         if not self.standalone_mods:
             self.overlap_card.setStyleSheet(
-                "QFrame { background: rgba(32, 36, 42, 155); border: 1px solid #444444; border-radius: 5px; }"
+                "QFrame { background: #f7f3ea; border: 1px solid #e3dccb; border-radius: 5px; }"
+                if plain
+                else "QFrame { background: rgba(32, 36, 42, 155); border: 1px solid #444444; border-radius: 5px; }"
             )
-            self.overlap_title.setStyleSheet("border: none; color: #cccccc;")
-            self.overlap_detail.setStyleSheet("border: none; color: #aaaaaa;")
+            self.overlap_title.setStyleSheet("border: none; color: #1f2a24;" if plain else "border: none; color: #cccccc;")
+            self.overlap_detail.setStyleSheet("border: none; color: #6c766d;" if plain else "border: none; color: #aaaaaa;")
             self.overlap_title.setText("No mods added yet")
             self.overlap_detail.setText("Add mods from Step 2 on the left, or drop any mod archive above.")
         elif not overlaps:
             self.overlap_card.setStyleSheet(
-                "QFrame { background: rgba(18, 43, 22, 165); border: 1px solid #2e7d32; border-radius: 5px; }"
+                "QFrame { background: #e4efe7; border: 1px solid #2f7a55; border-radius: 5px; }"
+                if plain
+                else "QFrame { background: rgba(18, 43, 22, 165); border: 1px solid #2e7d32; border-radius: 5px; }"
             )
-            self.overlap_title.setStyleSheet("border: none; color: #a5d6a7;")
-            self.overlap_detail.setStyleSheet("border: none; color: #cfe8d1;")
+            self.overlap_title.setStyleSheet("border: none; color: #1f5439;" if plain else "border: none; color: #a5d6a7;")
+            self.overlap_detail.setStyleSheet("border: none; color: #2f5e46;" if plain else "border: none; color: #cfe8d1;")
             extra_note = f" ({', '.join(malon_skipped)} auto-skipped for Playable Malon.)" if malon_skipped else ""
             if auto_merged:
                 self.overlap_title.setText(f"✓  All Good — Auto-Merging Compatible Layers ({len(enabled)} checked)")
@@ -1586,10 +1845,12 @@ class MainWindow(QMainWindow):
                 )
         else:
             self.overlap_card.setStyleSheet(
-                "QFrame { background: rgba(51, 34, 13, 170); border: 1px solid #ef6c00; border-radius: 5px; }"
+                "QFrame { background: #f8eecf; border: 1px solid #b3741a; border-radius: 5px; }"
+                if plain
+                else "QFrame { background: rgba(51, 34, 13, 170); border: 1px solid #ef6c00; border-radius: 5px; }"
             )
-            self.overlap_title.setStyleSheet("border: none; color: #ffcc80;")
-            self.overlap_detail.setStyleSheet("border: none; color: #ffe0b2;")
+            self.overlap_title.setStyleSheet("border: none; color: #7a4d0e;" if plain else "border: none; color: #ffcc80;")
+            self.overlap_detail.setStyleSheet("border: none; color: #6e4c1b;" if plain else "border: none; color: #ffe0b2;")
             self.overlap_title.setText(f"⚠  {len(overlaps)} File Conflict(s) Detected")
             sample = []
             for rel, owners in list(overlaps.items())[:3]:
@@ -1668,7 +1929,7 @@ class MainWindow(QMainWindow):
 
         self.log_view.clear()
         self.progress.setValue(0)
-        self.status_lbl.setStyleSheet("border: none; font-weight: bold; color: #90caf9;")
+        self._set_status_style("info")
         self.status_lbl.setText("Building your mod setup…")
         self.build_btn.setEnabled(False)
         self.mode_btn.setEnabled(False)
@@ -1693,7 +1954,7 @@ class MainWindow(QMainWindow):
         self.build_btn.setEnabled(True)
         self.mode_btn.setEnabled(True)
         self.drop_zone.setEnabled(True)
-        self.status_lbl.setStyleSheet("border: none; font-weight: bold; color: #a5d6a7;")
+        self._set_status_style("ok")
         if self.cfg.sandbox_mode:
             self.status_lbl.setText("✓  Test build complete! Your live game was not modified.")
         else:
@@ -1704,7 +1965,7 @@ class MainWindow(QMainWindow):
         self.build_btn.setEnabled(True)
         self.mode_btn.setEnabled(True)
         self.drop_zone.setEnabled(True)
-        self.status_lbl.setStyleSheet("border: none; font-weight: bold; color: #ef9a9a;")
+        self._set_status_style("error")
         self.status_lbl.setText("✕  Build failed — see details below.")
         self.log_view.appendPlainText(f"\nERROR: {err}")
         self.log_toggle_btn.setChecked(True)
