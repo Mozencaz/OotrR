@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import sys
 import subprocess
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -27,6 +26,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFrame,
+    QLineEdit,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSplitter,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -61,10 +62,12 @@ from oot_rando.midnas_devotion.core.preflight import (
     list_archive_variants,
     sanitize_mod_name,
 )
+from oot_rando.midnas_devotion.ui.midna_dance import MidnaDanceWidget
 from oot_rando.midnas_devotion.ui.mod_files_dialog import ModFilesDialog
 from oot_rando.midnas_devotion.ui.preflight_dialog import PreflightDialog
 from oot_rando.midnas_devotion.ui.settings_dialog import SettingsDialog
 from oot_rando.midnas_devotion.ui.ui_theme import (
+    MidnaInstructionsDialog,
     THEME_ARARAGI,
     THEME_MOZENCAZ,
     UiExperienceDialog,
@@ -76,11 +79,7 @@ from oot_rando.midnas_devotion.ui.ui_theme import (
 def _find_asset(filename: str) -> Optional[str]:
     from oot_rando.midnas_devotion.launcher import resolve_asset
     resolved = resolve_asset(filename)
-    if resolved and os.path.isfile(resolved):
-        return resolved
-    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    cand = os.path.join(base, "assets", filename)
-    return cand if os.path.isfile(cand) else None
+    return resolved if (resolved and os.path.isfile(resolved)) else None
 
 
 def _find_app_icon() -> Optional[str]:
@@ -403,7 +402,17 @@ class MainWindow(QMainWindow):
             "} "
         )
         self.setCentralWidget(central)
-        root = QVBoxLayout(central)
+        outer_root = QVBoxLayout(central)
+        outer_root.setContentsMargins(0, 0, 0, 0)
+        outer_root.setSpacing(0)
+        self._view_stack = QStackedWidget()
+        self._view_stack.setStyleSheet("QStackedWidget { background: transparent; border: none; }")
+        outer_root.addWidget(self._view_stack)
+
+        self._main_page = QWidget()
+        self._main_page.setStyleSheet("background: transparent;")
+        root = QVBoxLayout(self._main_page)
+        self._main_root_layout = root
         root.setContentsMargins(12, 10, 12, 10)
         root.setSpacing(10)
 
@@ -429,6 +438,10 @@ class MainWindow(QMainWindow):
         self.path_label.setStyleSheet("border: none; color: #9e9e9e; font-size: 11px;")
         self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 
+        self.instructions_btn = QPushButton("Instructions…")
+        self.instructions_btn.setToolTip("View step-by-step instructions for using Midna's Devotion.")
+        self.instructions_btn.clicked.connect(self._open_instructions)
+
         self.ui_style_btn = QPushButton("UI Style…")
         self.ui_style_btn.setToolTip("Switch between Mozencaz' Default UI Experience and Arararagi's UI Experience.")
         self.ui_style_btn.clicked.connect(self._open_ui_style_picker)
@@ -436,15 +449,16 @@ class MainWindow(QMainWindow):
         self.settings_btn = QPushButton("Configure Folders…")
         self.settings_btn.clicked.connect(self._open_settings)
 
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.clicked.connect(self.refresh_all)
+        self._refresh_btn = QPushButton("Refresh")
+        self._refresh_btn.clicked.connect(self.refresh_all)
 
         top_bar.addWidget(self.mode_badge)
         top_bar.addWidget(self.mode_btn)
         top_bar.addWidget(self.path_label, 1)
+        top_bar.addWidget(self.instructions_btn)
         top_bar.addWidget(self.ui_style_btn)
         top_bar.addWidget(self.settings_btn)
-        top_bar.addWidget(refresh_btn)
+        top_bar.addWidget(self._refresh_btn)
         root.addWidget(top_frame)
 
         # --- Middle Area: Left (Step 1 + Step 2) | Right (Step 3) ---
@@ -608,6 +622,8 @@ class MainWindow(QMainWindow):
 
         self.mod_list = QListWidget()
         self.mod_list.setMinimumHeight(110)
+        self.mod_list.viewport().setAutoFillBackground(False)
+        self.mod_list.viewport().setStyleSheet("background: transparent;")
         self.mod_list.setSpacing(2)
         self.mod_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.mod_list.customContextMenuRequested.connect(self._show_mod_context_menu)
@@ -727,13 +743,13 @@ class MainWindow(QMainWindow):
         )
         self.launch_btn.clicked.connect(self._launch_longshot)
 
-        open_dir_btn = QPushButton("Open Mods Folder")
-        open_dir_btn.setMinimumHeight(42)
-        open_dir_btn.clicked.connect(self._open_target_dir)
+        self._open_dir_btn = QPushButton("Open Mods Folder")
+        self._open_dir_btn.setMinimumHeight(42)
+        self._open_dir_btn.clicked.connect(self._open_target_dir)
 
         action_row.addWidget(self.build_btn, 2)
         action_row.addWidget(self.launch_btn, 1)
-        action_row.addWidget(open_dir_btn)
+        action_row.addWidget(self._open_dir_btn)
         s4.addLayout(action_row)
 
         prog_row = QHBoxLayout()
@@ -748,13 +764,6 @@ class MainWindow(QMainWindow):
         prog_row.addWidget(self.log_toggle_btn)
         s4.addLayout(prog_row)
 
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 100)
-        self.progress.setValue(0)
-        self.progress.setTextVisible(True)
-        self.progress.setFixedHeight(18)
-        s4.addWidget(self.progress)
-
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setFont(QFont("monospace", 9))
@@ -764,9 +773,146 @@ class MainWindow(QMainWindow):
 
         step4_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         root.addWidget(step4_card)
+
+        self._build_page = self._create_build_progress_page()
+        self._view_stack.addWidget(self._main_page)
+        self._view_stack.addWidget(self._build_page)
+        self._view_stack.setCurrentWidget(self._main_page)
+        self._compact_mode = False
+        self.drop_zone.setMinimumWidth(0)
+        self.drop_zone.title_lbl.setWordWrap(True)
+        self.drop_zone.title_lbl.setMinimumWidth(0)
+        self.drop_zone.sub_lbl.setWordWrap(True)
+        self.drop_zone.sub_lbl.setMinimumWidth(0)
+        for card in self._step_cards:
+            card.setMinimumWidth(0)
+            card._step_title.setWordWrap(True)
+            card._step_title.setMinimumWidth(0)
+            card._step_sub.setWordWrap(True)
+            card._step_sub.setMinimumWidth(0)
+        for lbl in self._section_labels:
+            lbl.setWordWrap(True)
+            lbl.setMinimumWidth(0)
         self._ui_ready = True
         self._update_mode_ui()
         self._update_mod_action_buttons()
+
+    def _create_build_progress_page(self) -> QWidget:
+        page = QWidget()
+        page.setStyleSheet("background: transparent;")
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(24, 24, 24, 24)
+        outer.addStretch(1)
+
+        center_row = QHBoxLayout()
+        center_row.addStretch(1)
+
+        self._build_card = QFrame()
+        self._build_card.setObjectName("buildStageCard")
+        self._build_card.setMinimumWidth(0)
+        self._build_card.setMaximumWidth(860)
+        self._build_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        card_lay = QVBoxLayout(self._build_card)
+        card_lay.setContentsMargins(40, 32, 40, 32)
+        card_lay.setSpacing(16)
+
+        self.midna_dancer = MidnaDanceWidget(size=280)
+        card_lay.addWidget(self.midna_dancer, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        self._build_mode_pill = QLabel()
+        self._build_mode_pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card_lay.addWidget(self._build_mode_pill, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        self._build_title_lbl = QLabel("Weaving Your Mods Together…")
+        self._build_title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._build_title_lbl.setWordWrap(True)
+        card_lay.addWidget(self._build_title_lbl)
+
+        self._build_step_lbl = QLabel("Preparing build…")
+        self._build_step_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._build_step_lbl.setWordWrap(True)
+        card_lay.addWidget(self._build_step_lbl)
+
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setTextVisible(True)
+        self.progress.setFixedHeight(28)
+        card_lay.addWidget(self.progress)
+
+        ctrl_row = QHBoxLayout()
+        ctrl_row.setSpacing(8)
+        self._build_log_toggle = QPushButton("Show Technical Log ▾")
+        self._build_log_toggle.setCheckable(True)
+        self._build_log_toggle.toggled.connect(self._toggle_build_log_view)
+        ctrl_row.addStretch(1)
+        ctrl_row.addWidget(self._build_log_toggle)
+
+        self._build_back_btn = QPushButton("← Back to Mod Manager")
+        self._build_back_btn.setVisible(False)
+        self._build_back_btn.clicked.connect(self._return_from_build_view)
+        ctrl_row.addWidget(self._build_back_btn)
+        ctrl_row.addStretch(1)
+        card_lay.addLayout(ctrl_row)
+
+        self._build_log_view = QPlainTextEdit()
+        self._build_log_view.setReadOnly(True)
+        self._build_log_view.setFont(QFont("monospace", 9))
+        self._build_log_view.setFixedHeight(220)
+        self._build_log_view.setVisible(False)
+        card_lay.addWidget(self._build_log_view)
+
+        center_row.addWidget(self._build_card, 1)
+        center_row.addStretch(1)
+        outer.addLayout(center_row)
+        outer.addStretch(1)
+        return page
+
+    def _toggle_build_log_view(self, checked: bool) -> None:
+        self._build_log_view.setVisible(checked)
+        self._build_log_toggle.setText("Hide Technical Log ▴" if checked else "Show Technical Log ▾")
+
+    def _return_from_build_view(self) -> None:
+        if self.worker and self.worker.isRunning():
+            return
+        self.midna_dancer.stop()
+        self._view_stack.setCurrentWidget(self._main_page)
+
+    def _style_build_page(self, plain: bool, compact: bool) -> None:
+        if not hasattr(self, "_build_card"):
+            return
+        title_fs = "16px" if compact else "20px"
+        step_fs = "11px" if compact else "13px"
+        if plain:
+            self._build_card.setStyleSheet(
+                "QFrame#buildStageCard { background: #fffdf8; border: 1px solid #d5ccb7; border-radius: 12px; }"
+            )
+            self._build_title_lbl.setStyleSheet(
+                f"border: none; background: transparent; color: #1f2a24; font-size: {title_fs}; font-weight: bold;"
+            )
+            self._build_step_lbl.setStyleSheet(
+                f"border: none; background: transparent; color: #4c5850; font-size: {step_fs};"
+            )
+            self._build_back_btn.setStyleSheet(
+                "QPushButton { background: #2f5f8f; color: #ffffff; font-weight: bold; "
+                "border: 1px solid #254c73; border-radius: 5px; padding: 6px 14px; }"
+                "QPushButton:hover { background: #27517a; }"
+            )
+        else:
+            self._build_card.setStyleSheet(
+                "QFrame#buildStageCard { background: rgba(16, 22, 32, 185); border: 1px solid #3f5872; border-radius: 14px; }"
+            )
+            self._build_title_lbl.setStyleSheet(
+                f"border: none; background: transparent; color: #f0f6fc; font-size: {title_fs}; font-weight: bold;"
+            )
+            self._build_step_lbl.setStyleSheet(
+                f"border: none; background: transparent; color: #90caf9; font-size: {step_fs};"
+            )
+            self._build_back_btn.setStyleSheet(
+                "QPushButton { background: rgba(25, 118, 210, 220); color: #ffffff; font-weight: bold; "
+                "border: 1px solid #64b5f6; border-radius: 5px; padding: 6px 14px; }"
+                "QPushButton:hover { background: rgba(33, 150, 243, 235); }"
+            )
 
     def _is_plain_ui(self) -> bool:
         return self.cfg.effective_ui_theme == THEME_MOZENCAZ
@@ -779,16 +925,135 @@ class MainWindow(QMainWindow):
         color = status_color(self._is_plain_ui(), tone)
         self.status_lbl.setStyleSheet(f"border: none; font-weight: bold; color: {color};")
 
-    def apply_ui_theme(self, theme_id: str, persist: bool = True) -> None:
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if not getattr(self, "_ui_ready", False):
+            return
+        w = self.width()
+        want_compact = self._compact_mode
+        if not self._compact_mode and w < 990:
+            want_compact = True
+        elif self._compact_mode and w > 1030:
+            want_compact = False
+        if want_compact != self._compact_mode:
+            self._compact_mode = want_compact
+            self.apply_ui_theme(self.cfg.effective_ui_theme, persist=False, notify=False)
+
+    def _refresh_responsive_labels(self) -> None:
+        if not getattr(self, "_ui_ready", False):
+            return
+        compact = getattr(self, "_compact_mode", False)
+        plain = self._is_plain_ui()
+
+        self.path_label.setVisible(not compact)
+        self.instructions_btn.setText("Guide" if compact else "Instructions…")
+        self.ui_style_btn.setText("Theme" if compact else "UI Style…")
+        self.settings_btn.setText("Folders…" if compact else "Configure Folders…")
+        self.btn_inspect_mod.setText("Inspect" if compact else "Inspect Files…")
+        self.btn_rename_mod.setText("Rename" if compact else "Rename…")
+        self.btn_open_mod.setText("Folder" if compact else "Open Folder")
+        self._open_dir_btn.setText("Mods Folder" if compact else "Open Mods Folder")
+        self.launch_btn.setText("▶ Play" if compact else "▶  Play Longshot")
+        self.drop_zone.browse_btn.setText("Browse…" if compact else "Browse File…")
+
+        mod = self._selected_standalone_mod()
+        if mod and mod.origin == "linked":
+            self.btn_delete_mod.setText("Remove" if compact else "Remove from List")
+        else:
+            self.btn_delete_mod.setText("Delete")
+
+        badge_pad = "3px 7px" if compact else "6px 12px"
+        badge_fs = "font-size: 11px; " if compact else ""
+        if self.cfg.sandbox_mode:
+            self.mode_badge.setText(
+                "TEST MODE · Safe" if compact else "TEST MODE · Safe (Won't Touch Your Live Game)"
+            )
+            self.mode_badge.setToolTip("TEST MODE · Safe (Won't Touch Your Live Game)")
+            self.mode_badge.setStyleSheet(
+                f"font-weight: bold; {badge_fs}padding: {badge_pad}; border-radius: 5px; "
+                "background: #f8eecf; border: 1px solid #d5a62b; color: #7a520b;"
+                if plain
+                else f"font-weight: bold; {badge_fs}padding: {badge_pad}; border-radius: 5px; "
+                "background: rgba(58, 36, 9, 175); border: 1px solid #ef6c00; color: #ffcc80;"
+            )
+            self.mode_btn.setText("Live Mode" if compact else "Switch to Live Game")
+            self.build_btn.setText("Apply (Test Mode)" if compact else "Apply & Build in Test Mode")
+        else:
+            self.mode_badge.setText(
+                "LIVE MODE" if compact else "LIVE MODE · Applies Directly to Longshot"
+            )
+            self.mode_badge.setToolTip("LIVE MODE · Applies Directly to Longshot")
+            self.mode_badge.setStyleSheet(
+                f"font-weight: bold; {badge_fs}padding: {badge_pad}; border-radius: 5px; "
+                "background: #e4efe7; border: 1px solid #2f7a55; color: #1f5c3e;"
+                if plain
+                else f"font-weight: bold; {badge_fs}padding: {badge_pad}; border-radius: 5px; "
+                "background: rgba(20, 62, 38, 180); border: 1px solid #43a047; color: #a5d6a7;"
+            )
+            self.mode_btn.setText("Test Mode" if compact else "Switch to Test Mode")
+            self.build_btn.setText("Apply (Live Game)" if compact else "Apply & Build to Live Game")
+
+    def apply_ui_theme(self, theme_id: str, persist: bool = True, notify: bool = True) -> None:
         chosen = THEME_MOZENCAZ if theme_id == THEME_MOZENCAZ else THEME_ARARAGI
         if persist:
             self.cfg.ui_theme = chosen
             self.cfg.save_settings()
         plain = chosen == THEME_MOZENCAZ
+        compact = getattr(self, "_compact_mode", False)
 
         self.central_widget.set_plain_mode(plain)
-        self.central_widget.setStyleSheet(central_stylesheet(plain))
+        self.central_widget.setStyleSheet(central_stylesheet(plain, compact=compact))
         self.drop_zone.set_plain_mode(plain)
+
+        root_lay = getattr(self, "_main_root_layout", None) or self.central_widget.layout()
+        if root_lay is not None:
+            if compact:
+                root_lay.setContentsMargins(8, 6, 8, 6)
+                root_lay.setSpacing(6)
+            else:
+                root_lay.setContentsMargins(14, 12, 14, 12)
+                root_lay.setSpacing(10)
+
+        top_lay = self.top_frame.layout()
+        if top_lay is not None:
+            if compact:
+                top_lay.setContentsMargins(6, 5, 6, 5)
+                top_lay.setSpacing(4)
+            else:
+                top_lay.setContentsMargins(10, 8, 10, 8)
+                top_lay.setSpacing(8)
+
+        badge_fs = "10px" if compact else "11px"
+        badge_pad = "2px 6px" if compact else "4px 9px"
+        title_fs = "12px" if compact else "13px"
+        sub_fs = "10px" if compact else "11px"
+        sec_fs = "11px" if compact else "12px"
+        cta_fs = "12px" if compact else "14px"
+        cta_pad = "0 10px" if compact else "0 18px"
+        cta_h = 34 if compact else 42
+        del_pad = "3px 8px" if compact else "5px 12px"
+        del_fs = "font-size: 11px; " if compact else ""
+        sum_pad = "5px 8px" if compact else "8px 10px"
+        sum_fs = "font-size: 11px; " if compact else ""
+        arrow_w = 24 if compact else 30
+
+        self.btn_move_up.setFixedWidth(arrow_w)
+        self.btn_move_dn.setFixedWidth(arrow_w)
+        self.build_btn.setMinimumHeight(cta_h)
+        self.launch_btn.setMinimumHeight(cta_h)
+        self._open_dir_btn.setMinimumHeight(cta_h)
+        if hasattr(self, "midna_dancer"):
+            self.midna_dancer.set_display_size(210 if compact else 280)
+
+        for card in self._step_cards:
+            cl = card.layout()
+            if cl is not None:
+                if compact:
+                    cl.setContentsMargins(9, 7, 9, 7)
+                    cl.setSpacing(6)
+                else:
+                    cl.setContentsMargins(14, 12, 14, 12)
+                    cl.setSpacing(10)
 
         if plain:
             self.top_frame.setStyleSheet(
@@ -801,39 +1066,39 @@ class MainWindow(QMainWindow):
                     f"QFrame#stepCard{num} {{ background: #fffdf8; border: 1px solid #e3dccb; border-radius: 8px; }}"
                 )
                 card._step_badge.setStyleSheet(
-                    "background: #e4efe7; color: #2f7a55; font-weight: bold; font-size: 11px; "
-                    "padding: 4px 9px; border-radius: 4px; border: 1px solid #c5dccb;"
+                    f"background: #e4efe7; color: #2f7a55; font-weight: bold; font-size: {badge_fs}; "
+                    f"padding: {badge_pad}; border-radius: 4px; border: 1px solid #c5dccb;"
                 )
-                card._step_title.setStyleSheet("border: none; color: #1f2a24;")
-                card._step_sub.setStyleSheet("border: none; color: #6c766d; font-size: 11px;")
+                card._step_title.setStyleSheet(f"border: none; color: #1f2a24; font-size: {title_fs}; font-weight: bold;")
+                card._step_sub.setStyleSheet(f"border: none; color: #6c766d; font-size: {sub_fs};")
                 card._step_sep.setStyleSheet("background: #e3dccb; max-height: 1px; border: none;")
             for lbl in self._section_labels:
-                lbl.setStyleSheet("border: none; font-weight: bold; color: #1f2a24;")
+                lbl.setStyleSheet(f"border: none; font-weight: bold; color: #1f2a24; font-size: {sec_fs};")
             self.btn_add_lib_vis.setStyleSheet(
                 "QPushButton { background: #2f7a55; color: #ffffff; font-weight: bold; "
-                "border: 1px solid #246042; border-radius: 4px; padding: 0 12px; }"
+                "border: 1px solid #246042; border-radius: 4px; padding: 0 10px; }"
                 "QPushButton:hover { background: #266948; }"
                 "QPushButton:disabled { background: #f2eee3; color: #a3a99f; border: 1px solid #e3dccb; }"
             )
             self.btn_delete_mod.setStyleSheet(
-                "QPushButton { background: #fbeaea; color: #8e2c2c; border: 1px solid #e2b8b8; "
-                "border-radius: 4px; padding: 5px 12px; font-weight: bold; }"
+                f"QPushButton {{ background: #fbeaea; color: #8e2c2c; border: 1px solid #e2b8b8; "
+                f"border-radius: 4px; padding: {del_pad}; {del_fs}font-weight: bold; }}"
                 "QPushButton:hover { background: #f5d8d8; }"
                 "QPushButton:disabled { background: #f2eee3; color: #a3a99f; border: 1px solid #e3dccb; }"
             )
             self.summary_label.setStyleSheet(
-                "background: #f7f3ea; border: 1px solid #e3dccb; color: #1f2a24; "
-                "border-radius: 5px; padding: 8px 10px; font-weight: bold;"
+                f"background: #f7f3ea; border: 1px solid #e3dccb; color: #1f2a24; "
+                f"border-radius: 5px; padding: {sum_pad}; {sum_fs}font-weight: bold;"
             )
             self.build_btn.setStyleSheet(
-                "QPushButton { background: #2f5f8f; color: #ffffff; font-weight: bold; "
-                "font-size: 14px; border: 1px solid #254c73; border-radius: 5px; padding: 0 18px; }"
+                f"QPushButton {{ background: #2f5f8f; color: #ffffff; font-weight: bold; "
+                f"font-size: {cta_fs}; border: 1px solid #254c73; border-radius: 5px; padding: {cta_pad}; }}"
                 "QPushButton:hover { background: #27517a; }"
                 "QPushButton:disabled { background: #e3dccb; color: #8d948a; border: 1px solid #d5ccb7; }"
             )
             self.launch_btn.setStyleSheet(
-                "QPushButton { background: #2f7a55; color: #ffffff; font-weight: bold; "
-                "font-size: 14px; border: 1px solid #246042; border-radius: 5px; padding: 0 20px; }"
+                f"QPushButton {{ background: #2f7a55; color: #ffffff; font-weight: bold; "
+                f"font-size: {cta_fs}; border: 1px solid #246042; border-radius: 5px; padding: {cta_pad}; }}"
                 "QPushButton:hover { background: #266948; }"
                 "QPushButton:disabled { background: #e3dccb; color: #8d948a; border: 1px solid #d5ccb7; }"
             )
@@ -848,71 +1113,112 @@ class MainWindow(QMainWindow):
                     f"QFrame#stepCard{num} {{ background: rgba(26, 30, 38, 150); border: 1px solid #3a3a3a; border-radius: 8px; }}"
                 )
                 card._step_badge.setStyleSheet(
-                    "background: rgba(21, 101, 192, 195); color: #ffffff; font-weight: bold; font-size: 11px; "
-                    "padding: 4px 9px; border-radius: 4px; border: none;"
+                    f"background: rgba(21, 101, 192, 195); color: #ffffff; font-weight: bold; font-size: {badge_fs}; "
+                    f"padding: {badge_pad}; border-radius: 4px; border: none;"
                 )
-                card._step_title.setStyleSheet("border: none; color: #f5f5f5;")
-                card._step_sub.setStyleSheet("border: none; color: #9e9e9e; font-size: 11px;")
+                card._step_title.setStyleSheet(f"border: none; color: #f5f5f5; font-size: {title_fs}; font-weight: bold;")
+                card._step_sub.setStyleSheet(f"border: none; color: #b0bec5; font-size: {sub_fs};")
                 card._step_sep.setStyleSheet("background: #333333; max-height: 1px; border: none;")
             for lbl in self._section_labels:
-                lbl.setStyleSheet("border: none; font-weight: bold; color: #cfd8dc;")
+                lbl.setStyleSheet(f"border: none; font-weight: bold; color: #e6eef8; font-size: {sec_fs};")
             self.btn_add_lib_vis.setStyleSheet(
-                "QPushButton { background: rgba(21, 101, 192, 195); color: #ffffff; font-weight: bold; border-radius: 4px; padding: 0 12px; }"
-                "QPushButton:hover { background: rgba(25, 118, 210, 200); }"
-                "QPushButton:disabled { background: rgba(44, 48, 54, 140); color: #777777; }"
+                "QPushButton { background: rgba(25, 118, 210, 210); color: #ffffff; font-weight: bold; "
+                "border: 1px solid #42a5f5; border-radius: 4px; padding: 0 10px; }"
+                "QPushButton:hover { background: rgba(30, 136, 229, 230); }"
+                "QPushButton:disabled { background: rgba(30, 34, 40, 120); color: #78828c; border: 1px solid #2f353d; }"
             )
             self.btn_delete_mod.setStyleSheet(
-                "QPushButton { background: rgba(74, 28, 28, 185); color: #ffcdd2; border: 1px solid #8e2c2c; "
-                "border-radius: 4px; padding: 5px 12px; font-weight: bold; }"
-                "QPushButton:hover { background: rgba(107, 34, 34, 200); }"
-                "QPushButton:disabled { background: rgba(44, 48, 54, 140); color: #777777; border: 1px solid #3c3c3c; }"
+                f"QPushButton {{ background: rgba(120, 32, 38, 190); color: #ffcdd2; border: 1px solid #e57373; "
+                f"border-radius: 4px; padding: {del_pad}; {del_fs}font-weight: bold; }}"
+                "QPushButton:hover { background: rgba(145, 38, 46, 215); }"
+                "QPushButton:disabled { background: rgba(30, 34, 40, 120); color: #78828c; border: 1px solid #2f353d; }"
             )
             self.summary_label.setStyleSheet(
-                "background: rgba(26, 36, 47, 155); border: 1px solid #34495e; color: #d6e4f0; "
-                "border-radius: 5px; padding: 8px 10px; font-weight: bold;"
+                f"background: rgba(18, 24, 34, 185); border: 1px solid #3c4f65; color: #e6eef8; "
+                f"border-radius: 5px; padding: {sum_pad}; {sum_fs}font-weight: bold;"
             )
             self.build_btn.setStyleSheet(
-                "QPushButton { background: rgba(25, 118, 210, 200); color: #ffffff; font-weight: bold; "
-                "font-size: 14px; border-radius: 5px; padding: 0 18px; }"
-                "QPushButton:hover { background: rgba(30, 136, 229, 215); }"
-                "QPushButton:disabled { background: rgba(58, 62, 68, 140); color: #888888; }"
+                f"QPushButton {{ background: rgba(25, 118, 210, 220); color: #ffffff; font-weight: bold; "
+                f"font-size: {cta_fs}; border: 1px solid #64b5f6; border-radius: 5px; padding: {cta_pad}; }}"
+                "QPushButton:hover { background: rgba(33, 150, 243, 235); }"
+                "QPushButton:disabled { background: rgba(30, 34, 40, 120); color: #78828c; border: 1px solid #2f353d; }"
             )
             self.launch_btn.setStyleSheet(
-                "QPushButton { background: rgba(46, 125, 50, 195); color: #ffffff; font-weight: bold; "
-                "font-size: 14px; border-radius: 5px; padding: 0 20px; }"
-                "QPushButton:hover { background: rgba(56, 142, 60, 215); }"
-                "QPushButton:disabled { background: rgba(58, 62, 68, 140); color: #888888; }"
+                f"QPushButton {{ background: rgba(34, 139, 94, 215); color: #ffffff; font-weight: bold; "
+                f"font-size: {cta_fs}; border: 1px solid #4db6ac; border-radius: 5px; padding: {cta_pad}; }}"
+                "QPushButton:hover { background: rgba(42, 162, 110, 235); }"
+                "QPushButton:disabled { background: rgba(30, 34, 40, 120); color: #78828c; border: 1px solid #2f353d; }"
             )
 
-        self._set_status_style(self._status_tone)
-        if self._ui_ready:
+        self._set_status_style(getattr(self, "_status_tone", "neutral"))
+        if getattr(self, "_ui_ready", False):
             self._update_mode_ui()
-            self._sync_character_list_row()
-            self._refresh_visual_library_picker()
-            self._update_overlap_panel()
-
-        if self._theme_change_callback is not None:
-            try:
-                self._theme_change_callback(chosen)
-            except Exception:
-                pass
+            self._update_mod_action_buttons()
+            self._refresh_responsive_labels()
+        if notify:
+            cb = getattr(self, "_theme_change_callback", None)
+            if callable(cb):
+                cb(chosen)
 
     def _prompt_first_launch(self) -> None:
+        if getattr(self, "_first_launch_done", False):
+            return
+        self._first_launch_done = True
         dlg = UiExperienceDialog(
             current_theme=self.cfg.ui_theme,
             first_launch=True,
-            parent=self,
+            parent=None,
         )
         if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected_theme:
             self.apply_ui_theme(dlg.selected_theme, persist=True)
+        else:
+            self.apply_ui_theme(self.cfg.effective_ui_theme, persist=True)
         if not self.cfg.is_configured:
-            self._prompt_initial_setup()
+            QTimer.singleShot(80, self._prompt_initial_setup)
+
+    def _prompt_text_input(self, title: str, label: str, initial_text: str = "") -> Tuple[str, bool]:
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        dlg.setModal(True)
+        dlg.setMinimumWidth(380)
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setSpacing(10)
+
+        lbl = QLabel(label)
+        lbl.setWordWrap(True)
+        lay.addWidget(lbl)
+
+        edit = QLineEdit(dlg)
+        edit.setText(initial_text)
+        edit.selectAll()
+        lay.addWidget(edit)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        cancel_btn = QPushButton("Cancel")
+        ok_btn = QPushButton("OK")
+        ok_btn.setDefault(True)
+        cancel_btn.clicked.connect(dlg.reject)
+        ok_btn.clicked.connect(dlg.accept)
+        edit.returnPressed.connect(dlg.accept)
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(ok_btn)
+        lay.addLayout(btn_row)
+
+        edit.setFocus()
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            return edit.text(), True
+        return "", False
+
+    def _open_instructions(self) -> None:
+        MidnaInstructionsDialog(None).exec()
 
     def _open_ui_style_picker(self) -> None:
         dlg = UiExperienceDialog(
             current_theme=self.cfg.effective_ui_theme,
             first_launch=False,
-            parent=self,
+            parent=None,
         )
         if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected_theme:
             self.apply_ui_theme(dlg.selected_theme, persist=True)
@@ -931,7 +1237,7 @@ class MainWindow(QMainWindow):
             self._open_settings()
 
     def _open_settings(self) -> None:
-        dlg = SettingsDialog(self.cfg, self)
+        dlg = SettingsDialog(self.cfg, None)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.refresh_all()
 
@@ -1036,7 +1342,7 @@ class MainWindow(QMainWindow):
                 item.setBackground(QBrush(QColor("#e0f2ef")))
             else:
                 item.setForeground(QBrush(QColor("#80cbc4")))
-                item.setBackground(QBrush(QColor(16, 46, 41, 185)))
+                item.setBackground(QBrush(QColor(16, 52, 46, 130)))
             item.setToolTip("Selected in Step 1 — automatically included when you click Apply in Step 4.")
         finally:
             self.mod_list.blockSignals(False)
@@ -1189,11 +1495,10 @@ class MainWindow(QMainWindow):
                     if chosen_variant
                     else os.path.splitext(os.path.basename(path))[0]
                 )
-                mod_name, ok = QInputDialog.getText(
-                    self,
+                mod_name, ok = self._prompt_text_input(
                     "Name Mod",
                     "Enter a name for this mod:",
-                    text=sanitize_mod_name(suggested),
+                    sanitize_mod_name(suggested),
                 )
                 if not ok or not mod_name.strip():
                     return
@@ -1266,7 +1571,7 @@ class MainWindow(QMainWindow):
         self.btn_rename_mod.setEnabled(has_sel and (mod is not None and mod.origin != "linked"))
         self.btn_delete_mod.setEnabled(has_sel)
         if mod and mod.origin == "linked":
-            self.btn_delete_mod.setText("Remove from List")
+            self.btn_delete_mod.setText("Remove" if getattr(self, "_compact_mode", False) else "Remove from List")
         else:
             self.btn_delete_mod.setText("Delete")
 
@@ -1351,7 +1656,7 @@ class MainWindow(QMainWindow):
         if not mod:
             return
         if os.path.isdir(mod.source_path):
-            subprocess.Popen(["xdg-open", mod.source_path], env=clean_subprocess_env())
+            from oot_rando.paths import open_in_file_manager; open_in_file_manager(mod.source_path, env=clean_subprocess_env())
         else:
             QMessageBox.warning(self, "Folder Not Found", f"Folder no longer exists:\n{mod.source_path}")
             self.refresh_all()
@@ -1371,11 +1676,10 @@ class MainWindow(QMainWindow):
             )
             return
 
-        new_raw, ok = QInputDialog.getText(
-            self,
+        new_raw, ok = self._prompt_text_input(
             "Rename Mod",
             f"Enter a new folder name for '{mod.name}':",
-            text=mod.name,
+            mod.name,
         )
         if not ok or not new_raw.strip():
             return
@@ -1583,6 +1887,7 @@ class MainWindow(QMainWindow):
         self.build_btn.setEnabled(configured and not (self.worker and self.worker.isRunning()))
         self._update_mod_action_buttons()
         self._update_visual_picker_buttons()
+        self._refresh_responsive_labels()
 
     def _toggle_mode(self) -> None:
         if self.cfg.sandbox_mode:
@@ -1767,14 +2072,14 @@ class MainWindow(QMainWindow):
                     it.setText(f"○   {disp}   —   Off ({mod.file_count} {f_word})")
                     it.setFont(normal_font)
                     it.setForeground(QBrush(QColor("#6c766d" if plain else "#9e9e9e")))
-                    it.setBackground(QBrush(QColor("#f2eee3" if plain else "#222222")))
+                    it.setBackground(QBrush(QColor("#f2eee3") if plain else QColor(22, 26, 33, 95)))
                     it.setToolTip("Turned off — will not be loaded in-game.")
                 elif self.cfg.is_malon_skeleton_conflict(char_path, mod.source_path):
                     malon_skipped.append(disp)
                     it.setText(f"⚠   {disp}   —   Auto-Skipped on Playable Malon")
                     it.setFont(bold_font)
                     it.setForeground(QBrush(QColor("#8a540b" if plain else "#ffcc80")))
-                    it.setBackground(QBrush(QColor("#f8eecf" if plain else "#33220d")))
+                    it.setBackground(QBrush(QColor("#f8eecf") if plain else QColor(68, 42, 12, 135)))
                     it.setToolTip(
                         "Automatically skipped while Playable Malon is selected in Step 1 to prevent Adult Malon skeleton glitches."
                     )
@@ -1784,7 +2089,7 @@ class MainWindow(QMainWindow):
                     it.setText(f"⚠   {disp}   —   Conflicts with {', '.join(other_names)}")
                     it.setFont(bold_font)
                     it.setForeground(QBrush(QColor("#8a540b" if plain else "#ffcc80")))
-                    it.setBackground(QBrush(QColor("#f8eecf" if plain else "#33220d")))
+                    it.setBackground(QBrush(QColor("#f8eecf") if plain else QColor(68, 42, 12, 135)))
                     preview = "\n".join(f"• {f}" for f in bad_files[:8])
                     if len(bad_files) > 8:
                         preview += f"\n… and {len(bad_files) - 8} more"
@@ -1799,7 +2104,7 @@ class MainWindow(QMainWindow):
                     it.setText(f"⇄   {disp}   —   {tag} ({mod.file_count} {f_word})")
                     it.setFont(bold_font)
                     it.setForeground(QBrush(QColor("#244c73" if plain else "#81d4fa")))
-                    it.setBackground(QBrush(QColor("#e6eff7" if plain else "#102938")))
+                    it.setBackground(QBrush(QColor("#e6eff7") if plain else QColor(16, 48, 72, 135)))
                     it.setToolTip(
                         "Safely merged into your main game on Apply (handles UI layouts, dialogue, memory headroom, and audio tables)."
                     )
@@ -1808,7 +2113,7 @@ class MainWindow(QMainWindow):
                     it.setText(f"✓   {disp}   —   {tag} ({mod.file_count} {f_word})")
                     it.setFont(bold_font)
                     it.setForeground(QBrush(QColor("#225c3e" if plain else "#a5d6a7")))
-                    it.setBackground(QBrush(QColor("#e4efe7" if plain else "#122616")))
+                    it.setBackground(QBrush(QColor("#e4efe7") if plain else QColor(18, 52, 28, 135)))
                     it.setToolTip("Drop-in safe — zero conflicts with your main game or other enabled mods.")
         finally:
             self.mod_list.blockSignals(False)
@@ -1875,7 +2180,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Folder Not Set", "Configure your folders first.")
             return
         os.makedirs(target, exist_ok=True)
-        subprocess.Popen(["xdg-open", target], env=clean_subprocess_env())
+        from oot_rando.paths import open_in_file_manager; open_in_file_manager(target, env=clean_subprocess_env())
 
     def _launch_longshot(self) -> None:
         binary = self.cfg.longshot_binary
@@ -1928,9 +2233,34 @@ class MainWindow(QMainWindow):
         )
 
         self.log_view.clear()
+        self._build_log_view.clear()
+        self._build_log_toggle.setChecked(False)
+        self._build_back_btn.setVisible(False)
         self.progress.setValue(0)
         self._set_status_style("info")
         self.status_lbl.setText("Building your mod setup…")
+        plain = self._is_plain_ui()
+        if self.cfg.sandbox_mode:
+            self._build_mode_pill.setText("TEST MODE · Safe Preview")
+            self._build_mode_pill.setStyleSheet(
+                "font-weight: bold; font-size: 11px; padding: 3px 10px; border-radius: 10px; "
+                "background: #f8eecf; border: 1px solid #d5a62b; color: #7a520b;"
+                if plain
+                else "font-weight: bold; font-size: 11px; padding: 3px 10px; border-radius: 10px; "
+                "background: rgba(58, 36, 9, 185); border: 1px solid #ef6c00; color: #ffcc80;"
+            )
+        else:
+            self._build_mode_pill.setText("LIVE MODE · Applying to Game")
+            self._build_mode_pill.setStyleSheet(
+                "font-weight: bold; font-size: 11px; padding: 3px 10px; border-radius: 10px; "
+                "background: #e4efe7; border: 1px solid #2f7a55; color: #1f5c3e;"
+                if plain
+                else "font-weight: bold; font-size: 11px; padding: 3px 10px; border-radius: 10px; "
+                "background: rgba(20, 62, 38, 185); border: 1px solid #43a047; color: #a5d6a7;"
+            )
+        self._style_build_page(plain, getattr(self, "_compact_mode", False))
+        self._build_title_lbl.setText("Weaving Your Mods Together…")
+        self._build_step_lbl.setText("Preparing build…")
         self.build_btn.setEnabled(False)
         self.mode_btn.setEnabled(False)
         self.drop_zone.setEnabled(False)
@@ -1940,17 +2270,23 @@ class MainWindow(QMainWindow):
         self.worker.progress_val.connect(self.progress.setValue)
         self.worker.finished_ok.connect(self._on_build_ok)
         self.worker.failed.connect(self._on_build_failed)
+        self._view_stack.setCurrentWidget(self._build_page)
+        self.midna_dancer.start()
         self.worker.start()
         self._update_mod_action_buttons()
         self._update_visual_picker_buttons()
 
     def _on_log_line(self, line: str) -> None:
         self.log_view.appendPlainText(line)
+        self._build_log_view.appendPlainText(line)
         friendly = _friendly_step_from_log(line)
         if friendly:
             self.status_lbl.setText(friendly)
+            self._build_step_lbl.setText(friendly)
 
     def _on_build_ok(self) -> None:
+        self.midna_dancer.stop()
+        self._view_stack.setCurrentWidget(self._main_page)
         self.build_btn.setEnabled(True)
         self.mode_btn.setEnabled(True)
         self.drop_zone.setEnabled(True)
@@ -1962,13 +2298,20 @@ class MainWindow(QMainWindow):
         self.refresh_all()
 
     def _on_build_failed(self, err: str) -> None:
+        self.midna_dancer.stop()
         self.build_btn.setEnabled(True)
         self.mode_btn.setEnabled(True)
         self.drop_zone.setEnabled(True)
         self._set_status_style("error")
         self.status_lbl.setText("✕  Build failed — see details below.")
         self.log_view.appendPlainText(f"\nERROR: {err}")
-        self.log_toggle_btn.setChecked(True)
+        self._build_log_view.appendPlainText(f"\nERROR: {err}")
+        self._build_title_lbl.setText("✕  Build Failed")
+        self._build_title_lbl.setStyleSheet(
+            "border: none; background: transparent; color: #e57373; font-size: 19px; font-weight: bold;"
+        )
+        self._build_step_lbl.setText(err)
+        self._build_log_toggle.setChecked(True)
+        self._build_back_btn.setVisible(True)
         self._update_mod_action_buttons()
         self._update_visual_picker_buttons()
-        QMessageBox.critical(self, "Build Failed", err)

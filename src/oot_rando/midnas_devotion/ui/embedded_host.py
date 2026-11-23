@@ -15,10 +15,12 @@ class EmbeddedMidnaHost:
         tk_root: tk.Misc,
         container: tk.Frame,
         on_fallback_window: Optional[Callable[[], None]] = None,
+        on_theme_changed: Optional[Callable[[str], None]] = None,
     ) -> None:
         self._tk_root = tk_root
         self._container = container
         self._on_fallback = on_fallback_window
+        self._on_theme_changed = on_theme_changed
 
         self._qapp = None
         self._parent_qwindow = None
@@ -42,6 +44,16 @@ class EmbeddedMidnaHost:
             return False
         worker = getattr(self._window, "worker", None)
         return bool(worker and worker.isRunning())
+
+    def sync_from_randomizer(self, mods_dir: Optional[str] = None, *, refresh_always: bool = False) -> None:
+        if self._window is None or self._destroyed:
+            return
+        try:
+            changed = self._window.cfg.sync_from_randomizer(mods_dir, persist=True)
+            if changed or refresh_always:
+                self._window.refresh_all()
+        except Exception:
+            pass
 
     def ensure_mounted(self) -> bool:
         if self._destroyed:
@@ -109,14 +121,19 @@ class EmbeddedMidnaHost:
 
         from oot_rando.midnas_devotion.ui.ui_theme import container_bg_for_theme
 
-        def _sync_container_bg(theme_id: str) -> None:
+        def _on_qt_theme_changed(theme_id: str) -> None:
             try:
                 self._container.configure(background=container_bg_for_theme(theme_id))
             except Exception:
                 pass
+            if self._on_theme_changed is not None:
+                try:
+                    self._on_theme_changed(theme_id)
+                except Exception:
+                    pass
 
-        win.set_theme_change_callback(_sync_container_bg)
-        _sync_container_bg(cfg.effective_ui_theme)
+        win.set_theme_change_callback(_on_qt_theme_changed)
+        _on_qt_theme_changed(cfg.effective_ui_theme)
 
         handle.setParent(parent_qwin)
         self._window = win

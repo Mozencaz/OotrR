@@ -39,16 +39,21 @@ def container_bg_for_theme(theme_id: str) -> str:
     return "#f2eee3" if theme_id == THEME_MOZENCAZ else "#161a21"
 
 
-def central_stylesheet(plain: bool) -> str:
+def central_stylesheet(plain: bool, compact: bool = False) -> str:
+    font_rule = "font-size: 11px; " if compact else ""
+    btn_pad = "3px 7px" if compact else "5px 10px"
+    combo_pad = "2px 6px" if compact else "4px 8px"
     if plain:
         return (
-            "QWidget#backdropCentral { background-color: #f2eee3; color: #1f2a24; } "
-            "QWidget#backdropCentral QLabel { color: #1f2a24; background-color: transparent; } "
-            "QWidget#backdropCentral QCheckBox { color: #1f2a24; background-color: transparent; spacing: 6px; } "
-            "QWidget#backdropCentral QFrame { background-color: #fffdf8; color: #1f2a24; } "
+            f"QWidget#backdropCentral {{ background-color: #f2eee3; color: #1f2a24; {font_rule}}} "
+            f"QWidget#backdropCentral QLabel {{ color: #1f2a24; background-color: transparent; {font_rule}}} "
+            f"QWidget#backdropCentral QCheckBox {{ color: #1f2a24; background-color: transparent; spacing: 6px; {font_rule}}} "
+            "QWidget#backdropCentral .QFrame { background-color: #fffdf8; color: #1f2a24; } "
+            "QWidget#backdropCentral QSplitter { background-color: transparent; } "
+            f"QWidget#backdropCentral QLabel {{ color: #1f2a24; background-color: transparent; {font_rule}}} "
             "QWidget#backdropCentral QPushButton { "
-            "  background-color: #f7f3ea; color: #1f2a24; border: 1px solid #cfc5ad; "
-            "  border-radius: 5px; padding: 5px 10px; "
+            f"  background-color: #f7f3ea; color: #1f2a24; border: 1px solid #cfc5ad; "
+            f"  border-radius: 5px; padding: {btn_pad}; {font_rule}"
             "} "
             "QWidget#backdropCentral QPushButton:hover { background-color: #efe9db; border-color: #b8ac92; } "
             "QWidget#backdropCentral QPushButton:pressed { background-color: #e6dfd0; } "
@@ -59,9 +64,9 @@ def central_stylesheet(plain: bool) -> str:
             "QWidget#backdropCentral QComboBox, "
             "QWidget#backdropCentral QTextEdit, "
             "QWidget#backdropCentral QPlainTextEdit { "
-            "  background-color: #f7f3ea; color: #1f2a24; border: 1px solid #cfc5ad; border-radius: 5px; "
+            f"  background-color: #f7f3ea; color: #1f2a24; border: 1px solid #cfc5ad; border-radius: 5px; {font_rule}"
             "} "
-            "QWidget#backdropCentral QComboBox { padding: 4px 8px; } "
+            f"QWidget#backdropCentral QComboBox {{ padding: {combo_pad}; }} "
             "QWidget#backdropCentral QListWidget::item:selected { "
             "  background-color: #dcebe0; color: #1f2a24; "
             "} "
@@ -70,8 +75,8 @@ def central_stylesheet(plain: bool) -> str:
             "  selection-background-color: #e4efe7; selection-color: #1f2a24; "
             "} "
             "QWidget#backdropCentral QProgressBar { "
-            "  background-color: #f7f3ea; color: #1f2a24; border: 1px solid #cfc5ad; "
-            "  border-radius: 4px; text-align: center; "
+            f"  background-color: #f7f3ea; color: #1f2a24; border: 1px solid #cfc5ad; "
+            f"  border-radius: 4px; text-align: center; {font_rule}"
             "} "
             "QWidget#backdropCentral QProgressBar::chunk { background-color: #2f7a55; border-radius: 3px; } "
             "QWidget#backdropCentral QSplitter::handle { background-color: #e3dccb; } "
@@ -83,12 +88,44 @@ def central_stylesheet(plain: bool) -> str:
             "QWidget#backdropCentral QScrollBar::sub-line:vertical { height: 0px; } "
         )
     return (
-        "QWidget#backdropCentral, QWidget#backdropCentral QLabel { color: #FFFFFF; background-color: transparent; } "
-        "QWidget#backdropCentral QFrame { background-color: rgba(22, 26, 33, 145); color: #FFFFFF; } "
-        "QWidget#backdropCentral QListWidget, QWidget#backdropCentral QComboBox, QWidget#backdropCentral QTextEdit { "
+        f"QWidget#backdropCentral, QWidget#backdropCentral QLabel {{ color: #FFFFFF; background-color: transparent; {font_rule}}} "
+        f"QWidget#backdropCentral QCheckBox {{ color: #FFFFFF; background-color: transparent; spacing: 6px; {font_rule}}} "
+        "QWidget#backdropCentral .QFrame { background-color: rgba(22, 26, 33, 145); color: #FFFFFF; } "
+        "QWidget#backdropCentral QSplitter { background-color: transparent; } "
+        f"QWidget#backdropCentral QLabel {{ color: #FFFFFF; background-color: transparent; {font_rule}}} "
+        "QWidget#backdropCentral QPushButton { "
+        f"  background-color: rgba(34, 42, 54, 185); color: #f0f4f8; border: 1px solid #485b70; "
+        f"  border-radius: 5px; padding: {btn_pad}; {font_rule}"
+        "} "
+        "QWidget#backdropCentral QPushButton:hover { background-color: rgba(46, 58, 76, 210); border-color: #64b5f6; } "
+        "QWidget#backdropCentral QPushButton:pressed { background-color: rgba(25, 118, 210, 210); border-color: #90caf9; } "
+        "QWidget#backdropCentral QPushButton:disabled { "
+        "  background-color: rgba(30, 34, 40, 120); color: #78828c; border-color: #2f353d; "
+        "} "
+        "QWidget#backdropCentral QComboBox, "
+        "QWidget#backdropCentral QTextEdit, "
+        "QWidget#backdropCentral QPlainTextEdit { "
         "  background-color: rgba(16, 20, 26, 155); "
         "  color: #FFFFFF; "
+        "  border: 1px solid #3c4856; "
+        f"  border-radius: 5px; {font_rule}"
         "} "
+        "QWidget#backdropCentral QListWidget { "
+        "  background-color: rgba(14, 18, 24, 105); "
+        "  color: #FFFFFF; "
+        "  border: 1px solid #3c4856; "
+        f"  border-radius: 5px; {font_rule}"
+        "} "
+        "QWidget#backdropCentral QListWidget::item { "
+        "  border-radius: 4px; padding: 2px 4px; "
+        "} "
+        "QWidget#backdropCentral QListWidget::item:hover { "
+        "  background-color: rgba(56, 84, 116, 145); "
+        "} "
+        "QWidget#backdropCentral QListWidget::item:selected { "
+        "  background-color: rgba(33, 98, 168, 165); color: #FFFFFF; "
+        "} "
+        f"QWidget#backdropCentral QComboBox {{ padding: {combo_pad}; }} "
         "QWidget#backdropCentral QComboBox QAbstractItemView { "
         "  background-color: rgba(22, 26, 33, 235); "
         "  color: #FFFFFF; "
@@ -403,9 +440,35 @@ class UiExperienceDialog(QDialog):
         cards.addWidget(ara_card, 1)
         root.addLayout(cards)
 
+        note_box = QFrame()
+        note_box.setStyleSheet(
+            "QFrame { background-color: #fffdf8; border: 1px solid #e3dccb; border-radius: 7px; }"
+        )
+        note_lay = QVBoxLayout(note_box)
+        note_lay.setContentsMargins(12, 9, 12, 9)
+        note_lbl = QLabel(
+            "Midna's Devotion is developed independently by Arararagi. "
+            "Huge thanks to Mozencaz for welcoming it into his amazing randomizer!"
+        )
+        note_lbl.setWordWrap(True)
+        note_lbl.setStyleSheet("color: #1f2a24; font-size: 11px;")
+        note_lay.addWidget(note_lbl)
+        root.addWidget(note_box)
+
+        footer_row = QHBoxLayout()
+        instr_btn = QPushButton("Instructions…")
+        instr_btn.setMinimumHeight(32)
+        instr_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        instr_btn.setStyleSheet(
+            "QPushButton { background-color: #fffdf8; color: #2f5f8f; font-weight: bold; "
+            "border: 1px solid #cfc5ad; border-radius: 5px; padding: 5px 12px; } "
+            "QPushButton:hover { background-color: #f7f3ea; }"
+        )
+        instr_btn.clicked.connect(self._open_instructions)
+        footer_row.addWidget(instr_btn)
+        footer_row.addStretch(1)
+
         if not first_launch:
-            cancel_row = QHBoxLayout()
-            cancel_row.addStretch(1)
             cancel_btn = QPushButton("Cancel")
             cancel_btn.setStyleSheet(
                 "QPushButton { background-color: #f7f3ea; color: #1f2a24; border: 1px solid #cfc5ad; "
@@ -413,9 +476,100 @@ class UiExperienceDialog(QDialog):
                 "QPushButton:hover { background-color: #efe9db; }"
             )
             cancel_btn.clicked.connect(self.reject)
-            cancel_row.addWidget(cancel_btn)
-            root.addLayout(cancel_row)
+            footer_row.addWidget(cancel_btn)
+        root.addLayout(footer_row)
+
+    def _open_instructions(self) -> None:
+        MidnaInstructionsDialog(self).exec()
 
     def _choose(self, theme_id: str) -> None:
         self.selected_theme = theme_id
         self.accept()
+
+
+MIDNA_INSTRUCTIONS_STEPS = [
+    (
+        "1. Generate the Seed First",
+        "Go to New seed in the randomizer, pick your settings, and generate/install your seed so the generated seed folder is ready in your mods directory.",
+    ),
+    (
+        "2. Run Midna's Devotion Before Playing",
+        "After generating a seed, open Midna's Devotion (Mod Manager) to pick your character, add/order mods, and apply them BEFORE launching the game or creating a new save file.",
+    ),
+    (
+        "3. Launch Game & Start a New Save",
+        "Once Midna's Devotion finishes applying your mods, launch the game and start a new save file (saving after the intro) so everything loads cleanly from the start.",
+    ),
+    (
+        "4. Avoid Mid-Run Save Swaps",
+        "Always apply mods before starting a fresh save file on a newly generated seed rather than swapping mod sets onto an existing save mid-run.",
+    ),
+]
+
+
+class MidnaInstructionsDialog(QDialog):
+    "Workflow instructions for using Midna's Devotion with the Randomizer."
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Midna's Devotion — How to Use")
+        self.setModal(True)
+        self.setMinimumWidth(560)
+        self.setStyleSheet(
+            "QDialog { background-color: #f2eee3; color: #1f2a24; } "
+            "QLabel { background-color: transparent; color: #1f2a24; }"
+        )
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 18, 20, 16)
+        root.setSpacing(12)
+
+        title = QLabel("Midna's Devotion — Mod Manager Instructions")
+        tf = QFont()
+        tf.setPointSize(13)
+        tf.setBold(True)
+        title.setFont(tf)
+        root.addWidget(title)
+
+        sub = QLabel(
+            "Follow this order so your seed, merged mods, and save file stay in sync:"
+        )
+        sub.setWordWrap(True)
+        sub.setStyleSheet("color: #5c665d; font-size: 11px;")
+        root.addWidget(sub)
+
+        for heading, desc in MIDNA_INSTRUCTIONS_STEPS:
+            card = QFrame()
+            card.setStyleSheet(
+                "QFrame { background-color: #fffdf8; border: 1px solid #e3dccb; border-radius: 7px; }"
+            )
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(12, 10, 12, 10)
+            cl.setSpacing(3)
+
+            hl = QLabel(heading)
+            hf = QFont()
+            hf.setBold(True)
+            hl.setFont(hf)
+            hl.setStyleSheet("color: #1f2a24;")
+
+            dl = QLabel(desc)
+            dl.setWordWrap(True)
+            dl.setStyleSheet("color: #5c665d; font-size: 11px;")
+
+            cl.addWidget(hl)
+            cl.addWidget(dl)
+            root.addWidget(card)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        close_btn = QPushButton("Got It")
+        close_btn.setMinimumHeight(32)
+        close_btn.setStyleSheet(
+            "QPushButton { background-color: #2f7a55; color: #ffffff; font-weight: bold; "
+            "border: 1px solid #246042; border-radius: 5px; padding: 5px 16px; } "
+            "QPushButton:hover { background-color: #266948; }"
+        )
+        close_btn.clicked.connect(self.accept)
+        btn_row.addWidget(close_btn)
+        root.addLayout(btn_row)

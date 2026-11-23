@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from oot_rando.midnas_devotion.core.config import AppConfig, StandaloneMod, clean_subprocess_env
+from oot_rando.midnas_devotion.core.config import StandaloneMod, clean_subprocess_env
 
 
 def _human_size(num_bytes: int) -> str:
@@ -210,4 +210,4 @@ class ModFilesDialog(QDialog):
 
     def _open_folder(self) -> None:
         if os.path.isdir(self.mod.source_path):
-            subprocess.Popen(["xdg-open", self.mod.source_path], env=clean_subprocess_env())
+            from oot_rando.paths import open_in_file_manager; open_in_file_manager(self.mod.source_path, env=clean_subprocess_env())

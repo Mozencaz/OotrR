@@ -456,8 +456,16 @@ class Sidebar(tk.Frame):
                  background=c['sidebar']).pack(anchor='w')
         tk.Label(names, text='Remake edition', font=fonts.small, foreground=c['sidebar_muted'],
                  background=c['sidebar']).pack(anchor='w')
-        tk.Label(self, text='MENU', font=(fonts.label[0], 8), foreground=c['sidebar_muted'],
-                 background=c['sidebar']).pack(anchor='w', padx=26, pady=(0, 6))
+        self._menu_lbl = tk.Label(self, text='MENU', font=(fonts.label[0], 8), foreground=c['sidebar_muted'],
+                                  background=c['sidebar'])
+        self._menu_lbl.pack(anchor='w', padx=26, pady=(0, 6))
+        self._midna_active = False
+        self._brand_frame = brand
+        self._mark_canvas = mark
+        self._names_frame = names
+        self._brand_title_lbl = names.winfo_children()[0]
+        self._brand_sub_lbl = names.winfo_children()[1]
+        self._gaps = []
         self.footer = tk.Label(self, text=footer, font=fonts.small, foreground=c['sidebar_muted'],
                                background=c['sidebar'], justify='left', wraplength=170)
         self.footer.pack(side='bottom', anchor='w', padx=26, pady=20)
@@ -483,45 +491,86 @@ class Sidebar(tk.Frame):
 
     def gap(self):
         """Pushes the following entries to the bottom of the column."""
-        tk.Frame(self, background=COLORS['sidebar']).pack(fill='both', expand=True)
+        p = self._palette()
+        spacer = tk.Frame(self, background=p["bg"])
+        spacer.pack(fill="both", expand=True)
+        self._gaps.append(spacer)
 
     def add_action(self, key, text, command, icon_image=None):
-        c = COLORS
-        row = tk.Frame(self, background=c['sidebar_hover'], cursor='hand2')
-        row.pack(fill='x', padx=12, pady=(6, 4))
-        bar = tk.Frame(row, background=c['gold'], width=3)
-        bar.pack(side='left', fill='y', pady=6)
+        p = self._palette()
+        row = tk.Frame(self, background=p["action_bg"], cursor="hand2")
+        row.pack(fill="x", padx=12, pady=(6, 4))
+        bar = tk.Frame(row, background=p["accent"], width=3)
+        bar.pack(side="left", fill="y", pady=6)
         if icon_image is not None:
-            icon = tk.Label(row, image=icon_image, background=c['sidebar_hover'])
-            icon.pack(side='left', padx=(9, 6), pady=7)
+            icon = tk.Label(row, image=icon_image, background=p["action_bg"])
+            icon.pack(side="left", padx=(9, 6), pady=7)
         else:
-            icon = tk.Label(row, text='', font=(self.fonts.icons, 12), foreground=c['gold'], background=c['sidebar_hover'], width=2)
-            icon.pack(side='left', padx=(10, 6), pady=9)
-        label = tk.Label(row, text=text, font=self.fonts.nav_active, foreground='#fbf6e6', background=c['sidebar_hover'], anchor='w')
-        label.pack(side='left', fill='x', expand=True, pady=9)
+            icon = tk.Label(row, text="", font=(self.fonts.icons, 12), foreground=p["accent"], background=p["action_bg"], width=2)
+            icon.pack(side="left", padx=(10, 6), pady=9)
+        label = tk.Label(row, text=text, font=self.fonts.nav_active, foreground=p["action_fg"], background=p["action_bg"], anchor="w")
+        label.pack(side="left", fill="x", expand=True, pady=9)
         parts = (row, icon, label)
         self.items[key] = (row, bar, icon, label)
         for widget in parts:
-            widget.bind('<Button-1>', lambda _e, fn=command: fn())
-            widget.bind('<Enter>', lambda _e, k=key: self.paint(k, hover=True))
-            widget.bind('<Leave>', lambda _e, k=key: (self.paint(k), bar.configure(background=c['gold']), label.configure(foreground='#fbf6e6', font=self.fonts.nav_active), [w.configure(background=c['sidebar_hover']) for w in (row, icon, label)]))
+            widget.bind("<Button-1>", lambda _e, fn=command: fn())
+            widget.bind("<Enter>", lambda _e, k=key: self.paint(k, hover=True))
+            widget.bind("<Leave>", lambda _e, k=key: self.paint(k))
 
-    def add_note(self, text):
+
+    def _palette(self):
         c = COLORS
-        box = tk.Frame(self, background="#122e24", highlightbackground=c["hero_line"], highlightthickness=1)
-        box.pack(fill="x", padx=12, pady=(2, 6))
-        bar = tk.Frame(box, background=c["gold"], width=2)
-        bar.pack(side="left", fill="y")
-        tk.Label(
-            box,
-            text=text,
-            font=self.fonts.small,
-            foreground=c["sidebar_text"],
-            background="#122e24",
-            justify="left",
-            anchor="w",
-            wraplength=168,
-        ).pack(side="left", fill="x", expand=True, padx=(8, 8), pady=7)
+        if getattr(self, "_midna_active", False):
+            return {
+                "bg": "#121824",
+                "fg": "#dce8f5",
+                "muted": "#8da4be",
+                "hover_bg": "#1b2538",
+                "active_bg": "#233552",
+                "accent": "#64b5f6",
+                "action_bg": "#172030",
+                "action_fg": "#90caf9",
+                "brand_fg": "#eef5fc",
+            }
+        return {
+            "bg": c["sidebar"],
+            "fg": c["sidebar_text"],
+            "muted": c["sidebar_muted"],
+            "hover_bg": c["sidebar_hover"],
+            "active_bg": c["sidebar_active"],
+            "accent": c["gold"],
+            "action_bg": c["sidebar_hover"],
+            "action_fg": "#fbf6e6",
+            "brand_fg": "#f4eedc",
+        }
+
+    def set_midna_style(self, active: bool) -> None:
+        active = bool(active)
+        if self._midna_active == active:
+            return
+        self._midna_active = active
+        p = self._palette()
+
+        self.configure(background=p["bg"])
+        self._brand_frame.configure(background=p["bg"])
+        self._names_frame.configure(background=p["bg"])
+        self._brand_title_lbl.configure(background=p["bg"], foreground=p["brand_fg"])
+        self._brand_sub_lbl.configure(background=p["bg"], foreground=p["muted"])
+        self._menu_lbl.configure(background=p["bg"], foreground=p["muted"])
+        self.footer.configure(background=p["bg"], foreground=p["muted"])
+
+        self._mark_canvas.configure(background=p["bg"])
+        self._mark_canvas.delete("all")
+        triforce(self._mark_canvas, 1, 1, 28, p["accent"])
+
+        for g in self._gaps:
+            g.configure(background=p["bg"])
+
+        for key in self.items:
+            self.paint(key)
+
+        self._mark_canvas.update_idletasks()
+        self.update_idletasks()
 
     def select(self, key):
         previous, self.current = self.current, key
@@ -530,16 +579,25 @@ class Sidebar(tk.Frame):
         self.paint(key)
 
     def paint(self, key, hover=False):
-        c = COLORS
+        if key not in self.items:
+            return
         row, bar, icon, label = self.items[key]
-        active = key == self.current
-        background = c['sidebar_active'] if active else c['sidebar_hover'] if hover else c['sidebar']
-        for widget in (row, icon, label):
-            widget.configure(background=background)
-        bar.configure(background=c['gold'] if active else background)
-        color = '#fbf6e6' if active else c['sidebar_text']
-        icon.configure(foreground=c['gold'] if active else c['sidebar_text'])
-        label.configure(foreground=color, font=self.fonts.nav_active if active else self.fonts.nav)
+        p = self._palette()
+        selected = key == self.current
+        if key == "midnas_devotion":
+            bg = p["active_bg"] if selected else (p["hover_bg"] if hover else p["action_bg"])
+            fg = "#ffffff" if (selected or hover) else p["action_fg"]
+            row.configure(background=bg)
+            bar.configure(background=p["accent"])
+            icon.configure(background=bg)
+            label.configure(background=bg, foreground=fg, font=self.fonts.nav_active)
+            return
+        bg = p["active_bg"] if selected else (p["hover_bg"] if hover else p["bg"])
+        fg = "#ffffff" if selected else p["fg"]
+        row.configure(background=bg)
+        bar.configure(background=p["accent"] if selected else bg)
+        icon.configure(background=bg, foreground=p["accent"] if selected else fg)
+        label.configure(background=bg, foreground=fg, font=self.fonts.nav_active if selected else self.fonts.nav)
 
 
 # ------------------------------------------------------------------ tooltips

@@ -311,7 +311,7 @@ class Application:
         self.nup.set(self.app_state.get('game_file') or '')
         self.mods.set(self.app_state.get('mods_dir') or default_mods_dir())
         self.nup.trace_add('write', lambda *args: self.write_app_state(game_file=self.nup.get()))
-        self.mods.trace_add('write', lambda *args: self.write_app_state(mods_dir=self.mods.get()))
+        self.mods.trace_add('write', self._on_mods_dir_changed)
         self.check_updates = tk.BooleanVar(value=self.app_state.get('check_updates', True) is not False)
         self.check_updates.trace_add('write', lambda *args: self.write_app_state(check_updates=self.check_updates.get()))
         # Opt-in: also offer the GitHub pre-releases (vX.Y.Z-beta.N) when checking for updates.
@@ -359,10 +359,9 @@ class Application:
         self.settings_tab = self.tab('newseed', 'New seed', 'New seed', 'Pick an adventure, then generate it.')
         self.tracker_tab = self.tab('tracker', 'Tracker', 'Tracker', 'What you found, and what you can reach now.')
         self.multiworld_tab = self.tab('multiworld', 'Multiworld', 'Multiworld', 'Play with friends through Archipelago. Three steps.')
-        self.midna_guide_tab = self.tab('midna_guide', 'Midna Setup', "Midna's Devotion Workflow", 'Apply mods after generating a seed and before launching the game or starting a new save.')
         self.midna_tab = ttk.Frame(self.tabs, style='Page.TFrame')
-        self.tabs.add(self.midna_tab, text="Midna's Devotion")
-        self.pages['midnas_devotion'] = (self.midna_tab, "Midna's Devotion", '')
+        self.tabs.add(self.midna_tab, text="Midna's Devotion (Mods)")
+        self.pages['midnas_devotion'] = (self.midna_tab, "Midna's Devotion (Mods)", '')
         self._build_midna_embedded_tab()
         self._add_mod_manager_sidebar_action()
         self.sidebar.gap()
@@ -377,7 +376,6 @@ class Application:
         self.build_categories()
         self.build_tracker()
         self.build_multiworld()
-        self.build_midna_guide()
         self.build_spoiler()
         self.build_help()
         for variable in (self.nup, self.mods, self.save_path):
@@ -446,26 +444,6 @@ class Application:
         row.pack(fill='x', pady=pady)
         return row
 
-    def build_midna_guide(self):
-        parent = self.scrollable(self.midna_guide_tab)
-        steps = [
-            ("01", "1. Generate the Seed First", "Go to New seed, pick your settings, and generate/install your seed so the generated seed folder is ready in your mods directory."),
-            ("02", "2. Run Midna's Devotion Before Playing", "After generating a seed, open Midna's Devotion to apply and merge your mods BEFORE launching the game or creating a new save file."),
-            ("03", "3. Launch Game & Make a New Save", "Once Midna's Devotion finishes applying your mods, launch the game and start a new save file (saving after the intro) so everything loads cleanly from the start."),
-            ("04", "4. Avoid Mid-Run Save Swaps", "Always apply mods before starting a fresh save file on a newly generated seed rather than swapping mod sets onto an existing save mid-run."),
-        ]
-        grid = ttk.Frame(parent, style='Page.TFrame')
-        grid.pack(fill='x')
-        grid.columnconfigure((0, 1), weight=1, uniform='midna_guide')
-        for index, (num, heading, text) in enumerate(steps):
-            box = ttk.Frame(grid, style='Card.TFrame', padding=theme.CARD_PADDING)
-            box.grid(row=index // 2, column=index % 2, sticky='nsew', padx=(0, 7) if index % 2 == 0 else (7, 0), pady=(0, 14))
-            ttk.Label(box, text=num, style='Field.TLabel').pack(anchor='w')
-            ttk.Label(box, text=heading, style='Heading.TLabel').pack(anchor='w', pady=(2, 6))
-            ttk.Label(box, text=text, style='Muted.TLabel', wraplength=360, justify='left').pack(anchor='w')
-        action_row = self.buttons(parent, pady=(4, 8))
-        ttk.Button(action_row, text="Open Midna's Devotion", style='Accent.TButton', command=self.launch_mod_manager).pack(side='left')
-
     def build_help(self):
         parent = self.scrollable(self.help_tab)
         sections = [
@@ -528,8 +506,10 @@ class Application:
         if self._midna_host is not None:
             if is_midna:
                 self._midna_host.show()
+                self._midna_host.sync_from_randomizer(self.mods.get())
             else:
                 self._midna_host.hide()
+        self._sync_midna_sidebar_theme(is_midna)
 
     def path_row(self, parent, text, variable, kind):
         frame = ttk.Frame(parent)
@@ -1555,6 +1535,8 @@ class Application:
         directory, installed = result
         previous = self.artifact_manifest   # seed replaced by this one (same folder if regenerated)
         self.use_artifact(directory)
+        if self._midna_host is not None and self._midna_host.is_mounted:
+            self._midna_host.sync_from_randomizer(self.mods.get(), refresh_always=True)
         self.show_page('tracker')
         self.status.set('Seed generated and installed: ' + str(installed))
         warning = qol_seed_warning(Path(installed).parent)
@@ -1656,18 +1638,107 @@ class Application:
                 self._midna_sidebar_icon = img
             except Exception:
                 img = None
-        self.sidebar.add_action('midnas_devotion', "Midna's Devotion", self.launch_mod_manager, icon_image=img)
-        if hasattr(self.sidebar, "add_note"):
-            self.sidebar.add_note("Midna's Devotion is developed independently by Arararagi. Huge thanks to Mozencaz for welcoming it into his amazing randomizer!")
+        self.sidebar.add_action('midnas_devotion', "Midna's Devotion (Mods)", self.launch_mod_manager, icon_image=img)
+
+    def _is_midna_tab_active(self) -> bool:
+        try:
+            current = self.tabs.select()
+            frame = self.pages.get('midnas_devotion', (None,))[0]
+            return frame is not None and str(frame) == current
+        except Exception:
+            return False
+
+    def _on_mods_dir_changed(self, *_args) -> None:
+        self.write_app_state(mods_dir=self.mods.get())
+        after_id = getattr(self, "_midna_path_sync_after", None)
+        if after_id is not None:
+            try:
+                self.root.after_cancel(after_id)
+            except Exception:
+                pass
+        try:
+            self._midna_path_sync_after = self.root.after(300, self._flush_midna_path_sync)
+        except Exception:
+            self._midna_path_sync_after = None
+
+    def _flush_midna_path_sync(self) -> None:
+        self._midna_path_sync_after = None
+        if self._midna_host is not None and self._midna_host.is_mounted:
+            self._midna_host.sync_from_randomizer(self.mods.get())
+
+    def _sync_midna_sidebar_theme(self, is_midna: Optional[bool] = None, forced_theme: str = "") -> None:
+        if not hasattr(self.sidebar, 'set_midna_style'):
+            return
+        active_tab = self._is_midna_tab_active() if is_midna is None else bool(is_midna)
+        theme_id = forced_theme.strip().lower()
+        if not theme_id and self._midna_host is not None and getattr(self._midna_host, '_window', None) is not None:
+            try:
+                theme_id = str(self._midna_host._window.cfg.effective_ui_theme or "").strip().lower()
+            except Exception:
+                theme_id = ""
+        if not theme_id:
+            try:
+                from oot_rando.midnas_devotion.core.config import AppConfig
+                theme_id = str(AppConfig().effective_ui_theme or "").strip().lower()
+            except Exception:
+                theme_id = "mozencaz"
+        midna_dark = bool(active_tab and theme_id == "araragi")
+        self.sidebar.set_midna_style(midna_dark)
+        self._apply_midna_chrome_style(midna_dark)
+
+    def _apply_midna_chrome_style(self, active: bool) -> None:
+        if getattr(self, "_midna_chrome_active", None) == active:
+            return
+        self._midna_chrome_active = active
+        if not hasattr(self, "_default_root_bg"):
+            self._default_root_bg = self.root.cget("background")
+        if not getattr(self, "_midna_tk_styles_ready", False):
+            style = ttk.Style(self.root)
+            dark = "#121824"
+            style.configure("MidnaPage.TFrame", background=dark, borderwidth=0, relief="flat")
+            style.configure(
+                "Midna.TNotebook",
+                background=dark,
+                bordercolor=dark,
+                lightcolor=dark,
+                darkcolor=dark,
+                focuscolor=dark,
+                borderwidth=0,
+                padding=0,
+                tabmargins=[0, 0, 0, 0],
+            )
+            style.layout("Midna.TNotebook", [("Notebook.client", {"sticky": "nswe"})])
+            style.layout("Midna.TNotebook.Tab", [])
+            self._midna_tk_styles_ready = True
+
+        if active:
+            self.root.configure(background="#121824")
+            self._outer.configure(style="MidnaPage.TFrame")
+            self.tabs.configure(style="Midna.TNotebook", takefocus=False)
+            self.midna_tab.configure(style="MidnaPage.TFrame")
+        else:
+            self.root.configure(background=self._default_root_bg)
+            self._outer.configure(style="Page.TFrame")
+            self.tabs.configure(style="Pages.TNotebook")
+            self.midna_tab.configure(style="Page.TFrame")
+        self.root.update_idletasks()
 
     def _build_midna_embedded_tab(self) -> None:
         from oot_rando.midnas_devotion.ui.embedded_host import EmbeddedMidnaHost
         container = tk.Frame(self.midna_tab, background='#161a21', highlightthickness=0, bd=0)
         container.pack(fill='both', expand=True)
+        def _on_theme_changed(tid: str) -> None:
+            self._sync_midna_sidebar_theme(forced_theme=tid)
+            try:
+                self.root.after_idle(lambda t=tid: self._sync_midna_sidebar_theme(forced_theme=t))
+            except Exception:
+                pass
+
         self._midna_host = EmbeddedMidnaHost(
             self.root,
             container,
             on_fallback_window=self.launch_mod_manager_external,
+            on_theme_changed=_on_theme_changed,
         )
 
     def launch_mod_manager(self) -> None:
@@ -1696,7 +1767,7 @@ class Application:
 
     def open_folder(self):
         if self.artifact:
-            os.startfile(str(self.artifact))
+            open_in_file_manager(self.artifact)
 
     def show_spoilers(self):
         self.show_page('spoiler')
@@ -1848,7 +1919,7 @@ class Application:
             if not path.is_file():
                 # Seeds generated before spoiler.txt existed: create it next to spoiler.json.
                 spoiler_report.write_text(report, path)
-            os.startfile(str(path))
+            open_in_file_manager(path)
         except Exception as error:
             self.error(error)
 

@@ -21,8 +21,6 @@ MANAGED_MOD_NAMES = {
     "Merged_Zelda_Rando",
 }
 
-KNOWN_CORE_SLOTS: Dict[str, str] = {}
-
 UI_MERGE_EXTS = (".blarc.zs", ".blarc", ".bntx.zs", ".bntx")
 
 
@@ -51,29 +49,39 @@ def clean_subprocess_env() -> Dict[str, str]:
 
 
 def default_config_dir() -> str:
+    if sys.platform == "win32":
+        legacy = os.path.join(os.path.expanduser("~"), ".config", "ootmodman")
+        if os.path.isfile(os.path.join(legacy, "settings.json")):
+            return legacy
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        return os.path.join(base, "ootmodman")
     xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
     return os.path.join(xdg, "ootmodman")
 
 
 def default_workspace_dir() -> str:
+    if sys.platform == "win32":
+        legacy = os.path.join(os.path.expanduser("~"), ".local", "share", "ootmodman")
+        if os.path.isdir(legacy):
+            return legacy
+        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or os.path.expanduser("~")
+        return os.path.join(base, "ootmodman")
     xdg = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
     return os.path.join(xdg, "ootmodman")
 
 
-def _rando_mods_dir() -> str:
+def read_randomizer_state() -> Dict:
+    """Read the main randomizer GUI state (gui_state.json) if present."""
     try:
-        import json
         from oot_rando.paths import state_dir as _rando_state_dir
-        st_file = _rando_state_dir() / "app_state.json"
+        st_file = _rando_state_dir() / "gui_state.json"
         if st_file.is_file():
             data = json.loads(st_file.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                m = str(data.get("mods_dir") or "").strip()
-                if m:
-                    return m
+                return data
     except Exception:
         pass
-    return ""
+    return {}
 
 
 def auto_detect_from_folder(folder: str) -> Dict[str, str]:
@@ -81,14 +89,25 @@ def auto_detect_from_folder(folder: str) -> Dict[str, str]:
     root_dir = folder
     ver_dir = folder
 
-    stable_dir = os.path.join(folder, "stable")
+    # If pointed directly at a mods/ or romfs/ subfolder, step up to the port root
+    base_low = os.path.basename(folder).lower()
+    if base_low == "mods":
+        parent = os.path.dirname(folder)
+        if os.path.isdir(os.path.join(parent, "romfs")) or os.path.isfile(os.path.join(parent, "image.bin")):
+            ver_dir = parent
+            root_dir = parent
+    elif base_low == "romfs" and os.path.isdir(os.path.join(folder, "Pack")):
+        ver_dir = os.path.dirname(folder)
+        root_dir = ver_dir
+
+    stable_dir = os.path.join(ver_dir, "stable")
     if os.path.isdir(stable_dir):
         ver_dirs = sorted(glob.glob(os.path.join(stable_dir, "v*")))
         valid_vers = [d for d in ver_dirs if os.path.isdir(d)]
         if valid_vers:
             ver_dir = valid_vers[-1]
-    elif os.path.basename(os.path.dirname(folder)) == "stable":
-        root_dir = os.path.dirname(os.path.dirname(folder))
+    elif os.path.basename(os.path.dirname(ver_dir)) == "stable":
+        root_dir = os.path.dirname(os.path.dirname(ver_dir))
 
     result: Dict[str, str] = {
         "romfs_dir": "",
@@ -121,14 +140,16 @@ def auto_detect_from_folder(folder: str) -> Dict[str, str]:
             result["uninstalled_seeds_dir"] = seeds_cand
             break
 
-    for bin_cand in (
-        os.path.join(ver_dir, "bin", "longshot"),
-        os.path.join(ver_dir, "longshot"),
-        os.path.join(root_dir, "bin", "longshot"),
-    ):
-        if os.path.isfile(bin_cand) and os.access(bin_cand, os.X_OK):
-            result["longshot_binary"] = bin_cand
-            break
+    # Cross-platform binary detection via oot_rando.pc_port (Windows .exe + native Linux)
+    try:
+        from oot_rando.pc_port import port_exe
+        for cand_root in (ver_dir, root_dir):
+            exe = port_exe(cand_root)
+            if exe is not None and exe.is_file():
+                result["longshot_binary"] = str(exe)
+                break
+    except Exception:
+        pass
 
     return result
 
@@ -175,11 +196,6 @@ class StandaloneMod:
 
 
 def _is_character_mod_dir(mod_dir: str) -> bool:
-    name = os.path.basename(mod_dir)
-    if KNOWN_CORE_SLOTS.get(name) == "character":
-        return True
-    if KNOWN_CORE_SLOTS.get(name) == "visual":
-        return False
     romfs = os.path.join(mod_dir, "romfs")
     for root, _, files in os.walk(romfs):
         for fn in files:
@@ -204,6 +220,7 @@ class AppConfig:
         self.ui_theme: str = ""
         self.sandbox_mode: bool = True
         self.saved_state: Dict = {}
+        self.rando_synced_keys: set[str] = set()
         self._codec_cache: Tuple[str, Optional[CodecBundle]] = ("", None)
         self.load_settings()
 
@@ -282,6 +299,7 @@ class AppConfig:
 
     def load_settings(self) -> None:
         if not os.path.isfile(self.settings_path):
+            self.sync_from_randomizer(persist=False)
             return
         try:
             with open(self.settings_path, "r", encoding="utf-8") as f:
@@ -300,6 +318,58 @@ class AppConfig:
             self.ui_theme = raw_theme if raw_theme in ("mozencaz", "araragi") else ""
         except Exception:
             self.saved_state = {}
+        self.sync_from_randomizer(persist=False)
+
+    def sync_from_randomizer(self, mods_dir: Optional[str] = None, *, persist: bool = False) -> bool:
+        """Prioritize the main randomizer's Setup mods/port paths over Midna's local settings."""
+        if mods_dir is None:
+            rando_mods = str(read_randomizer_state().get("mods_dir") or "").strip()
+        else:
+            rando_mods = str(mods_dir or "").strip()
+
+        self.rando_synced_keys = set()
+        if not rando_mods:
+            return False
+
+        abs_mods = os.path.abspath(os.path.expanduser(rando_mods))
+        changed = False
+
+        if abs_mods and self.live_mods_dir != abs_mods:
+            self.live_mods_dir = abs_mods
+            changed = True
+        self.rando_synced_keys.add("live_mods_dir")
+
+        detected = auto_detect_from_folder(abs_mods)
+
+        det_romfs = detected.get("romfs_dir") or ""
+        if det_romfs and os.path.isfile(os.path.join(det_romfs, "Pack", "ZsDic.pack.zs")):
+            if self.romfs_dir != det_romfs:
+                self.romfs_dir = det_romfs
+                changed = True
+            self.rando_synced_keys.add("romfs_dir")
+
+        det_bin = detected.get("longshot_binary") or ""
+        if det_bin and os.path.isfile(det_bin):
+            if self.longshot_binary != det_bin:
+                self.longshot_binary = det_bin
+                changed = True
+            self.rando_synced_keys.add("longshot_binary")
+
+        # Only fill optional folders if blank/missing so custom library paths stay intact
+        det_bkp = detected.get("backup_dir") or ""
+        if det_bkp and (not self.backup_dir or not os.path.isdir(self.backup_dir)):
+            if os.path.isdir(det_bkp) and self.backup_dir != det_bkp:
+                self.backup_dir = det_bkp
+                changed = True
+
+        det_seeds = detected.get("uninstalled_seeds_dir") or ""
+        if det_seeds and not self.uninstalled_seeds_dir and os.path.isdir(det_seeds):
+            self.uninstalled_seeds_dir = det_seeds
+            changed = True
+
+        if persist and changed:
+            self.save_settings()
+        return changed
 
     def save_settings(self, state_updates: Optional[Dict] = None) -> None:
         if state_updates:

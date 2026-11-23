@@ -36,3 +36,16 @@ def resource(*parts):
     """Read-only file shipped with the package (works frozen: PyInstaller ``_MEIPASS``)."""
     base = Path(getattr(sys, '_MEIPASS', PACKAGE_DIR.parent)) / 'oot_rando' if FROZEN else PACKAGE_DIR
     return base.joinpath(*parts)
+
+
+def open_in_file_manager(target, env=None):
+    """Open a folder or file in the OS file manager (Windows, Linux, macOS)."""
+    import os
+    import subprocess
+    target_str = str(target)
+    if sys.platform == "win32":
+        os.startfile(target_str)
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", target_str], env=env)
+    else:
+        subprocess.Popen(["xdg-open", target_str], env=env)

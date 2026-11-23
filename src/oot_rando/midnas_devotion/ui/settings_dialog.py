@@ -73,6 +73,15 @@ class SettingsDialog(QDialog):
         auto_lay.addWidget(auto_btn)
         root.addWidget(auto_card)
 
+        self.rando_sync_lbl = QLabel()
+        self.rando_sync_lbl.setWordWrap(True)
+        self.rando_sync_lbl.setStyleSheet(
+            "background: #162822; border: 1px solid #2e6b52; border-radius: 6px; "
+            "color: #b9f6ca; padding: 7px 10px; font-size: 11px;"
+        )
+        self.rando_sync_lbl.setVisible(False)
+        root.addWidget(self.rando_sync_lbl)
+
         # Individual customizable paths
         grid_card = QFrame()
         grid_card.setObjectName("gridCard")
@@ -157,6 +166,21 @@ class SettingsDialog(QDialog):
         self.edits["uninstalled_seeds_dir"].setText(self.cfg.uninstalled_seeds_dir)
         self.edits["longshot_binary"].setText(self.cfg.longshot_binary)
         self.edits["workspace_dir"].setText(self.cfg.workspace_dir or default_workspace_dir())
+        synced = sorted(getattr(self.cfg, "rando_synced_keys", set()))
+        if synced:
+            friendly = {
+                "live_mods_dir": "Live Mods Folder",
+                "romfs_dir": "Base Game romfs/",
+                "longshot_binary": "Longshot Executable",
+            }
+            names = ", ".join(friendly.get(k, k) for k in synced)
+            self.rando_sync_lbl.setText(
+                f"Synced automatically from the main Randomizer's Setup tab: {names}. "
+                "To change these paths, update MODS FOLDER in the Setup tab (it takes priority over this dialog)."
+            )
+            self.rando_sync_lbl.setVisible(True)
+        else:
+            self.rando_sync_lbl.setVisible(False)
         self._update_badges()
 
     def _auto_fill(self) -> None:
@@ -245,4 +269,6 @@ class SettingsDialog(QDialog):
         self.cfg.longshot_binary = self.edits["longshot_binary"].text().strip()
         self.cfg.workspace_dir = ws
         self.cfg.save_settings()
+        # Re-apply main Randomizer Setup priority for any paths managed there
+        self.cfg.sync_from_randomizer(persist=True)
         self.accept()
