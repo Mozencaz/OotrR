@@ -27,16 +27,16 @@ class NativeDialogsTests(unittest.TestCase):
     def test_clean_native_env_strips_appimage_paths(self):
         fake_env = {
             "APPDIR": "/tmp/.mount_OoTRan123456",
-            "LD_LIBRARY_PATH": "/tmp/.mount_OoTRan123456/usr/lib:/usr/lib",
-            "XDG_DATA_DIRS": "/tmp/.mount_OoTRan123456/usr/share:/usr/share",
-            "PATH": "/tmp/.mount_OoTRan123456/usr/bin:/usr/bin:/bin",
+            "LD_LIBRARY_PATH": os.pathsep.join(["/tmp/.mount_OoTRan123456/usr/lib", "/usr/lib"]),
+            "XDG_DATA_DIRS": os.pathsep.join(["/tmp/.mount_OoTRan123456/usr/share", "/usr/share"]),
+            "PATH": os.pathsep.join(["/tmp/.mount_OoTRan123456/usr/bin", "/usr/bin", "/bin"]),
             "QT_PLUGIN_PATH": "/tmp/.mount_OoTRan123456/usr/plugins",
         }
         with mock.patch.dict(os.environ, fake_env, clear=True):
             cleaned = native_dialogs._clean_native_env()
             self.assertEqual(cleaned["LD_LIBRARY_PATH"], "/usr/lib")
             self.assertEqual(cleaned["XDG_DATA_DIRS"], "/usr/share")
-            self.assertEqual(cleaned["PATH"], "/usr/bin:/bin")
+            self.assertEqual(cleaned["PATH"], os.pathsep.join(["/usr/bin", "/bin"]))
             self.assertNotIn("QT_PLUGIN_PATH", cleaned)
 
     def test_kdialog_directory_and_cancel(self):
