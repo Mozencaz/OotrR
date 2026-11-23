@@ -61,8 +61,14 @@ class EmbeddedMidnaHost:
     def _mount_qt_window(self) -> None:
         # Tkinter on Linux uses X11 (or XWayland), so Qt must use xcb to
         # reparent natively into container.winfo_id().
+        # On Windows, prevent Qt from flipping process DPI awareness mid-run,
+        # which otherwise shrinks the already-created Tkinter window and breaks maximize.
+        qt_argv = [sys.argv[0]]
         if sys.platform.startswith("linux"):
             os.environ["QT_QPA_PLATFORM"] = "xcb"
+        elif sys.platform == "win32":
+            os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "0"
+            qt_argv.extend(["-platform", "windows:dpiawareness=0"])
 
         from PySide6.QtCore import Qt
         from PySide6.QtGui import QWindow
@@ -72,7 +78,7 @@ class EmbeddedMidnaHost:
 
         app = QApplication.instance()
         if app is None:
-            app = QApplication([sys.argv[0]])
+            app = QApplication(qt_argv)
             app.setQuitOnLastWindowClosed(False)
             app.setApplicationName(
                 "Midna's Devotion — Ocarina of Time Mod Manager & Merger (for Longshot + Mozencaz's Randomizer)"
