@@ -135,8 +135,8 @@ def auto_detect_from_folder(folder: str) -> Dict[str, str]:
 
 def pretty_mod_name(raw_name: str) -> str:
     cleaned = raw_name.replace("_", " ").replace("-", " ").strip()
-    cleaned = re.sub(r"([a-z0-9])([A-Z])", r" ", cleaned)
-    cleaned = re.sub(r"([A-Z]+)([A-Z][a-z])", r" ", cleaned)
+    cleaned = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", cleaned)
+    cleaned = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", cleaned)
     return re.sub(r"\s+", " ", cleaned).strip() or raw_name
 
 

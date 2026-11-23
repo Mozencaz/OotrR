@@ -38,6 +38,8 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -296,6 +298,7 @@ def _make_step_card(step_num: int, title: str, subtitle: str) -> Tuple[QFrame, Q
 
     body = QVBoxLayout()
     body.setSpacing(8)
+    card.setMinimumWidth(0)
     outer.addLayout(body, 1)
     return card, body
 
@@ -329,9 +332,18 @@ class MainWindow(QMainWindow):
         central = BackdropWidget(_find_asset("backdrop.png"))
         central.setObjectName("backdropCentral")
         central.setStyleSheet(
-            "QWidget#backdropCentral QFrame { background-color: rgba(22, 26, 33, 145); } "
-            "QWidget#backdropCentral QListWidget, QWidget#backdropCentral QComboBox, QWidget#backdropCentral QTextEdit { background-color: rgba(16, 20, 26, 155); } "
-            "QWidget#backdropCentral QLabel { background-color: transparent; }"
+            "QWidget#backdropCentral, QWidget#backdropCentral QLabel { color: #FFFFFF; background-color: transparent; } "
+            "QWidget#backdropCentral QFrame { background-color: rgba(22, 26, 33, 145); color: #FFFFFF; } "
+            "QWidget#backdropCentral QListWidget, QWidget#backdropCentral QComboBox, QWidget#backdropCentral QTextEdit { "
+            "  background-color: rgba(16, 20, 26, 155); "
+            "  color: #FFFFFF; "
+            "} "
+            "QWidget#backdropCentral QComboBox QAbstractItemView { "
+            "  background-color: rgba(22, 26, 33, 235); "
+            "  color: #FFFFFF; "
+            "  selection-background-color: rgba(43, 108, 176, 220); "
+            "  selection-color: #FFFFFF; "
+            "} "
         )
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
@@ -371,8 +383,12 @@ class MainWindow(QMainWindow):
 
         # --- Middle Area: Left (Step 1 + Step 2) | Right (Step 3) ---
         mid_split = QSplitter(Qt.Orientation.Horizontal)
+        mid_split.setChildrenCollapsible(False)
+        mid_split.setMinimumWidth(0)
 
         left_col = QWidget()
+        left_col.setMinimumWidth(0)
+        left_col.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         left_lay = QVBoxLayout(left_col)
         left_lay.setContentsMargins(0, 0, 4, 0)
         left_lay.setSpacing(10)
@@ -438,6 +454,7 @@ class MainWindow(QMainWindow):
         s2.addWidget(lib_lbl)
 
         self.visual_lib_list = QListWidget()
+        self.visual_lib_list.setMinimumHeight(95)
         self.visual_lib_list.setSpacing(2)
         self.visual_lib_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.visual_lib_list.itemDoubleClicked.connect(lambda _it: self._add_selected_library_visuals())
@@ -477,6 +494,8 @@ class MainWindow(QMainWindow):
 
         # STEP 3: Unified Mod List (Visual, Audio & Extra Mods)
         right_col = QWidget()
+        right_col.setMinimumWidth(0)
+        right_col.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         right_outer = QVBoxLayout(right_col)
         right_outer.setContentsMargins(4, 0, 0, 0)
         right_outer.setSpacing(0)
@@ -510,6 +529,7 @@ class MainWindow(QMainWindow):
         s3.addWidget(self.overlap_card)
 
         self.mod_list = QListWidget()
+        self.mod_list.setMinimumHeight(110)
         self.mod_list.setSpacing(2)
         self.mod_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.mod_list.customContextMenuRequested.connect(self._show_mod_context_menu)
@@ -564,8 +584,24 @@ class MainWindow(QMainWindow):
 
         right_outer.addWidget(step3_card)
 
-        mid_split.addWidget(left_col)
-        mid_split.addWidget(right_col)
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setMinimumWidth(0)
+        left_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        left_scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }")
+        left_scroll.viewport().setAutoFillBackground(False)
+        left_scroll.setWidget(left_col)
+
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setMinimumWidth(0)
+        right_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        right_scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }")
+        right_scroll.viewport().setAutoFillBackground(False)
+        right_scroll.setWidget(right_col)
+
+        mid_split.addWidget(left_scroll)
+        mid_split.addWidget(right_scroll)
         mid_split.setSizes([500, 680])
         root.addWidget(mid_split, 1)
 
@@ -640,6 +676,7 @@ class MainWindow(QMainWindow):
         self.log_view.setVisible(False)
         s4.addWidget(self.log_view)
 
+        step4_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         root.addWidget(step4_card)
         self._ui_ready = True
         self._update_mode_ui()
@@ -729,12 +766,50 @@ class MainWindow(QMainWindow):
         self.refresh_all()
         self._select_combo_by_path(self.seed_combo, seed_path)
 
+    def _sync_character_list_row(self) -> None:
+        char_path = self.char_combo.currentData()
+        ent = self._selected_char_entry()
+        if not char_path:
+            if self.mod_list.count() > 0 and self.mod_list.item(0).data(Qt.ItemDataRole.UserRole) == "__step1_character__":
+                self.mod_list.blockSignals(True)
+                try:
+                    self.mod_list.takeItem(0)
+                finally:
+                    self.mod_list.blockSignals(False)
+            return
+
+        label_raw = ent.name if ent and getattr(ent, "name", None) else os.path.basename(str(char_path))
+        disp = pretty_mod_name(label_raw)
+        row_text = f"★  [Character] {disp}   —   Active via Step 1 (Applied on Build)"
+
+        self.mod_list.blockSignals(True)
+        try:
+            if self.mod_list.count() > 0 and self.mod_list.item(0).data(Qt.ItemDataRole.UserRole) == "__step1_character__":
+                item = self.mod_list.item(0)
+            else:
+                item = QListWidgetItem()
+                item.setData(Qt.ItemDataRole.UserRole, "__step1_character__")
+                item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                self.mod_list.insertItem(0, item)
+
+            font = QFont()
+            font.setBold(True)
+            item.setText(row_text)
+            item.setFont(font)
+            item.setForeground(QBrush(QColor("#80cbc4")))
+            item.setBackground(QBrush(QColor(16, 46, 41, 185)))
+            item.setToolTip("Selected in Step 1 — automatically included when you click Apply in Step 4.")
+        finally:
+            self.mod_list.blockSignals(False)
+
     def _on_step1_changed(self) -> None:
         if not self._ui_ready:
             return
         busy = bool(self.worker and self.worker.isRunning())
         ent = self._selected_char_entry()
         self.btn_rm_char.setEnabled((not busy) and (ent is not None) and (ent.source_label in ("Imported", "Custom")))
+        self._sync_character_list_row()
+        self._update_mod_action_buttons()
         self._update_overlap_panel()
         self._update_setup_summary()
 
@@ -943,7 +1018,9 @@ class MainWindow(QMainWindow):
         row = self.mod_list.currentRow()
         has_sel = (mod is not None) and (not busy)
 
-        self.btn_move_up.setEnabled(has_sel and row > 0)
+        has_pinned_char = self.mod_list.count() > 0 and self.mod_list.item(0).data(Qt.ItemDataRole.UserRole) == "__step1_character__"
+        min_movable = 1 if has_pinned_char else 0
+        self.btn_move_up.setEnabled(has_sel and row > min_movable)
         self.btn_move_dn.setEnabled(has_sel and row < self.mod_list.count() - 1)
         self.btn_inspect_mod.setEnabled(has_sel)
         self.btn_open_mod.setEnabled(has_sel)
@@ -957,14 +1034,19 @@ class MainWindow(QMainWindow):
     def _move_selected_mod(self, delta: int) -> None:
         row = self.mod_list.currentRow()
         new_row = row + delta
-        if row < 0 or new_row < 0 or new_row >= self.mod_list.count():
+        min_row = 1 if (self.mod_list.count() > 0 and self.mod_list.item(0).data(Qt.ItemDataRole.UserRole) == "__step1_character__") else 0
+        if row < min_row or new_row < min_row or new_row >= self.mod_list.count():
             return
         self.mod_list.blockSignals(True)
         try:
             it = self.mod_list.takeItem(row)
             self.mod_list.insertItem(new_row, it)
             self.mod_list.setCurrentRow(new_row)
-            order = [self.mod_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.mod_list.count())]
+            order = [
+                self.mod_list.item(i).data(Qt.ItemDataRole.UserRole)
+                for i in range(self.mod_list.count())
+                if self.mod_list.item(i).data(Qt.ItemDataRole.UserRole) != "__step1_character__"
+            ]
         finally:
             self.mod_list.blockSignals(False)
 
@@ -1342,6 +1424,7 @@ class MainWindow(QMainWindow):
             self.mod_list.blockSignals(False)
 
         self._refresh_visual_library_picker()
+        self._sync_character_list_row()
         self._on_step1_changed()
         self._update_mode_ui()
         self.launch_btn.setEnabled(bool(self.cfg.longshot_binary and os.path.isfile(self.cfg.longshot_binary)))
@@ -1355,10 +1438,11 @@ class MainWindow(QMainWindow):
         out: List[StandaloneMod] = []
         for i in range(self.mod_list.count()):
             it = self.mod_list.item(i)
-            if it.checkState() == Qt.CheckState.Checked:
-                name = it.data(Qt.ItemDataRole.UserRole)
-                if name in by_name:
-                    out.append(by_name[name])
+            name = it.data(Qt.ItemDataRole.UserRole)
+            if name == "__step1_character__":
+                continue
+            if it.checkState() == Qt.CheckState.Checked and name in by_name:
+                out.append(by_name[name])
         return out
 
     def _update_setup_summary(self) -> None:
@@ -1562,7 +1646,11 @@ class MainWindow(QMainWindow):
             return
 
         enabled_names = [m.name for m in self._enabled_standalone_mods()]
-        all_order = [self.mod_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.mod_list.count())]
+        all_order = [
+            self.mod_list.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(self.mod_list.count())
+            if self.mod_list.item(i).data(Qt.ItemDataRole.UserRole) != "__step1_character__"
+        ]
         opts = BuildOptions(
             char_path=self.char_combo.currentData(),
             rando_path=self.seed_combo.currentData(),
