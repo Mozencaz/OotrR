@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
-    QFileDialog,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -100,6 +99,9 @@ def _pill_style(kind: str) -> str:
         f"background: {bg}; border: 1px solid {border}; color: {fg}; "
         "border-radius: 5px; padding: 6px 10px; font-weight: bold;"
     )
+
+
+from oot_rando.native_dialogs import ask_open_file
 
 
 class PreflightDialog(QDialog):
@@ -301,11 +303,11 @@ class PreflightDialog(QDialog):
         start_dir = os.path.expanduser("~/Downloads")
         if not os.path.isdir(start_dir):
             start_dir = os.path.expanduser("~")
-        path, _ = QFileDialog.getOpenFileName(
-            self,
+        path = ask_open_file(
             "Select Mod Archive",
             start_dir,
-            "Mod Archives (*.zip *.7z *.rar);;ZIP (*.zip);;7-Zip (*.7z);;RAR (*.rar)",
+            qt_filter="Mod Archives (*.zip *.7z *.rar);;ZIP (*.zip);;7-Zip (*.7z);;RAR (*.rar)",
+            qt_parent=self,
         )
         if path:
             self.load_archive(path)

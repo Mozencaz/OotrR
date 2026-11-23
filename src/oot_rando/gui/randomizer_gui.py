@@ -9,7 +9,8 @@ import secrets
 import threading
 import webbrowser
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
+from tkinter import ttk, messagebox, simpledialog
+from oot_rando import native_dialogs as filedialog
 
 from oot_rando.randomizer.randomizer_core import Settings, CHECKS, GENERATOR_VERSION
 from oot_rando.randomizer.randomizer_services import (read_artifact, qol_seed_warning,
@@ -520,7 +521,21 @@ class Application:
         row.pack(fill='x', pady=(5, 0))
         ttk.Entry(row, textvariable=variable).pack(side='left', fill='x', expand=True)
         def choose():
-            value = filedialog.askopenfilename(filetypes=[('NUP game', '*.nup')]) if kind == 'file' else filedialog.askdirectory()
+            current = variable.get().strip()
+            value = (
+                filedialog.askopenfilename(
+                    title='Choose Game File (.nup)',
+                    initialdir=current,
+                    filetypes=[('NUP game', '*.nup')],
+                    parent=self.root,
+                )
+                if kind == 'file'
+                else filedialog.askdirectory(
+                    title='Choose Folder',
+                    initialdir=current,
+                    parent=self.root,
+                )
+            )
             if value:
                 variable.set(value)
         ttk.Button(row, text='Browse…', command=choose).pack(side='right', padx=(8, 0))
@@ -1179,7 +1194,7 @@ class Application:
             self.refresh_tracker()
 
     def choose_save(self):
-        value = filedialog.askopenfilename(title='Choose the save of this game', filetypes=[('Hookshot progress', 'progress.sav'), ('Saves', '*.sav')])
+        value = filedialog.askopenfilename(title='Choose the save of this game', initialdir=self.save_path.get().strip(), filetypes=[('Hookshot progress', 'progress.sav'), ('Saves', '*.sav')], parent=getattr(self, 'root', None))
         if value:
             # A save picked by hand is kept: stop following the newest one.
             self.auto_save.set(False)
@@ -1308,7 +1323,7 @@ class Application:
         self.update_category_states()
 
     def import_ap_yaml(self):
-        name = filedialog.askopenfilename(filetypes=[('Archipelago YAML', '*.yaml *.yml')])
+        name = filedialog.askopenfilename(title='Import Archipelago YAML', filetypes=[('Archipelago YAML', '*.yaml *.yml')], parent=getattr(self, 'root', None))
         if name:
             try:
                 values, ignored = rando_options.from_ap_yaml(Path(name).read_text(encoding='utf-8'))
@@ -1326,7 +1341,7 @@ class Application:
     def export_ap_yaml(self):
         try:
             values = rando_options.validate(self.full_values())
-            name = filedialog.asksaveasfilename(defaultextension='.yaml', filetypes=[('Archipelago YAML', '*.yaml')])
+            name = filedialog.asksaveasfilename(title='Export Archipelago YAML', defaultextension='.yaml', filetypes=[('Archipelago YAML', '*.yaml')], parent=getattr(self, 'root', None))
             if name:
                 Path(name).write_text(rando_options.to_ap_yaml(values, open_forest=self.options['open_forest'].get()),
                                       encoding='utf-8')
@@ -1345,8 +1360,8 @@ class Application:
             if not player:
                 return
             text = bridge.player_yaml(values, self.options['open_forest'].get(), player)
-            name = filedialog.asksaveasfilename(defaultextension='.yaml', initialfile=f'{player}.yaml',
-                                                filetypes=[('Archipelago YAML', '*.yaml')])
+            name = filedialog.asksaveasfilename(title='Export Multiworld YAML', defaultextension='.yaml', initialfile=f'{player}.yaml',
+                                                filetypes=[('Archipelago YAML', '*.yaml')], parent=getattr(self, 'root', None))
             if name:
                 Path(name).write_text(text, encoding='utf-8')
                 self.status.set('Multiworld YAML exported.')
@@ -1361,8 +1376,8 @@ class Application:
             nup = Path(self.nup.get())
             if not nup.is_file():
                 raise ValueError('Select the local NUP file.')
-            name = filedialog.asksaveasfilename(defaultextension='.apworld', initialfile='oot_remake.apworld',
-                                                filetypes=[('Archipelago world', '*.apworld')])
+            name = filedialog.asksaveasfilename(title='Export Archipelago World', defaultextension='.apworld', initialfile='oot_remake.apworld',
+                                                filetypes=[('Archipelago world', '*.apworld')], parent=getattr(self, 'root', None))
             if not name:
                 return
 
@@ -1377,7 +1392,7 @@ class Application:
     def generate_from_patch(self):
         from oot_rando.archipelago import bridge
         try:
-            name = filedialog.askopenfilename(filetypes=[('Archipelago patch', '*' + bridge.PATCH_SUFFIX)])
+            name = filedialog.askopenfilename(title='Choose Archipelago Patch', filetypes=[('Archipelago patch', '*' + bridge.PATCH_SUFFIX)], parent=getattr(self, 'root', None))
             if not name:
                 return
             settings = bridge.settings_from_patch(
@@ -1454,7 +1469,7 @@ class Application:
             self.error(error)
 
     def import_settings(self):
-        name = filedialog.askopenfilename(filetypes=[('JSON settings', '*.json')])
+        name = filedialog.askopenfilename(title='Import Settings', filetypes=[('JSON settings', '*.json')], parent=getattr(self, 'root', None))
         if name:
             try:
                 value = json.loads(Path(name).read_text(encoding='utf-8'))
@@ -1468,7 +1483,7 @@ class Application:
     def export_settings(self):
         try:
             settings = self.get_settings()
-            name = filedialog.asksaveasfilename(defaultextension='.json', filetypes=[('JSON settings', '*.json')])
+            name = filedialog.asksaveasfilename(title='Export Settings', defaultextension='.json', filetypes=[('JSON settings', '*.json')], parent=getattr(self, 'root', None))
             if name:
                 Path(name).write_text(json.dumps({'format': 'oot-remake-settings-v1', 'settings': settings.to_dict()}, ensure_ascii=False, indent=2), encoding='utf-8')
                 self.status.set('Settings exported.')
@@ -1759,7 +1774,7 @@ class Application:
             messagebox.showerror('Mod Manager', f"Could not launch Midna's Devotion: {exc}")
 
     def open_artifact(self):
-        directory = filedialog.askdirectory(title='Choose the folder holding manifest.json')
+        directory = filedialog.askdirectory(title='Choose the folder holding manifest.json', initialdir=self.mods_dir.get().strip(), parent=getattr(self, 'root', None))
         if directory:
             try:
                 self.use_artifact(directory)
@@ -1905,8 +1920,8 @@ class Application:
     def export_spoiler(self):
         try:
             report = self.load_spoiler_report()
-            name = filedialog.asksaveasfilename(defaultextension='.txt', filetypes=[('Text', '*.txt')],
-                                                initialfile='spoiler_' + (report['seed'] or report['seed_id'][:16]) + '.txt')
+            name = filedialog.asksaveasfilename(title='Export Spoiler Log', defaultextension='.txt', filetypes=[('Text', '*.txt')],
+                                                initialfile='spoiler_' + (report['seed'] or report['seed_id'][:16]) + '.txt', parent=getattr(self, 'root', None))
             if name:
                 spoiler_report.write_text(report, name)
                 self.status.set('Spoiler exported: ' + name)

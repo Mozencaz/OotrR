@@ -65,7 +65,12 @@ from oot_rando.midnas_devotion.core.preflight import (
 from oot_rando.midnas_devotion.ui.midna_dance import MidnaDanceWidget
 from oot_rando.midnas_devotion.ui.mod_files_dialog import ModFilesDialog
 from oot_rando.midnas_devotion.ui.preflight_dialog import PreflightDialog
-from oot_rando.midnas_devotion.ui.settings_dialog import SettingsDialog
+from oot_rando.midnas_devotion.ui.settings_dialog import (
+    SettingsDialog,
+    find_missing_creatable_folders,
+    prompt_create_missing_folders,
+)
+from oot_rando.native_dialogs import ask_directory, ask_open_file
 from oot_rando.midnas_devotion.ui.ui_theme import (
     MidnaInstructionsDialog,
     THEME_ARARAGI,
@@ -382,6 +387,8 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(180, self._prompt_first_launch)
         elif not self.cfg.is_configured:
             QTimer.singleShot(250, self._prompt_initial_setup)
+        else:
+            QTimer.singleShot(300, self._prompt_missing_folders_if_needed)
 
     def _build_ui(self) -> None:
         central = BackdropWidget(_find_asset("backdrop.png"))
@@ -915,6 +922,8 @@ class MainWindow(QMainWindow):
             )
 
     def _is_plain_ui(self) -> bool:
+        if hasattr(self, "_plain_ui"):
+            return bool(self._plain_ui)
         return self.cfg.effective_ui_theme == THEME_MOZENCAZ
 
     def set_theme_change_callback(self, callback) -> None:
@@ -999,11 +1008,13 @@ class MainWindow(QMainWindow):
             self.cfg.ui_theme = chosen
             self.cfg.save_settings()
         plain = chosen == THEME_MOZENCAZ
+        self._plain_ui = plain
         compact = getattr(self, "_compact_mode", False)
 
         self.central_widget.set_plain_mode(plain)
         self.central_widget.setStyleSheet(central_stylesheet(plain, compact=compact))
         self.drop_zone.set_plain_mode(plain)
+        self._style_build_page(plain, compact)
 
         root_lay = getattr(self, "_main_root_layout", None) or self.central_widget.layout()
         if root_lay is not None:
@@ -1155,6 +1166,12 @@ class MainWindow(QMainWindow):
             self._update_mode_ui()
             self._update_mod_action_buttons()
             self._refresh_responsive_labels()
+            if getattr(self, "_initial_restored", False):
+                self._recolor_visual_library_items()
+                self._sync_character_list_row()
+                self._update_overlap_panel()
+                self.visual_lib_list.viewport().update()
+                self.mod_list.viewport().update()
         if notify:
             cb = getattr(self, "_theme_change_callback", None)
             if callable(cb):
@@ -1175,6 +1192,8 @@ class MainWindow(QMainWindow):
             self.apply_ui_theme(self.cfg.effective_ui_theme, persist=True)
         if not self.cfg.is_configured:
             QTimer.singleShot(80, self._prompt_initial_setup)
+        else:
+            QTimer.singleShot(120, self._prompt_missing_folders_if_needed)
 
     def _prompt_text_input(self, title: str, label: str, initial_text: str = "") -> Tuple[str, bool]:
         dlg = QDialog(self)
@@ -1236,6 +1255,35 @@ class MainWindow(QMainWindow):
         if ans == QMessageBox.StandardButton.Yes:
             self._open_settings()
 
+    def _prompt_missing_folders_if_needed(self) -> None:
+        if getattr(self, "_missing_folders_prompted", False):
+            return
+        self._missing_folders_prompted = True
+        paths = {
+            "romfs_dir": self.cfg.romfs_dir,
+            "live_mods_dir": self.cfg.live_mods_dir,
+            "backup_dir": self.cfg.backup_dir,
+            "uninstalled_seeds_dir": self.cfg.uninstalled_seeds_dir,
+            "workspace_dir": self.cfg.workspace_dir,
+        }
+        if not find_missing_creatable_folders(paths):
+            return
+        created = prompt_create_missing_folders(
+            None,
+            paths,
+            synced_keys=getattr(self.cfg, "rando_synced_keys", set()),
+            skip_label="Not Now",
+        )
+        if not created:
+            return
+        for key, folder_path in created.items():
+            setattr(self.cfg, key, folder_path)
+        self.cfg.save_settings()
+        self.cfg.sync_from_randomizer(persist=True)
+        self.refresh_all()
+        self._set_status_style("ok")
+        self.status_lbl.setText(f"✓  Created {len(created)} missing folder(s) for Midna's Devotion.")
+
     def _open_settings(self) -> None:
         dlg = SettingsDialog(self.cfg, None)
         if dlg.exec() == QDialog.DialogCode.Accepted:
@@ -1259,7 +1307,7 @@ class MainWindow(QMainWindow):
             self._import_archive_into_dir(self.cfg.core_slot_dir("character"), select_in_char=True)
         elif chosen == act_dir:
             start_dir = self.cfg.backup_dir if (self.cfg.backup_dir and os.path.isdir(self.cfg.backup_dir)) else os.path.expanduser("~")
-            folder = QFileDialog.getExistingDirectory(self, "Select Character Mod Folder (containing romfs/)", start_dir)
+            folder = ask_directory("Select Character Mod Folder (containing romfs/)", start_dir, qt_parent=self)
             if not folder:
                 return
             try:
@@ -1296,7 +1344,7 @@ class MainWindow(QMainWindow):
         start_dir = self.cfg.uninstalled_seeds_dir or self.cfg.backup_dir or os.path.expanduser("~")
         if not os.path.isdir(start_dir):
             start_dir = os.path.expanduser("~")
-        folder = QFileDialog.getExistingDirectory(self, "Select Randomizer Seed Folder", start_dir)
+        folder = ask_directory("Select Randomizer Seed Folder", start_dir, qt_parent=self)
         if not folder:
             return
         try:
@@ -1385,6 +1433,21 @@ class MainWindow(QMainWindow):
             self.visual_lib_list.addItem(item)
         self._update_visual_picker_buttons()
 
+    def _recolor_visual_library_items(self) -> None:
+        plain = self._is_plain_ui()
+        in_list_paths = {os.path.abspath(m.source_path) for m in self.standalone_mods}
+        for i in range(self.visual_lib_list.count()):
+            item = self.visual_lib_list.item(i)
+            path = item.data(Qt.ItemDataRole.UserRole)
+            if not path:
+                item.setForeground(QBrush(QColor("#6c766d" if plain else "#888888")))
+                continue
+            already = os.path.abspath(str(path)) in in_list_paths
+            if plain:
+                item.setForeground(QBrush(QColor("#2f7a55" if already else "#1f2a24")))
+            else:
+                item.setForeground(QBrush(QColor("#81c784" if already else "#e3f2fd")))
+
     def _update_visual_picker_buttons(self) -> None:
         if not self._ui_ready:
             return
@@ -1421,7 +1484,7 @@ class MainWindow(QMainWindow):
         if self.worker and self.worker.isRunning():
             return
         start_dir = self.cfg.backup_dir if (self.cfg.backup_dir and os.path.isdir(self.cfg.backup_dir)) else os.path.expanduser("~")
-        folder = QFileDialog.getExistingDirectory(self, "Select Mod Folder (containing romfs/)", start_dir)
+        folder = ask_directory("Select Mod Folder (containing romfs/)", start_dir, qt_parent=self)
         if not folder:
             return
         try:
@@ -1443,11 +1506,11 @@ class MainWindow(QMainWindow):
         start_dir = os.path.expanduser("~/Downloads")
         if not os.path.isdir(start_dir):
             start_dir = os.path.expanduser("~")
-        path, _ = QFileDialog.getOpenFileName(
-            self,
+        path = ask_open_file(
             "Select Mod Archive",
             start_dir,
-            "Mod Archives (*.zip *.7z *.rar);;ZIP (*.zip);;7-Zip (*.7z);;RAR (*.rar)",
+            qt_filter="Mod Archives (*.zip *.7z *.rar);;ZIP (*.zip);;7-Zip (*.7z);;RAR (*.rar)",
+            qt_parent=self,
         )
         if not path:
             return
@@ -1812,11 +1875,11 @@ class MainWindow(QMainWindow):
         start_dir = os.path.expanduser("~/Downloads")
         if not os.path.isdir(start_dir):
             start_dir = os.path.expanduser("~")
-        path, _ = QFileDialog.getOpenFileName(
-            self,
+        path = ask_open_file(
             "Select Mod Archive",
             start_dir,
-            "Mod Archives (*.zip *.7z *.rar);;ZIP (*.zip);;7-Zip (*.7z);;RAR (*.rar)",
+            qt_filter="Mod Archives (*.zip *.7z *.rar);;ZIP (*.zip);;7-Zip (*.7z);;RAR (*.rar)",
+            qt_parent=self,
         )
         if path:
             self._open_preflight(initial_archive=path)
