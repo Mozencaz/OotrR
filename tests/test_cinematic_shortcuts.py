@@ -50,6 +50,19 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(sum(k.startswith('ActionGuide_IsEnd.') for k in guides), 53)
         self.assertFalse(any(k.startswith('DungeonInfo.') for k in guides))
 
+    def test_opening_marks_sarias_arrival_and_first_greeting_seen_only_when_enabled(self):
+        flags = comfort.start_values({'skip_opening': True})
+        self.assertEqual(flags, {
+            'HavePlayedEvent.Dm_Kokiri_0045': True,
+            'HavePlayedEvent.Dm_Kokiri_0050': True,
+            'HavePlayedEvent.Dm_Kokiri_0060': True,
+            'KokiriForest_LinkHouseDoor_Open': True,
+            'IsVisitLocation.KokiriForest': True,
+        })
+        self.assertEqual(comfort.start_values({'skip_opening': False}), {})
+        # This transient flag would request another Saria event at the house.
+        self.assertNotIn('Dm_Kokiri_0050_After_Near_End', flags)
+
 
 @unittest.skipUnless(os.environ.get('OOT_NUP'), 'OOT_NUP absent')
 class GameFlows(unittest.TestCase):
@@ -67,11 +80,248 @@ class GameFlows(unittest.TestCase):
     def tearDownClass(cls):
         cls.nup.stream.close()
 
+    def test_post_deku_tree_skips_saria_mido_and_navi_but_keeps_exit_state(self):
+        name = 'Npc_Kokiri_Mido_Child'
+        raw = self.read(path(name))
+        result, report = shortcuts.story(raw, name, self.read, self.read)
+        live = reached(result, 'KokiriForest_Get_StoneOfForest_Completed_Event')
+        names = {e.name for e in live}
+        self.assertEqual(report['after_deku_tree'], 'Dm_Kokiri_0145')
+        self.assertTrue({'Event29', 'Event69', 'Event163', 'Event2', 'Event66', 'Event179', 'Event102'} <= names)
+        self.assertFalse(any((_action(e) or ('', ''))[1] in ('EventTransition', 'EventTalk') for e in live))
+        self.assertFalse(any((_action(e) or ('', ''))[0] == 'EventCamera' for e in live))
+        self.assertTrue(any(_params(e).get('GameDataName') == 'HavePlayedEvent.Dm_Kokiri_0145'
+                            and _params(e).get('Value') is True for e in live))
+        self.assertEqual(sum((_action(e) or ('', ''))[1] == 'EventEventFadeOut' for e in live), 1)
+        self.assertEqual(sum((_action(e) or ('', ''))[1] == 'EventEventFadeIn' for e in live), 1)
+        old, new = _snapshot(_flow(raw)), _snapshot(_flow(result))
+        self.assertTrue(all(new[k] == v for k, v in old.items()))
+
+    def test_talon_cucco_display_then_blackout_debit_hide_delete_and_fade_back(self):
+        result, report = shortcuts.story(self.read(path('Goto_HyruleCastle')),
+                                         'Goto_HyruleCastle', self.read, self.read)
+        live = reached(result, 'Goto_HyruleCastle_AfterWakeUpTalon')
+        self.assertEqual(report['talon_wake_up'], 'Dm_HrlCastle_0020')
+        self.assertTrue(any(isinstance(e.data, SubFlowEvent) and
+                            (e.data.res_flowchart_name, e.data.entry_point_name) ==
+                            ('ShowItem', 'ShowItemSuccess') for e in live))
+        self.assertFalse(any((_action(e) or ('', ''))[1] in ('EventTransition', 'EventTalk', 'EventPlayAS') for e in live))
+        debits = [e for e in live if _action(e) == ('PouchSystemActor', 'EventTriggerAddOrRemovePouchContent')]
+        self.assertEqual(len(debits), 1)
+        self.assertEqual((_params(debits[0])['Actor'], _params(debits[0])['Num']), ('Item_AlarmCucco', -1))
+        flags = {_params(e).get('GameDataName'): _params(e).get('Value') for e in live
+                 if _action(e) == ('GameDataActor', 'EventTriggerSetGameDataBool')}
+        self.assertIs(flags['Talon_AfterWakeUp'], True)
+        self.assertIs(flags['HyruleCastle_IsMalonAppear'], False)
+        self.assertIs(flags['HavePlayedEvent.Dm_HrlCastle_0020'], True)
+        # Both guard outcomes finish without a second debit or a Talon request
+        # after the deletion flag. The normal path preserves this exact order.
+        events = list(live)
+        required = ['EventEventFadeOut', 'EventDeleteShowItem', 'EventTriggerAddOrRemovePouchContent',
+                    'EventGoOffstageForUser', 'EventEventFadeIn']
+        actions = [(_action(e) or ('', ''))[1] for e in events]
+        self.assertEqual([a for a in actions if a in required], required)
+        hide = next(e for e in live if (_action(e) or ('', ''))[1] == 'EventGoOffstageForUser')
+        self.assertEqual(_action(hide)[0], 'Npc_Hylia_Talon_Child')
+        tail = _reach(_flow(result).flowchart, [hide.data.nxt.v])
+        self.assertFalse(any('Talon' in (_action(e) or ('', ''))[0] for e in tail))
+
+    def test_talon_disappearance_uses_the_maps_actual_delete_condition(self):
+        import ainb
+        module = 'Logic/HyruleCastle_Prefab_19e8.logic.module.ainb'
+        nodes = {node['Node Index']: node for node in ainb.AINB.from_binary(
+            self.nup.read(self.members[module])).as_dict()['Nodes']}
+        actor = nodes[0]
+        self.assertIn('Talon', actor['Properties']['String'][0]['Default Value'])
+        delete = next(p for p in actor['Parameters']['Inputs']['Bool'] if p['Name'] == 'Logic_Delete')
+        flag = nodes[delete['Node Index']]
+        self.assertEqual(flag['Name'], 'HoldGameDataGetBoolSimple')
+        self.assertEqual(flag['Parameters']['Inputs']['String'][0]['Default Value'],
+                         'HavePlayedEvent.Dm_HrlCastle_0020')
+
+    def test_king_zora_letter_blackout_moves_to_map_anchor_and_empties_one_bottle(self):
+        from oot_rando.formats.inspect_resources import Byml
+        from math import degrees
+        raw = self.read(path('Get_StoneOfWater'))
+        result, report = shortcuts.story(raw, 'Get_StoneOfWater', self.read, self.read)
+        events = {e.name: e for e in _flow(result).flowchart.events}
+        # The irregular/repeat path must retain its original routing.
+        original = {e.name: e for e in _flow(raw).flowchart.events}
+        self.assertEqual(events['Event233'].data.cases[0].v.name,
+                         original['Event233'].data.cases[0].v.name)
+        live = _reach(_flow(result).flowchart, [events['Event240']])
+        actions = [(_action(e) or ('', ''))[1] for e in live]
+        required = ['EventEventFadeOut', 'EventDeleteShowItem', 'EventTriggerRemoveFromSpecificBottle',
+                    'EventWarpToTargetPosAndRot', 'EventEventFadeIn']
+        self.assertEqual([a for a in actions if a in required], required)
+        self.assertNotIn('EventTransition', actions)
+        self.assertNotIn('EventTalk', actions)
+        self.assertNotIn('EventTriggerRemoveFromSelectedBottle', actions)
+        debit = next(e for e in live if (_action(e) or ('', ''))[1] == 'EventTriggerRemoveFromSpecificBottle')
+        self.assertEqual(_params(debit), {'Item': 5})
+        warp = next(e for e in live if (_action(e) or ('', ''))[1] == 'EventWarpToTargetPosAndRot')
+        self.assertEqual(_action(warp)[0], 'Npc_Zora_KingZora_child')
+        actors = Byml(self.read('Banc/ZoraDomain/ZoraDomain_Child_Static.bcett.byml.zs')).root['Actors']
+        king = next(a for a in actors if a['Gyaml'] == 'Npc_Zora_KingZora_child')
+        refs = {r['Dst'] for r in king['Links']}
+        anchor = next(a for a in actors if a['Hash'] in refs and a['Gyaml'] == 'AnchorAction2')
+        self.assertEqual(_params(warp)['Position'], anchor['Translate'])
+        self.assertAlmostEqual(_params(warp)['YAngle'], degrees(anchor['Rotate'][1]), places=4)
+        flags = {_params(e).get('GameDataName'): _params(e).get('Value') for e in live
+                 if _action(e) == ('GameDataActor', 'EventTriggerSetGameDataBool')}
+        self.assertIs(flags['HavePlayedEvent.Dm_Zora_0010'], True)
+        self.assertIs(flags['Npc_Zora_KingZora_child_EnableClothCollidable'], True)
+        self.assertIn('Event65', {e.name for e in live})
+        self.assertIn('Event151', {e.name for e in live})
+        poses = [e for e in live if (_action(e) or ('', ''))[1] == 'EventPlayAS']
+        self.assertEqual([_params(e)['ASName'] for e in poses], ['Wait'])
+        self.assertFalse(_params(poses[0])['IsWaitEnd'])
+        self.assertEqual(report['king_zora_letter'], 'Dm_Zora_0010')
+        before, after = _snapshot(_flow(raw)), _snapshot(_flow(result))
+        self.assertTrue(all(after[k] == v for k, v in before.items()))
+
+    def test_king_zora_guarded_quest_completion_still_returns_to_fade(self):
+        from oot_rando.patching import quest_guard
+        raw = self.read(path('Get_StoneOfWater'))
+        steps = quest_guard.challenge_steps(self.read(quest_guard.CHALLENGES))
+        guarded, _ = quest_guard.guard_requests(raw, 'Get_StoneOfWater', steps, ['Step07'],
+                                                'Get_StoneOfWater_IsCompleted_Exp')
+        original = _flow(guarded).flowchart
+        native = next(e for e in original.events if e.name == 'Event231').data.nxt.v
+        result, _ = shortcuts.story(guarded, 'Get_StoneOfWater', self.read, self.read)
+        chart = _flow(result).flowchart
+        completion = next(e for e in chart.entry_points if e.name == 'RandoCinema_KingZoraCompletion')
+        self.assertEqual(completion.main_event.v.name, native.name)
+        # A completed quest ends the callee; EVFL must then resume at fade-in.
+        self.assertNotIn(0, completion.main_event.v.data.cases)
+        call = next(e for e in chart.events if isinstance(e.data, SubFlowEvent)
+                    and e.data.entry_point_name == completion.name)
+        self.assertEqual(_action(call.data.nxt.v), ('UISystemActor', 'EventEventFadeIn'))
+
     def test_every_start_value_exists_with_the_expected_game_type(self):
         from oot_rando.game.tracking_metadata import GAMEDATA
         from oot_rando.patching.key_adapter import check_start_values
         check_start_values(self.read(GAMEDATA), comfort.start_values(
-            {'skip_tutorials': True, 'skip_first_pickup_text': True}))
+            {'skip_opening': True, 'skip_tutorials': True, 'skip_first_pickup_text': True}))
+
+    def test_deku_tree_meeting_opens_the_mouth_without_dialogue_or_camera_scene(self):
+        from oot_rando.formats.inspect_resources import sarc, Byml
+        raw = self.read(path('Meet_DekuTree'))
+        result, report = shortcuts.story(raw, 'Meet_DekuTree', self.read, self.read)
+        live = reached(result, 'KokiriForest_Meet_DekuTree_MeetDekuTree_01')
+        self.assertFalse(any(_action(e) == ('EventSystemActor', 'EventTransition') for e in live))
+        self.assertFalse(any('EventTalk' in (_action(e) or ('', ''))[1] for e in live))
+        self.assertFalse(any((_action(e) or ('', ''))[0] in ('EventCamera', 'SoundSystemActor') for e in live))
+        flag = 'KokiriForest_Meet_DekuTree_OpenDekuTreeMouth'
+        writes = {_params(e).get('GameDataName'): _params(e).get('Value') for e in live}
+        for name in (flag, 'HavePlayedEvent.Dm_Kokiri_0070', 'HavePlayedEvent.Dm_Kokiri_0075'):
+            self.assertIs(writes[name], True)
+        steps = {(_params(e).get('ChallengeName'), _params(e).get('StepName')) for e in live}
+        self.assertIn(('Meet_DekuTree', 'Complete'), steps)
+        self.assertIn(('Get_StoneOfForest', 'GoInside'), steps)
+        pack = sarc(self.read('Pack/Actor/Land_Kokiri_DekuTree_A_04.pack.zs'))
+        params = Byml(pack['GameParameter/NpcKokiriDekuTreeParam/Default.game__npc__NpcKokiriDekuTreeParam.bgyml']).root
+        self.assertTrue(params['OpendMouth_Child'].endswith('?' + flag))
+        self.assertIn('deku_tree', report)
+
+    def test_zelda_exposition_gives_the_placed_letter_check_once_and_keeps_quest_tail(self):
+        from oot_rando.patching.event_patch import patch_event_params
+        scene = patch_event_params(self.read(path('Dm_HrlCastle_0050')),
+                                   [('Event59', 'ActorName', 'Item_ZeldaLetter', 'Item_Hookshot')])
+        scene = add_collection_markers(scene, {'Event59': 'RandoCheck.letter'})[0]
+        current = lambda p: scene if p == path('Dm_HrlCastle_0050') else self.read(p)
+        result, _ = shortcuts.story(self.read(path('Goto_HyruleCastle')), 'Goto_HyruleCastle', self.read, current)
+        live = reached(result, 'Goto_HyruleCastle_MeetZelda')
+        self.assertEqual([_params(e)['ActorName'] for e in gets(live)], ['Item_Hookshot'])
+        self.assertEqual(sum(_params(e).get('GameDataName') == 'RandoCheck.letter' for e in live), 1)
+        self.assertFalse(any(_action(e) == ('EventSystemActor', 'EventTransition') for e in live))
+        self.assertFalse(any(_params(e).get('GameDataName') == 'ThatsallTalk_GameDateName' for e in live))
+        self.assertTrue(any(_params(e).get('StepName') == 'Complete' for e in live))
+        self.assertTrue(any(_params(e).get('StepName') == 'Step01' for e in live))
+
+    def test_impa_farewell_keeps_the_native_quest_continuation(self):
+        result, _ = shortcuts.story(self.read(path('DoorOfTime')), 'DoorOfTime', self.read, self.read)
+        live = reached(result, 'DoorOfTime_SendOff')
+        self.assertFalse(any(_action(e) == ('EventSystemActor', 'EventTransition') for e in live))
+        self.assertTrue(any(_params(e).get('StepName') == 'Step02' for e in live))
+        self.assertTrue(any(_params(e).get('StepName') == 'KakarikoVillageNpc' for e in live))
+
+    def test_dungeon_meetings_keep_their_world_effects_without_a_movie(self):
+        cases = (
+            ('SageOfFire', 'FireTemple_DaruniaDemo', 'FireTemple_Room02_CreateChain', 'GetBossKey'),
+            ('SageOfWater', 'WaterTemple_RutoDemo', 'Npc_Zora_Ruto_Adult_FastTouch', 'Step07'),
+        )
+        for name, entry, flag, step in cases:
+            with self.subTest(name=name):
+                result, _ = shortcuts.story(self.read(path(name)), name, self.read, self.read)
+                live = reached(result, entry)
+                self.assertFalse(any(_action(e) == ('EventSystemActor', 'EventTransition') for e in live))
+                self.assertTrue(any(_params(e).get('GameDataName') == flag and _params(e).get('Value') is True for e in live))
+                self.assertTrue(any(_params(e).get('StepName') == step for e in live))
+                self.assertFalse(gets(live))
+
+    def test_all_story_shortcuts_compose_with_the_timeline_option_and_validate_game_data(self):
+        from oot_rando.patching import timeline_skip
+        for timelines in (False, True):
+            with self.subTest(timelines=timelines):
+                staged = {}
+                if timelines:
+                    for name in shortcuts.STORY_FLOWS:
+                        if name in timeline_skip.SITES:
+                            staged[path(name)] = timeline_skip.drop_timelines(self.read(path(name)), name)[0]
+                current = lambda p: staged.get(p, self.read(p))
+                reports = shortcuts.apply({'skip_story_sequences': True}, current, self.read, staged.__setitem__)
+                from oot_rando.patching.special_dialogues import FLOWS
+                self.assertTrue({path(n) for n in shortcuts.STORY_FLOWS} <= set(reports))
+                from oot_rando.patching.physical_scene_shortcuts import FLOWS as PHYSICAL_FLOWS
+                self.assertTrue(set(reports) <= {path(n) for n in shortcuts.STORY_FLOWS + FLOWS + PHYSICAL_FLOWS})
+                for resource in reports:
+                    chart = _flow(staged[resource]).flowchart
+                    for entry in chart.entry_points:
+                        direct = {e.name for e in _reach(chart, [entry.main_event.v], descend=False)}
+                        calls = {i for i, e in enumerate(chart.events) if e.name in direct and isinstance(e.data, (SubFlowEvent, SubFlowSwitchEvent))}
+                        self.assertEqual(set(entry._sub_flow_event_indices), calls)
+
+    def test_rutos_sapphire_discovery_keeps_its_flag_without_granting_the_boss_reward(self):
+        result, _ = shortcuts.story(self.read(path('Get_StoneOfWater')), 'Get_StoneOfWater', self.read, self.read)
+        live = reached(result, 'StoneOfWater_DiscoveryStone')
+        self.assertFalse(gets(live))
+        self.assertFalse(any(_params(e).get('EventName') == 'Dm_InsideJabu_Jabu_0020' and
+                             _action(e) == ('EventSystemActor', 'EventTransition') for e in live))
+        self.assertTrue(any(_params(e).get('GameDataName') == 'Get_StoneOfWater_DiscoveryStone' and
+                            _params(e).get('Value') is True for e in live))
+
+    def test_opening_flags_select_sarias_post_greeting_schedule_and_remove_its_trigger(self):
+        import ainb
+        from oot_rando.formats.inspect_resources import Byml
+        flags = comfort.start_values({'skip_opening': True})
+        schedule = Byml(self.nup.read(self.members[
+            'Component/AIScheduleParam/Npc_Kokiri_Saria_Child.game__component__AIScheduleParam.bgyml'])).root
+        active = [s for s in schedule['ConditionalSchedule'] if flags.get(s['ConditionFlag'])]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]['ConditionFlag'], 'HavePlayedEvent.Dm_Kokiri_0060')
+        self.assertTrue(any('C1C2_TT' in e['EventName'] for e in active[0]['EventEntry']))
+        module = 'Logic/KokiriForest_Child_Level_Npc_Kokiri_Saria_Child_a766.logic.module.ainb'
+        nodes = {n['Node Index']: n for n in ainb.AINB.from_binary(
+            self.nup.read(self.members[module])).as_dict()['Nodes']}
+        greeting = nodes[1]
+        self.assertEqual(greeting['Name'], 'HoldGameDataHavePlayedEvent')
+        scene = greeting['Parameters']['Inputs']['String'][0]['Default Value']
+        self.assertIs(flags['HavePlayedEvent.' + scene], True)
+        delete = next(p for p in nodes[0]['Parameters']['Inputs']['Bool'] if p['Name'] == 'Logic_Delete')
+        self.assertEqual((delete['Node Index'], delete['Output Index']), (1, 0))
+        self.assertEqual(greeting['Parameters']['Outputs']['Bool'][0]['Name'], 'HavePlayed')
+        module = 'Logic/Land_Kokiri_House_A_Prefab_5d58.logic.module.ainb'
+        door = {n['Node Index']: n for n in ainb.AINB.from_binary(
+            self.nup.read(self.members[module])).as_dict()['Nodes']}
+        arrival = door[1]['Parameters']['Inputs']['String'][0]['Default Value']
+        self.assertEqual(arrival, 'Dm_Kokiri_0050')
+        self.assertIs(flags['HavePlayedEvent.' + arrival], True)
+        self.assertEqual(door[0]['Name'], 'OperateOR')
+        sources = door[0]['Parameters']['Inputs']['Bool'][0]['Sources']
+        self.assertIn((1, 0), [(s['Node Index'], s['Output Index']) for s in sources])
+        create = next(p for p in door[11]['Parameters']['Inputs']['Bool'] if p['Name'] == 'Logic_Create')
+        self.assertEqual((create['Node Index'], create['Output Index']), (0, 1))
 
     def test_tutorial_body_disappears_but_all_three_gameplay_hooks_survive(self):
         from oot_rando.patching.progressive import add_converter, token_actor
@@ -93,11 +343,16 @@ class GameFlows(unittest.TestCase):
 
     def test_opening_skips_both_movies_without_losing_seed_or_inventory_initialization(self):
         raw = add_collection_markers(self.read(path('OpeningEvent')), {'Event3': 'RandoSeed.test'})[0]
-        raw = add_start_values(raw, 'RandoCollected_Event3', {'IsGet.Item_Dungeon_Map': True})
+        values = dict(comfort.start_values({'skip_opening': True}), **{'IsGet.Item_Dungeon_Map': True})
+        raw = add_start_values(raw, 'RandoCollected_Event3', values)
         result, _ = comfort.opening(raw, {'skip_opening': True, 'skip_first_pickup_text': True})
         live = reached(result, 'Opening_LoadingKokiriForest')
         self.assertIn('RandoCollected_Event3', {e.name for e in live})
         self.assertIn('RandoStartValue_IsGet.Item_Dungeon_Map', {e.name for e in live})
+        writes = {_params(e).get('GameDataName'): _params(e).get('Value') for e in live
+                  if _action(e) == ('GameDataActor', 'EventTriggerSetGameDataBool')}
+        for name, value in values.items():
+            self.assertIs(writes.get(name), value)
         for entry in ('Opening_LoadingKokiriForest', 'Opening_Introduction'):
             self.assertFalse(any(_params(e).get('EventName') in ('Dm_Kokiri_0000', 'Dm_Kokiri_0030')
                                  and _action(e) == ('EventSystemActor', 'EventTransition') for e in reached(result, entry)))

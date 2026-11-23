@@ -136,10 +136,10 @@ with the existing timeline, automatic skip-window and chest options.
 
 | Setting | Result |
 | --- | --- |
-| `skip_opening` | Bypass the opening movie and wake-up scene while preserving seed binding, starting items, start values, Navi setup and the native loading/fade continuation. |
+| `skip_opening` | Bypass the opening movie and wake-up scene, and premark Saria's arrival and first conversation outside Link's house as seen. Initialize the normal house door and forest visit state while preserving seed binding, starting items, start values, Navi setup and the native loading/fade continuation. |
 | `skip_tutorials` | Suppress action-guide screens and mark the 53 guides done. Keep progressive conversion, dungeon-key credit and Zelda's stone/progression checks in `ActionGuide`. Unlock the map interface without granting individual dungeon maps. |
 | `skip_first_pickup_text` | Mark the first presentations of 16 repeatable consumables as seen. Initialize missing small nut/stick capacity without replacing owned higher bags. Equipment, heart pieces/containers, gold rupees and chest messages keep their normal presentation. |
-| `skip_story_sequences` | Short reward paths for Saria, the first Master Sword/Rauru sequence, Light Arrows and Darunia's successful song/bracelet sequence. Preserve healing, forward-only quest requests, the native era change and the two burning-Kakariko map transfers. |
+| `skip_story_sequences` | Skip the Deku Tree mouth-opening conversation, Zelda's first exposition/letter ceremony, Impa's farewell, Darunia's Fire Temple meeting, Ruto's Water Temple meeting and sapphire discovery in Jabu. Also shorten Saria, the first Master Sword/Rauru sequence, Light Arrows and Darunia's successful song/bracelet sequence. Preserve rewards, world flags, healing, forward-only quest requests, the native era change and the two burning-Kakariko map transfers. |
 | `skip_dungeon_endings` | Give each of the eight dungeon rewards after accepting its first-clear warp, before leaving the boss room; bypass the reward ceremony and Chamber of Sages stops. Repeat/cancelled warps give nothing. Ruto's earlier sapphire display no longer collects the relocated Barinade check. |
 | `skip_fairy_sequences` | Shorten all six paid fairy gifts while retaining choices, payment, prerequisites (including Din's magic check), the current patched native grant routine and healing. |
 | `skip_song_lessons` | Cover all twelve song checks: the original ten trigger adapters plus a two-reward Time lesson and a dedicated map-started Requiem adapter. Both Time-scene collection markers are retained independently. |
@@ -171,6 +171,74 @@ comparison cannot detect. Verification therefore takes about another generation.
 
 Generate a new mod and use a fresh test save to exercise the opening, tutorial
 and first-pickup initialization. Older accepted artifacts remain readable.
+Generator 0.12.10 also premarks Saria's first arrival/greeting when `skip_opening`
+is enabled; previously generated mods need regeneration to include this change.
+Generator 0.12.11 expands `skip_story_sequences` with the audited meetings above.
+The Deku Tree shortcut runs at the original meeting trigger; it sets the native
+mouth flag (`NpcKokiriDekuTreeParam.OpendMouth_Child`), completes `Meet_DekuTree`
+and requests `Get_StoneOfForest/GoInside`. It bypasses both scenes, their dialogue,
+camera staging, waits and music stop. It does not pre-open the dungeon on a new save.
+This bypasses the cinematic at its caller; it does not enter a native skip window
+inside a talking scene (the mechanism previously associated with `NoActor` crashes).
+Zelda gives the current shuffled letter check once through the normal item-get
+hooks, then resumes her native quest continuation. Her narrative repeat questions
+are skipped without replaying parameterized conversation counters.
+Darunia still creates the Fire Temple chain; Ruto's caller retains its discovery
+and first-meeting flags. The song lesson option remains independent of Impa's farewell.
+Generator 0.12.12 also removes non-choice lines in the audited special interactions
+through `special_dialogues.py`. King Zora keeps his native moving-aside animation,
+collision write and the caller's letter-bottle consumption. Talon keeps his run,
+Cucco consumption and quest/Malon flags (both scene variants). The nine Fire Temple
+prisoner entries retain their individual disappearance flags and one decrement
+each; all nine event-setting aliases still select their original entry.
+The same dialogue-only treatment covers carpenter rescues, Biggoron trade NPCs,
+Mido, the letter gate guard, Nabooru's quest flow, Jabu and magic-bean planting.
+Generator 0.12.13 additionally skips the post-Deku Tree Saria/Mido scene and Navi's
+following talk, preserving Mido's unblock/completion flags, native repositioning
+and autosave. Talon's castle wake-up is replaced at its caller: show the Cucco,
+fade to black, delete the shown item, consume one Cucco, keep the quest/Malon
+effects, hide Talon and set his native scene-played deletion flag, then fade back.
+Generator 0.12.14 similarly replaces King Zora's letter cinematic at its caller:
+show Ruto's Letter, fade to black, remove the displayed item and empty the
+letter-specific bottle, move the king to his linked post-letter Action2 anchor,
+restore his native idle pose and cloth collision, mark the scene played to open
+the passage, keep the guarded Step07/UI continuation, then fade back. The repeat
+and irregular handover branch retains its native routing. Other bottles are untouched.
+These changes use `skip_story_sequences` and require regenerating existing mods.
+Their animation, fade and control-return behavior still needs an in-game check.
+Generator 0.12.15 extends the same short-fade treatment to the nine Fire Temple
+prisoner entries, the four carpenter escape scenes, the Gerudo membership-card
+ceremony, the Kakariko letter gate, Ruto's platform/Big Octo scene, Nabooru's first
+meeting, three Ingo race cinematics and Bonooru/Pierre's response performances.
+`physical_scene_shortcuts.py` composes after the dialogue pass on current flows.
+Gorons retain their own deletion flag and single decrement, with a repeated-entry
+guard. Carpenter callers keep their counters; each scene retains its original
+WarpPoint argument and completion callback. The fourth rescue's Gerudo creation
+check runs before the card ceremony sends her home. The current shuffled card
+reward and marker run once, and the native fast-fortress continuation stays intact.
+The letter gate's existing ground controllers use their native ForceWarp input,
+preserving the letter flag selectors and moving the physical shutters together.
+Ruto's shortcut hides her and the displayed stone, restores the lift's lower map
+placement, keeps the room flags and native Big Octo battle start, and grants no
+dungeon reward. Nabooru retains the caller's final anchor and guarded quest tail.
+Ingo's scenes retain horse staging/mount requests, the first-win refund and final
+closed gate/quest step; entry fees, choices, races, cleanup and win counters remain
+in their native caller. Recording and recognizing the scarecrow tune remain
+interactive; automatic playback, dances and the temporary quest-Pierre appearance
+are shortened without permanently summoning a hookshot target. Ordinary field
+summons and their reset flags are unchanged. These are static graph/resource
+checks; final placement, collision, mounts and return of control need playtesting.
+The dialogue-only adapters keep choices and their replies, except the collyre
+scene's explanatory replies; its two choices, inventory checks, debit and quest
+continuation are unchanged. The physical scarecrow adapters keep choices and
+their result branches while removing non-choice replies. Complete exposition
+shortcuts (Zelda and Nabooru) also omit their narrative repeat questions.
+In the dialogue-only pass, terminal branches become animation requests or a one-frame wait, so a
+silent entry/fork is never empty. Talk animation requests are retained without
+waiting for looping poses. Outside the physical shortcuts above, standalone
+movement, waits and cameras remain native; doors, counters, item grants and
+collection hooks retain their original branches. No adapter accepts a paid trade
+automatically, pre-releases prisoners or bypasses gameplay prerequisites.
 **Static tests and source replay do not validate animations, loading or actor
 lifetime in the engine. These options still need in-game playtesting.**
 

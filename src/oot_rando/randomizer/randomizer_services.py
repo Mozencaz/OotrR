@@ -19,7 +19,10 @@ ACCEPTED_GENERATORS = (
     ('0.10.1', 'ap-glitchless-v5'), ('0.12.0', 'ap-glitchless-v5'), ('0.12.1', 'ap-glitchless-v5'),
     ('0.12.2', 'ap-glitchless-v5'), ('0.12.3', 'ap-glitchless-v5'), ('0.12.4', 'ap-glitchless-v5'),
     ('0.12.5', 'ap-glitchless-v5'), ('0.12.6', 'ap-glitchless-v5'), ('0.12.7', 'ap-glitchless-v5'),
-    ('0.12.8', 'ap-glitchless-v5'), ('0.12.9', 'ap-glitchless-v5'))
+    ('0.12.8', 'ap-glitchless-v5'), ('0.12.9', 'ap-glitchless-v5'), ('0.12.10', 'ap-glitchless-v5'),
+    ('0.12.11', 'ap-glitchless-v5'), ('0.12.12', 'ap-glitchless-v5'),
+    ('0.12.13', 'ap-glitchless-v5'), ('0.12.14', 'ap-glitchless-v5'),
+    ('0.12.15', 'ap-glitchless-v5'))
 
 QOL_FOLDER = 'OoT_QoL'
 QOL_KIND = 'qol'
@@ -36,7 +39,7 @@ def read_artifact(directory):
     version = (manifest.get('generator_version'), manifest.get('adapter_version'))
     if version not in ACCEPTED_GENERATORS:
         raise ValueError('Unsupported generator version.')
-    if version[0] in {'0.2.0', '0.3.0', '0.4.0', '0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0', '0.10.0', '0.11.0', '0.11.1', '0.11.2', '0.11.3', '0.11.4', '0.10.1', '0.12.0', '0.12.1', '0.12.2', '0.12.3', '0.12.9'}:
+    if version[0] in {'0.2.0', '0.3.0', '0.4.0', '0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0', '0.10.0', '0.11.0', '0.11.1', '0.11.2', '0.11.3', '0.11.4', '0.10.1', '0.12.0', '0.12.1', '0.12.2', '0.12.3', '0.12.9', '0.12.10', '0.12.11', '0.12.12', '0.12.13', '0.12.14', '0.12.15'}:
         settings.validate_supported()
     if version[0] in ('0.1.0', '0.4.0', '0.9.0', '0.10.0', '0.11.0', '0.11.1', '0.11.2', '0.11.3', '0.11.4', '0.10.1'):
         # Early 0.1 manifests predate the categories field and 0.4 manifests the

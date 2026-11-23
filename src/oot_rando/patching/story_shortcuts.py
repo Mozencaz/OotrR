@@ -25,6 +25,9 @@ REWARDS = (
 )
 FAIRIES = ('Dm_FairyFountain_Din', 'Dm_FairyFountain_Power', 'Dm_FairyFountain_Wisdom',
            'Dm_FairyFountain_Frore', 'Dm_FairyFountain_Nayru', 'Dm_FairyFountain_Courage')
+STORY_FLOWS = ('Meet_DekuTree', 'Goto_HyruleCastle', 'DoorOfTime', 'AllSage',
+               'Dm_SY_BancChangeArrive', 'Get_StoneOfFire', 'Get_StoneOfWater',
+               'SageOfFire', 'SageOfWater', 'Npc_Kokiri_Mido_Child')
 
 
 def enabled(options):
@@ -63,7 +66,7 @@ def played(editor, scene, read, following=None, include_state=True):
     return editor.chain(steps, following)
 
 
-def cut(editor, scene, read, item=None):
+def cut(editor, scene, read, item=None, include_state=True):
     changed = []
     for transition in _transitions(editor.chart, scene):
         # A previous timeline patch may already have bypassed this transition.
@@ -76,7 +79,7 @@ def cut(editor, scene, read, item=None):
         following = editor.chain([editor.fade()], following)
         if item is not None:
             following = give(editor, item, following)
-        first = played(editor, scene, read, following)
+        first = played(editor, scene, read, following, include_state)
         editor.replace(transition, first)
         changed.append(transition.name)
     return changed
@@ -85,7 +88,33 @@ def cut(editor, scene, read, item=None):
 def story(raw, name, read, current):
     editor = SceneEditor(raw, name, [read(path('Dm_SY_GetInEvent')), read(path('OpeningEvent'))])
     report = {}
-    if name == 'Goto_HyruleCastle':
+    if name == 'Meet_DekuTree':
+        # Skip the entire caller, including its camera, fades and music stop.
+        # The tree's NpcKokiriDekuTreeParam.OpendMouth_Child reads the saved
+        # mouth flag: no cinematic animation or guessed actor warp is needed.
+        scene = SceneEditor(read(path('Dm_Kokiri_0075')), 'Dm_Kokiri_0075')
+        effects = [editor.clone_action(scene.events[k]) for k in ('Event43', 'Event39', 'Event40')]
+        first = editor.chain(effects + [editor.fade()])
+        first = editor.chain([editor.flag('HavePlayedEvent.' + s)
+                              for s in ('Dm_Kokiri_0070', 'Dm_Kokiri_0075')], first)
+        link(editor.events['Event7'], first)
+        report['deku_tree'] = ['Dm_Kokiri_0070', 'Dm_Kokiri_0075']
+    elif name == 'Goto_HyruleCastle':
+        # The caller already displays the Cucco. Replace everything after that
+        # display, including the minute-long native wake-up/run, under black.
+        talon = SceneEditor(read(path('Dm_HrlCastle_0020')), 'Dm_HrlCastle_0020')
+        effects = [editor.clone_action(talon.events[k]) for k in
+                   ('Event42', 'Event69', 'Event121', 'Event141', 'Event133', 'Event134')]
+        hide = editor.act('HideTalon', 'Npc_Hylia_Talon_Child', 'EventGoOffstageForUser',
+                          _params(talon.events['Event92']))
+        # HyruleCastle_Prefab_19e8 wires this flag to Talon's Logic_Delete.
+        # Hide first, and make no further actor requests after setting it.
+        first = editor.chain([editor.act('FadeOut', 'UISystemActor', 'EventEventFadeOut',
+                                         {'Color': 0, 'Length': 1, 'IsNoPlayAnime': False,
+                                          'IsWaitEnd': True})] + effects + [hide,
+                              editor.flag('HavePlayedEvent.Dm_HrlCastle_0020'), editor.fade()])
+        editor.replace(editor.events['Event84'], first)
+        report['talon_wake_up'] = 'Dm_HrlCastle_0020'
         # Keep the bridge's environment write and transfer to Hyrule Field.
         item = reward(current(path('Dm_Kokiri_0155')), 'Event68')
         first = give(editor, item, editor.events['Event218'])
@@ -93,6 +122,25 @@ def story(raw, name, read, current):
                               editor.flag('HavePlayedEvent.Dm_Kokiri_0155')], first)
         editor.entries['KokiriForest_ArriveLostWood'].main_event = make_index(first)
         report['saria'] = item
+        # Zelda's questions here only select exposition/repetition, not a
+        # purchase or a gameplay choice. Its other entries write parameterized
+        # conversation counters; do not flatten those into saved game effects.
+        item = reward(current(path('Dm_HrlCastle_0050')), 'Event59')
+        for scene in ('Dm_HrlCastle_0030', 'Dm_HrlCastle_0035', 'Dm_HrlCastle_0045'):
+            cut(editor, scene, read)
+        report['zelda_letter'] = item
+        report['zelda'] = cut(editor, 'Dm_HrlCastle_0050', read, item, include_state=False)
+        cut(editor, 'Dm_HrlCastle_0060', read)
+    elif name == 'Npc_Kokiri_Mido_Child':
+        # Dm_Kokiri_0145 owns presentation only. Keep its caller's saved effects
+        # and native Mido/player/Navi repositioning, then omit Navi's extra talk.
+        first = editor.chain([editor.act('FadeOut', 'UISystemActor', 'EventEventFadeOut',
+                                         {'Color': 0, 'Length': 1, 'IsNoPlayAnime': False,
+                                          'IsWaitEnd': True}),
+                              editor.flag('HavePlayedEvent.Dm_Kokiri_0145')], editor.events['Event29'])
+        editor.entries['KokiriForest_Get_StoneOfForest_Completed_Event'].main_event = make_index(first)
+        link(editor.events['Event113'], editor.chain([editor.fade()], editor.events['Event102']))
+        report['after_deku_tree'] = 'Dm_Kokiri_0145'
     elif name == 'DoorOfTime':
         # Preserve the first-draw condition, and reuse the later era-change event.
         draw = editor.entries['DoorOfTime_Draw'].main_event.v
@@ -148,6 +196,9 @@ def story(raw, name, read, current):
         first = played(editor, 'Dm_HrlField_0060', read, editor.chain([step, editor.fade()]), False)
         editor.entries['DoorOfTime_Escape'].main_event = make_index(first)
         report.update(rauru=item, master=grant, escape='Step04')
+        # Impa's farewell is after the song and the native map transfer.
+        # Keep both (and the lesson when its separate option is disabled).
+        report['impa_farewell'] = cut(editor, 'Dm_HrlField_0020', read)
     elif name == 'AllSage':
         item = reward(current(path('Dm_TimeTemple_0130')), 'Event85')
         for entry in ('Market_Adult_Field_GetArrowLight', 'GetArrowLight_OcarinaBackTimeTemple'):
@@ -194,6 +245,52 @@ def story(raw, name, read, current):
         report['dance'] = 'Dm_Goron_0025'
         report['bracelet'] = cut(editor, 'Dm_Goron_0030', read,
                                 reward(current(path('Dm_Goron_0030')), 'Event127'))
+    elif name == 'Get_StoneOfWater':
+        from evfl.entry_point import EntryPoint
+        from oot_rando.formats.inspect_resources import Byml
+        from math import degrees
+        from struct import pack, unpack
+        scene = SceneEditor(read(path('Dm_Zora_0010')), 'Dm_Zora_0010')
+        # The king's linked Action2 anchor is his post-letter position. Read it
+        # from the map rather than approximating the root-motion endpoint.
+        actors = Byml(read('Banc/ZoraDomain/ZoraDomain_Child_Static.bcett.byml.zs')).root['Actors']
+        king = next(a for a in actors if a['Gyaml'] == 'Npc_Zora_KingZora_child')
+        refs = {ref['Dst'] for ref in king['Links']}
+        anchor = next(a for a in actors if a['Hash'] in refs and a['Gyaml'] == 'AnchorAction2')
+        warp_params = dict(_params(scene.events['Event138']), Position=anchor['Translate'],
+                           YAngle=unpack('<f', pack('<f', degrees(anchor['Rotate'][1])))[0],
+                           ClothWarpMode=3)
+        warp = editor.act('MoveKingZora', 'Npc_Zora_KingZora_child',
+                          'EventWarpToTargetPosAndRot', warp_params)
+        # Reuse the current guarded Step07/UI tail as a local call, so the fade
+        # runs even when a quest guard ends that continuation early.
+        complete = EntryPoint('RandoCinema_KingZoraCompletion')
+        complete.main_event = make_index(editor.events['Event231'].data.nxt.v)
+        editor.chart.entry_points.append(complete)
+        first = editor.chain([
+            editor.act('FadeOut', 'UISystemActor', 'EventEventFadeOut',
+                       {'Color': 0, 'Length': 1, 'IsNoPlayAnime': False, 'IsWaitEnd': True}),
+            editor.clone_action(editor.events['Event245']),
+            editor.clone_action(editor.events['Event231']), warp,
+            editor.clone_action(scene.events['Event55']),
+            editor.clone_action(scene.events['Event58']),
+            editor.flag('HavePlayedEvent.Dm_Zora_0010'),
+            editor.call('CompleteKingZora', '', complete.name), editor.fade()])
+        editor.replace(editor.events['Event66'], first)
+        report['king_zora_letter'] = 'Dm_Zora_0010'
+        # Ruto discovers the sapphire: no reward here. The caller retains the
+        # discovery flag and subsequent miniboss/stone-carrying gameplay.
+        report['ruto_discovery'] = cut(editor, 'Dm_InsideJabu_Jabu_0020', read)
+    elif name == 'SageOfFire':
+        # Darunia's meeting creates the room's chain. The native continuation
+        # advances the quest and removes the scene actor.
+        cut(editor, 'Dm_FireTemple_0000', read)
+        report['darunia_meeting'] = cut(editor, 'Dm_FireTemple_0010', read)
+    elif name == 'SageOfWater':
+        # All equipment queries in this scene choose Navi's presentation only.
+        # Water level and Ruto's disappearance are owned by the caller.
+        cut(editor, 'Dm_WaterTemple_0010', read)
+        report['ruto_meeting'] = cut(editor, 'Dm_WaterTemple_0015', read)
     return editor.finish(report)
 
 
@@ -393,9 +490,24 @@ def apply(options, current, read, write):
         result, report = cinematic_comfort.patch(resource, current(resource), options)
         write(resource, result); records[resource] = report
     if options.get('skip_story_sequences'):
-        for name in ('Goto_HyruleCastle', 'DoorOfTime', 'AllSage', 'Dm_SY_BancChangeArrive', 'Get_StoneOfFire'):
+        for name in STORY_FLOWS:
             result, report = story(current(path(name)), name, read, current)
             write(path(name), result); records[path(name)] = report
+        from oot_rando.patching import special_dialogues
+        for name in special_dialogues.FLOWS:
+            resource = path(name)
+            if read(resource) is None:
+                continue
+            result, report = special_dialogues.shorten(current(resource), name, read)
+            if report['silent_lines']:
+                write(resource, result)
+                records.setdefault(resource, {})['special_dialogue'] = report
+        from oot_rando.patching import physical_scene_shortcuts
+        for name in physical_scene_shortcuts.FLOWS:
+            resource = path(name)
+            result, report = physical_scene_shortcuts.shorten(current(resource), name, read, current)
+            write(resource, result)
+            records.setdefault(resource, {})['physical_scene'] = report
     if options.get('skip_song_lessons'):
         for name in ('DoorOfTime', 'Dm_MelodyGet_Spilit'):
             result, report = extra_song(current(path(name)), name, read, current)

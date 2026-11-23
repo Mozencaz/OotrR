@@ -34,7 +34,7 @@ from oot_rando.game.resource_allocations import allocation, grow_resources, add_
 from oot_rando.formats.byml_writer import lift_actors, patch_strings
 from oot_rando.logic import rando_options
 
-GENERATOR_VERSION = '0.12.9'
+GENERATOR_VERSION = '0.12.15'
 ADAPTER_VERSION = 'ap-glitchless-v5'   # v5: progressive tokens (every copy gives the next level)
 ADULT_MAP = MAP.replace('_Child_', '_Adult_')
 # The amiibo menu: given by Kaepora's first field arrival, now never played
@@ -791,6 +791,9 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
             vanilla = lambda p: decompress(read(p), d) if p in members else None
             skips['cinematic_shortcuts'] = story_shortcuts.apply(
                 settings.full, current_flow, vanilla, lambda p, raw: extra_raw.__setitem__(p, raw))
+            if settings.full.get('skip_story_sequences'):
+                from oot_rando.patching import physical_scene_shortcuts
+                skips['physical_scene_world'] = physical_scene_shortcuts.apply_world(extra_raw, read)
         report('Analyzing event flow dependencies…')
         skips.update(complete_event_info(extra_raw, nup, members, d, read))
         # In place on the vanilla table (same size); chest rows are added after. The

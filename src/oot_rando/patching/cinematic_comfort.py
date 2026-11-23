@@ -27,6 +27,16 @@ PICKUPS = ('Obj_Rupee_Green', 'Obj_Rupee_Blue', 'Obj_Rupee_Red', 'Obj_Rupee_Purp
 
 def start_values(options):
     flags = {}
+    if options.get('skip_opening'):
+        # The first exit uses 0045/0050; Saria's ladder greeting is 0060.
+        # These flags select the normal door, disable her greeting request and
+        # select her post-greeting schedule. The skipped forest title normally
+        # marks the location visited. Do not replay After_Near_End: it requests
+        # a one-shot balloon from the house module rather than saving progress.
+        flags.update({name: True for name in (
+            'HavePlayedEvent.Dm_Kokiri_0045', 'HavePlayedEvent.Dm_Kokiri_0050',
+            'HavePlayedEvent.Dm_Kokiri_0060', 'KokiriForest_LinkHouseDoor_Open',
+            'IsVisitLocation.KokiriForest')})
     if options.get('skip_tutorials'):
         flags.update({'ActionGuide_IsEnd.' + name: True for name in GUIDES})
         flags.update({name: True for name in ('IsGet.Item_Dungeon_Map', 'IsGet.Item_Dungeon_Compass',
