@@ -343,6 +343,58 @@ OPTIONS = [
     Option('fast_chests', 'Quality of life', 'Fast chest opening', ((False, OK), (True, OK)), False,
            'Same patch as "Chests without cutscene" in the setup: the lid opens and Link holds the item up.',
            kind='bool'),
+    Option('skip_opening', 'Quality of life', 'Start without opening scenes', ((False, OK), (True, OK)), False,
+           "Skip the opening movie, wake-up scene and Saria's first greeting outside Link's house. Starting inventory and seed initialization still run. Experimental.",
+           kind='bool', experimental=(True,)),
+    Option('skip_tutorials', 'Quality of life', 'Skip tutorials', ((False, OK), (True, OK)), False,
+           'Suppress action guides and their first-time prompts; keep item conversion, dungeon-key credit and story progression.',
+           kind='bool', experimental=(True,)),
+    Option('skip_first_pickup_text', 'Quality of life', 'Skip first consumable pickup text', ((False, OK), (True, OK)), False,
+           'Ground consumables skip their first You got message. Nuts and sticks start with empty base capacity. Chests and equipment keep their messages.',
+           kind='bool', experimental=(True,)),
+    Option('skip_story_sequences', 'Quality of life', 'Short story sequences', ((False, OK), (True, OK)), False,
+           'Replace story scenes with short fades and their final world state: Talon, King Zora, nine Goron prisoners, four carpenter rescues and the Gerudo card, the letter gate, Ruto and Big Octo, Nabooru, Ingo race scenes and scarecrow performances. Keep item costs, rewards, quest progress, map transfers, race gameplay and interactive ocarina recording.',
+           kind='bool', experimental=(True,)),
+    Option('skip_dungeon_endings', 'Quality of life', 'Short dungeon endings', ((False, OK), (True, OK)), False,
+           'Give the dungeon reward after accepting the first-clear blue warp, before leaving the boss room. Skip reward ceremonies and Chamber of Sages stops.',
+           kind='bool', experimental=(True,)),
+    Option('skip_fairy_sequences', 'Quality of life', 'Short Great Fairy gifts', ((False, OK), (True, OK)), False,
+           'All six fountains keep payment, prerequisites, their native item grant and healing, while shortening the gift presentation.',
+           kind='bool', experimental=(True,)),
+    Option('skip_song_lessons', 'Quality of life', 'Song lessons without cutscene', ((False, OK), (True, OK)), False,
+           'The song lesson cutscene does not play: once it starts, Link holds up the item of its check right away '
+           '(songs shown as Sheik\'s harp in their colour), then the quest goes on as after the lesson. '
+           'No dialogue, no ocarina to play back. Impa, Malon, Saria, the Royal Family\'s Tomb, the windmill '
+           'and all six Sheik lessons, including Requiem. The Time lesson gives both the ocarina check and song check. '
+           'Ocarinas use an animated pickup form and become usable immediately. Not validated in game.',
+           kind='bool', experimental=(True,)),
+    Option('skip_story_timelines', 'Quality of life', 'Animated story scenes skipped', ((False, OK), (True, OK)),
+           False,
+           'Story scenes made only of animation (no text, no item) do not play: they count as seen and the '
+           'game goes on (the time of day a scene sets is set anyway, a boss intro still starts the fight '
+           'and its music; no item or equipment changes). '
+           '75 scenes, e.g. boss intros (except Ganon), the sages awakening, boss deaths and blue warps, '
+           'the Temple of Time, Ganon\'s castle barriers, Epona\'s fence jump, the first visit to the Deku '
+           'Tree, Zelda\'s escape, Kakariko burning and at night. Kept: title, ending, credits, Ganon\'s '
+           'intro and scenes that move world actors (Lake Hylia\'s scarecrows). '
+           'Not validated in game.',
+           kind='bool', experimental=(True,)),
+    Option('auto_skip_cutscenes', 'Quality of life', 'Skippable cutscenes skipped on their own',
+           ((False, OK), (True, OK)), False,
+           'Every cutscene part that + can skip is skipped without pressing it: the game goes straight to '
+           'what a + press would show, state changes kept (they are replayed as after a skip). Covers the '
+           'cutscenes made skippable by the randomizer (99 parts in 65 cutscenes) and five great fairy '
+           'fountains. Not the Water Temple water levels nor Din\'s fountain (they keep +), not the animated '
+           'scenes (see "Animated story scenes skipped") nor dialogues. Not validated in game.',
+           kind='bool', experimental=(True,)),
+    Option('skip_npc_dialogues', 'Quality of life', 'NPC lines without a choice skipped', ((False, OK), (True, OK)),
+           False,
+           'Lines of the listed NPCs that ask nothing are not shown: talking to them goes straight to their '
+           'item, their question or the end of the talk. Lines after a question the player answered are kept. '
+           'Selected residents in Kokiri Forest, Goron City and Zora\'s Domain. Shops, minigames, leaders, '
+           'trade services and dedicated hint givers keep their dialogue. '
+           'Not validated in game.',
+           kind='bool', experimental=(True,)),
     Option('free_scarecrow', 'Quality of life', 'Free scarecrow', ((False, OK), (True, NO_EVENT)), False, kind='bool'),
     Option('big_poe_count', 'Quality of life', 'Big Poes to bring back', None, 10,
            'The collector gives his reward after this many Big Poes. Not validated in game.',
@@ -359,7 +411,9 @@ OUT_OF_SCOPE = ('Entrance shuffle, Master Quest, multiworld and gossip stone hin
 
 # Options added after a release, left out of the stored settings at this value: stored settings
 # without the option mean it, and seeds made before the option keep their identity.
-UNRECORDED = {'spiritual_stones': 'all', 'door_of_time_requirement': 'song', 'blue_fire_arrows': False}
+UNRECORDED = {'spiritual_stones': 'all', 'door_of_time_requirement': 'song', 'blue_fire_arrows': False,
+              'skip_opening': False, 'skip_tutorials': False, 'skip_first_pickup_text': False,
+              'skip_story_sequences': False, 'skip_dungeon_endings': False, 'skip_fairy_sequences': False}
 
 
 def recorded(values):

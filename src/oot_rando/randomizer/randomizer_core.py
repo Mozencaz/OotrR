@@ -34,7 +34,7 @@ from oot_rando.game.resource_allocations import allocation, grow_resources, add_
 from oot_rando.formats.byml_writer import lift_actors, patch_strings
 from oot_rando.logic import rando_options
 
-GENERATOR_VERSION = '0.12.8'  # Optional ice arrows melting red ice; shops open day and night
+GENERATOR_VERSION = '0.12.15'
 ADAPTER_VERSION = 'ap-glitchless-v5'   # v5: progressive tokens (every copy gives the next level)
 ADULT_MAP = MAP.replace('_Child_', '_Adult_')
 # The amiibo menu: given by Kaepora's first field arrival, now never played
@@ -512,6 +512,15 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
             from oot_rando.patching.shop_bottles import DISPLAY_SHOP_FLOW, patch_display_shop
             extra_raw[DISPLAY_SHOP_FLOW], story['shop_full_bottles'] = patch_display_shop(
                 extra_raw.get(DISPLAY_SHOP_FLOW) or decompress(read(DISPLAY_SHOP_FLOW), d))
+            # Song lessons without cutscene: the trigger gives the item with Link's pose
+            # (after the story fixes, which also edit Malon's trigger flow).
+            from oot_rando.patching.song_lessons import BY_AP as SONG_LESSONS, flow_path as lesson_path, give_in_trigger
+            for ap, given in sorted(full['song_lessons'].items()):
+                lesson = SONG_LESSONS[ap]
+                path = lesson_path(lesson.trigger)
+                extra_raw[path], given['trigger'] = give_in_trigger(
+                    extra_raw.get(path) or decompress(read(path), d),
+                    decompress(read(lesson_path(lesson.stem)), d), lesson, given['actor'], given['flag'])
             from oot_rando.patching.quest_guard import CHALLENGES as CHALLENGE_TABLE
             from oot_rando.patching import child_castle_skip
             if child_castle_skip.enabled(settings.full):
@@ -659,6 +668,8 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
             castle_skip = child_castle_skip.enabled(settings.full)
             start_values = dict(start_dungeon_values(settings.full), **story_fixes.story_start_values())
             start_values.update(area_presentations.start_values())
+            from oot_rando.patching.cinematic_comfort import start_values as comfort_start_values
+            start_values.update(comfort_start_values(settings.full))
             if castle_skip:
                 start_values.update(child_castle_skip.START_VALUES)
             if start_values:
@@ -709,6 +720,8 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
                 skips['gift_get'] = full['gift_get']
             if full.get('song_flows'):
                 skips['songs'] = full['song_flows']
+            if full.get('song_lessons'):
+                skips['song_lessons'] = full['song_lessons']
             if full.get('master_sword_flows'):
                 skips['master_sword_flows'] = full['master_sword_flows']
             if settings.full.get('big_poe_count', 10) != 10:
@@ -729,7 +742,8 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
             report('Chests without cutscene…')
             extra_raw[CHEST_FLOW], skips['quick_chest'] = quick_chest(current_flow(CHEST_FLOW))
             extra_raw[SMALL_CHEST_FLOW], skips['quick_small_chest'] = quick_small_chest(current_flow(SMALL_CHEST_FLOW))
-        if settings.skip_locked_cutscenes:
+        auto_windows = (settings.full or {}).get('auto_skip_cutscenes')
+        if settings.skip_locked_cutscenes or auto_windows:
             # Flow-driven cutscenes: native skip windows up to each
             # event, with idempotent state writes replayed when skipped. Analysed on
             # the original flows; flows already changed by another patch are left alone.
@@ -742,6 +756,44 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
                           if 'Event/EventFlow/' + n + '.bfevfl.zs' not in extra_raw]
             flows, skips['cutscene_windows'] = cutscene_window_files(original_flow, flow_names, candidates)
             extra_raw.update(flows)
+        if (settings.full or {}).get('skip_npc_dialogues'):
+            # NPC lines without a choice taken out, white-listed flows (patching/npc_dialogue_skip.py).
+            report('NPC lines without a choice skipped…')
+            from oot_rando.patching import npc_dialogue_skip
+            skips['npc_dialogues'] = {}
+            for name in npc_dialogue_skip.zone_flows(True):
+                path = npc_dialogue_skip.flow_path(name)
+                extra_raw[path], skips['npc_dialogues'][name] = npc_dialogue_skip.mute(current_flow(path), name)
+        if auto_windows:
+            # Every + window taken on its own, on the skipped path (patching/skip_auto.py):
+            # the windows added above and the native ones of the fairy fountains.
+            report('Skippable cutscenes skipped on their own…')
+            from oot_rando.patching import skip_auto
+            skips['auto_windows'] = {}
+            for name in skip_auto.flows(True, skips.get('cutscene_windows', {})):
+                path = skip_auto.flow_path(name)
+                extra_raw[path], skips['auto_windows'][name] = skip_auto.take_windows(current_flow(path), name)
+        if (settings.full or {}).get('skip_story_timelines'):
+            # Animated story scenes never play: counted as seen (patching/timeline_skip.py),
+            # after every other change of their flows.
+            report('Animated story scenes skipped…')
+            from oot_rando.patching import timeline_skip
+            skips['story_timelines'] = {}
+            for name in timeline_skip.site_flows(True):
+                path = timeline_skip.flow_path(name)
+                extra_raw[path], skips['story_timelines'][name] = timeline_skip.drop_timelines(
+                    current_flow(path), name)
+        # Scene adapters run after generic skips, on the latest bytes. Their
+        # short grant paths must be registered before transitive preload repair.
+        from oot_rando.patching import story_shortcuts
+        if settings.full is not None and story_shortcuts.enabled(settings.full):
+            report('Short story, tutorial and reward sequences…')
+            vanilla = lambda p: decompress(read(p), d) if p in members else None
+            skips['cinematic_shortcuts'] = story_shortcuts.apply(
+                settings.full, current_flow, vanilla, lambda p, raw: extra_raw.__setitem__(p, raw))
+            if settings.full.get('skip_story_sequences'):
+                from oot_rando.patching import physical_scene_shortcuts
+                skips['physical_scene_world'] = physical_scene_shortcuts.apply_world(extra_raw, read)
         report('Analyzing event flow dependencies…')
         skips.update(complete_event_info(extra_raw, nup, members, d, read))
         # In place on the vanilla table (same size); chest rows are added after. The
@@ -749,6 +801,9 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
         report('Dialogues and area presentations skippable with + …')
         extra_raw[EVENT_SETTINGS], skips['dialogues'] = patch_dialogues(
             decompress(read(EVENT_SETTINGS), d), settings.skip_auto_dialogues, True)
+        if settings.full is not None and story_shortcuts.enabled(settings.full):
+            extra_raw[EVENT_SETTINGS], skips['cinematic_event_styles'] = story_shortcuts.event_styles(
+                extra_raw[EVENT_SETTINGS], settings.full)
         plain_raw = {}
         mailbox_items = ap_records(settings)
         if mailbox_items:
@@ -1206,6 +1261,11 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
     plan['progressive']['hooks'] = hook_sites(token_sources, current_flow, covered=plan['gift_get'])
     for resource, events in sorted(plan['progressive']['hooks'].items()):
         modified[resource] = add_converter_calls(current_flow(flow_name(resource)), events, flow_name(resource))
+    # Song lessons without their cutscene: what each lesson now gives, read from its
+    # patched flow; the trigger is changed after the story fixes (patching/song_lessons.py).
+    from oot_rando.patching.song_lessons import BY_AP as SONG_LESSONS, given_item, lesson_locations
+    plan['song_lessons'] = {ap: given_item(current_flow(SONG_LESSONS[ap].stem), SONG_LESSONS[ap])
+                            for ap in lesson_locations(settings.full.get('skip_song_lessons'))}
     if saved_flags:
         raw = modified.get(GAMEDATA)
         if raw is None:
@@ -1221,7 +1281,13 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
     # Songs in chests or as pickups: drawn as Sheik's harp in their colour (patching/song_models.py).
     from oot_rando.patching import song_models
     harp_songs = sorted({_reward(p) for p in plan['placements']
-                         if p['form'] in ('chest', 'world') and _reward(p) in song_models.SONG_COLOURS})
+                         if p['form'] in ('chest', 'world') and _reward(p) in song_models.SONG_COLOURS}
+                        | {given['actor'] for given in plan['song_lessons'].values()
+                           if given['actor'] in song_models.SONG_COLOURS})   # held up in the item get
+    from oot_rando.patching import story_shortcuts
+    if any(settings.full.get(k) for k in ('skip_song_lessons', 'skip_story_sequences', 'skip_dungeon_endings')):
+        # Any short reward can contain a song, including an unshuffled Requiem.
+        harp_songs = sorted(set(harp_songs) | set(song_models.SONG_COLOURS))
     plan['song_models'] = {song: song_models.project_of(song) for song in harp_songs}
     if harp_songs:
         report(f'Building {len(harp_songs)} song harps (one colour per song)…')
@@ -1230,6 +1296,12 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
         modified.update(harp_modified)
         new.update(harp_new)
     derived = derived_actors(p['after'] for p in plan['placements'] + natives)
+    if any(settings.full.get(k) for k in ('skip_song_lessons', 'skip_story_sequences', 'skip_dungeon_endings')):
+        from oot_rando.game.item_forms import OCARINAS, form_actor
+        from oot_rando.patching.progressive import token_family
+        held = set(OCARINAS) | set(song_models.SONG_COLOURS)
+        held.update(a for a in plan['progressive']['actors'] if token_family(a) == 'Ocarina')
+        derived = sorted(set(derived) | {form_actor(a, 'world') for a in held})
     if derived or repeatables:
         report(f'Building {len(derived)} derived actors (freestanding and shop items)…')
         packs = {}
