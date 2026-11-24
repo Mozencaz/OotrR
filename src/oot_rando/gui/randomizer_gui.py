@@ -1330,7 +1330,8 @@ class Application(PartiesPage):
         old_chan = info.get("current_channel") or ""
         old_desc = f"{old_chan}/{old_ver}".strip("/") if old_ver else source_mods
         new_desc = chosen["channel"] + "/" + chosen["version_name"]
-        extra = f" (migrated {len(migrated)} {party if len(migrated) == 1 else parties})" if migrated else ""
+        noun = 'party' if len(migrated) == 1 else 'parties'
+        extra = f" (migrated {len(migrated)} {noun})" if migrated else ""
         return f"Longshot updated: {old_desc} → {new_desc}{extra}."
 
     def restore_last_artifact(self):
