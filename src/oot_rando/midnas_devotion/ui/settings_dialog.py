@@ -21,9 +21,9 @@ from oot_rando.native_dialogs import ask_directory, ask_open_file
 
 CREATABLE_MIDNA_FOLDERS: Tuple[Tuple[str, str, str], ...] = (
     ("live_mods_dir", "Live Mods Folder", "mods"),
-    ("backup_dir", "Mod Library / Backups", "mods_backup"),
-    ("uninstalled_seeds_dir", "Extra Seeds Folder", "seeds-uninstalled"),
-    ("workspace_dir", "Manager Workspace", "ootmodman"),
+    ("backup_dir", "User Mod Library", "UserModLibrary"),
+    ("uninstalled_seeds_dir", "Archived / Standalone Seeds", "ArchivedSeeds"),
+    ("workspace_dir", "Midna's Devotion Workspace", "midnas_devotion"),
 )
 
 
@@ -148,6 +148,7 @@ class SettingsDialog(QDialog):
         self.cfg = cfg
         self.setWindowTitle("Folder & Path Settings")
         self.resize(820, 520)
+        self._plain = (self.cfg.effective_ui_theme == "mozencaz")
         self.edits: Dict[str, QLineEdit] = {}
         self.badges: Dict[str, QLabel] = {}
         self._build_ui()
@@ -157,10 +158,13 @@ class SettingsDialog(QDialog):
         root = QVBoxLayout(self)
         root.setSpacing(12)
 
+        plain = self._plain
         # Quick Auto-Fill card
         auto_card = QFrame()
         auto_card.setObjectName("autoCard")
         auto_card.setStyleSheet(
+            "QFrame#autoCard { background: #edf4fa; border: 1px solid #b9d2e6; border-radius: 7px; }"
+            if plain else
             "QFrame#autoCard { background: #1a242f; border: 1px solid #34526f; border-radius: 7px; }"
         )
         auto_lay = QHBoxLayout(auto_card)
@@ -172,18 +176,21 @@ class SettingsDialog(QDialog):
         tf = QFont()
         tf.setBold(True)
         auto_title.setFont(tf)
-        auto_title.setStyleSheet("border: none; color: #e3f2fd;")
+        auto_title.setStyleSheet("border: none; color: #1b3a54;" if plain else "border: none; color: #e3f2fd;")
         auto_sub = QLabel(
-            "Pick your main Longshot folder (or stable/v3.x.x folder) to automatically fill romfs, mods, backups, seeds, and the Longshot binary."
+            "Pick your main Longshot folder (or stable/v3.x.x folder) to automatically fill romfs, mods, UserModLibrary, archived seeds, and the Longshot binary."
         )
         auto_sub.setWordWrap(True)
-        auto_sub.setStyleSheet("border: none; color: #b0bec5; font-size: 11px;")
+        auto_sub.setStyleSheet("border: none; color: #4f6475; font-size: 11px;" if plain else "border: none; color: #b0bec5; font-size: 11px;")
         auto_text.addWidget(auto_title)
         auto_text.addWidget(auto_sub)
 
         auto_btn = QPushButton("Auto-Fill from Folder…")
         auto_btn.setMinimumHeight(34)
         auto_btn.setStyleSheet(
+            "QPushButton { background: #2f5f8f; color: #fff; font-weight: bold; padding: 0 14px; border-radius: 5px; border: 1px solid #244b72; }"
+            "QPushButton:hover { background: #3870a8; }"
+            if plain else
             "QPushButton { background: #1976d2; color: #fff; font-weight: bold; padding: 0 14px; border-radius: 4px; }"
             "QPushButton:hover { background: #1e88e5; }"
         )
@@ -196,6 +203,9 @@ class SettingsDialog(QDialog):
         self.rando_sync_lbl = QLabel()
         self.rando_sync_lbl.setWordWrap(True)
         self.rando_sync_lbl.setStyleSheet(
+            "background: #eaf4ed; border: 1px solid #9ec9ac; border-radius: 6px; "
+            "color: #1f5439; padding: 7px 10px; font-size: 11px;"
+            if plain else
             "background: #162822; border: 1px solid #2e6b52; border-radius: 6px; "
             "color: #b9f6ca; padding: 7px 10px; font-size: 11px;"
         )
@@ -206,6 +216,8 @@ class SettingsDialog(QDialog):
         grid_card = QFrame()
         grid_card.setObjectName("gridCard")
         grid_card.setStyleSheet(
+            "QFrame#gridCard { background: #fffdf8; border: 1px solid #dfd8c6; border-radius: 7px; }"
+            if plain else
             "QFrame#gridCard { background: #212121; border: 1px solid #383838; border-radius: 7px; }"
         )
         grid = QGridLayout(grid_card)
@@ -216,10 +228,10 @@ class SettingsDialog(QDialog):
         fields = [
             ("romfs_dir", "Base Game romfs/ *", "Folder containing Pack/ZsDic.pack.zs (required)", "dir"),
             ("live_mods_dir", "Live Mods Folder *", "Longshot's active mods/ folder (used in Live Mode)", "dir"),
-            ("backup_dir", "Mod Library / Backups", "Holds Character mods, UI/visual mods, and archived Randomizer seeds", "dir"),
-            ("uninstalled_seeds_dir", "Extra Seeds Folder", "Optional folder scanned for OoT_Randomizer_* seeds", "dir"),
+            ("backup_dir", "User Mod Library", "Your personal mod stash (UserModLibrary/) for Character, UI, and visual mods", "dir"),
+            ("uninstalled_seeds_dir", "Archived / Standalone Seeds", "Optional folder scanned for loose OoT_Randomizer_* seeds (named Party runs live in My Games)", "dir"),
             ("longshot_binary", "Longshot Executable", "Optional binary launched by the 'Play Longshot' button", "file"),
-            ("workspace_dir", "Manager Workspace *", "Stores Test Mode builds, staged mods, and disabled mods", "dir"),
+            ("workspace_dir", "Midna's Devotion Workspace *", "Stores Test Mode builds, staged mods, and disabled mods (midnas_devotion)", "dir"),
         ]
 
         for row_idx, (key, label, hint, kind) in enumerate(fields):
@@ -227,7 +239,7 @@ class SettingsDialog(QDialog):
             lf = QFont()
             lf.setBold(True)
             lbl.setFont(lf)
-            lbl.setStyleSheet("border: none; color: #eceff1;")
+            lbl.setStyleSheet("border: none; color: #1f2a24;" if plain else "border: none; color: #eceff1;")
             lbl.setToolTip(hint)
 
             edit = QLineEdit()
@@ -255,7 +267,7 @@ class SettingsDialog(QDialog):
         # Footer info & actions
         foot = QHBoxLayout()
         saved_lbl = QLabel(f"Settings file: {self.cfg.settings_path}")
-        saved_lbl.setStyleSheet("color: #9e9e9e; font-size: 11px;")
+        saved_lbl.setStyleSheet("color: #5c665d; font-size: 11px;" if plain else "color: #9e9e9e; font-size: 11px;")
 
         self.create_missing_btn = QPushButton("Create Missing Folders…")
         self.create_missing_btn.setToolTip("Auto-create any missing Midna's Devotion folders in a directory you choose.")
@@ -352,13 +364,13 @@ class SettingsDialog(QDialog):
             b = self.badges[key]
             if ok:
                 b.setText("✓")
-                b.setStyleSheet("border: none; font-weight: bold; color: #81c784;")
+                b.setStyleSheet("border: none; font-weight: bold; color: #2f7a55;" if self._plain else "border: none; font-weight: bold; color: #81c784;")
             elif warn:
                 b.setText("⚠")
-                b.setStyleSheet("border: none; font-weight: bold; color: #ffb74d;")
+                b.setStyleSheet("border: none; font-weight: bold; color: #b3741a;" if self._plain else "border: none; font-weight: bold; color: #ffb74d;")
             else:
                 b.setText("✕")
-                b.setStyleSheet("border: none; font-weight: bold; color: #e57373;")
+                b.setStyleSheet("border: none; font-weight: bold; color: #b71c1c;" if self._plain else "border: none; font-weight: bold; color: #e57373;")
             b.setToolTip(tip)
 
         romfs = self.edits["romfs_dir"].text().strip()

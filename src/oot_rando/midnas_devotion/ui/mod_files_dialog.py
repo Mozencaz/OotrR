@@ -45,6 +45,7 @@ class ModFilesDialog(QDialog):
         self.mod = mod
         self.conflicts = conflicts
         self.auto_merged = auto_merged or {}
+        self._plain = bool(getattr(parent, "_plain_ui", False))
         self.setWindowTitle(f"Inspect Mod Files — {mod.name}")
         self.resize(960, 580)
         self._build_ui()
@@ -58,18 +59,32 @@ class ModFilesDialog(QDialog):
         card = QFrame()
         card.setObjectName("modInfoCard")
         has_conflicts = bool(self.conflicts)
-        if has_conflicts:
-            card.setStyleSheet(
-                "QFrame#modInfoCard { background: #33220d; border: 1px solid #ef6c00; border-radius: 7px; }"
-            )
-            title_color = "#ffcc80"
-            sub_color = "#ffe0b2"
+        if self._plain:
+            if has_conflicts:
+                card.setStyleSheet(
+                    "QFrame#modInfoCard { background: #fdf3e3; border: 1px solid #dfaa5c; border-radius: 7px; }"
+                )
+                title_color = "#7a4d0e"
+                sub_color = "#6e4c1b"
+            else:
+                card.setStyleSheet(
+                    "QFrame#modInfoCard { background: #eaf4ed; border: 1px solid #8ec29e; border-radius: 7px; }"
+                )
+                title_color = "#1f5439"
+                sub_color = "#2f5e46"
         else:
-            card.setStyleSheet(
-                "QFrame#modInfoCard { background: #122b16; border: 1px solid #2e7d32; border-radius: 7px; }"
-            )
-            title_color = "#a5d6a7"
-            sub_color = "#cfe8d1"
+            if has_conflicts:
+                card.setStyleSheet(
+                    "QFrame#modInfoCard { background: #33220d; border: 1px solid #ef6c00; border-radius: 7px; }"
+                )
+                title_color = "#ffcc80"
+                sub_color = "#ffe0b2"
+            else:
+                card.setStyleSheet(
+                    "QFrame#modInfoCard { background: #122b16; border: 1px solid #2e7d32; border-radius: 7px; }"
+                )
+                title_color = "#a5d6a7"
+                sub_color = "#cfe8d1"
 
         card_lay = QVBoxLayout(card)
         card_lay.setContentsMargins(12, 10, 12, 10)
@@ -113,7 +128,7 @@ class ModFilesDialog(QDialog):
         sub.setStyleSheet(f"border: none; color: {sub_color};")
 
         path_lbl = QLabel(f"Folder: {self.mod.source_path}")
-        path_lbl.setStyleSheet("border: none; color: #b0bec5; font-size: 11px;")
+        path_lbl.setStyleSheet("border: none; color: #5c665d; font-size: 11px;" if self._plain else "border: none; color: #b0bec5; font-size: 11px;")
         path_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 
         card_lay.addWidget(title)
@@ -183,18 +198,18 @@ class ModFilesDialog(QDialog):
 
             if owners:
                 st_item = QTableWidgetItem("⚠ Conflict")
-                st_item.setForeground(QBrush(QColor("#ffcc80")))
-                bg = QBrush(QColor("#33220d"))
+                st_item.setForeground(QBrush(QColor("#8a5308" if self._plain else "#ffcc80")))
+                bg = QBrush(QColor("#fdf3e3" if self._plain else "#33220d"))
                 col_txt = ", ".join(owners)
             elif auto_owners:
                 st_item = QTableWidgetItem("⇄ Auto-Merged Audio")
-                st_item.setForeground(QBrush(QColor("#81d4fa")))
-                bg = QBrush(QColor("#102938"))
+                st_item.setForeground(QBrush(QColor("#1b5e8a" if self._plain else "#81d4fa")))
+                bg = QBrush(QColor("#e7f2fa" if self._plain else "#102938"))
                 col_txt = "Auto-merges with " + ", ".join(auto_owners)
             else:
                 st_item = QTableWidgetItem("✓ Safe")
-                st_item.setForeground(QBrush(QColor("#a5d6a7")))
-                bg = QBrush(QColor("#122616"))
+                st_item.setForeground(QBrush(QColor("#1f5439" if self._plain else "#a5d6a7")))
+                bg = QBrush(QColor("#eaf4ed" if self._plain else "#122616"))
                 col_txt = "None"
             st_item.setFont(bold_font)
 
@@ -204,8 +219,11 @@ class ModFilesDialog(QDialog):
                 QTableWidgetItem(sz_txt),
                 QTableWidgetItem(rel),
             ]
+            row_fg = QBrush(QColor("#1f2a24" if self._plain else "#f1f5f9"))
             for c, item in enumerate(items):
                 item.setBackground(bg)
+                if c != 0:
+                    item.setForeground(row_fg)
                 self.table.setItem(r, c, item)
 
     def _open_folder(self) -> None:

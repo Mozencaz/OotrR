@@ -30,6 +30,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = list(sys.argv[:1] if argv is None else [sys.argv[0], *argv])
     app = QApplication.instance() or QApplication(args)
+    app.setStyle("Fusion")
     app.setApplicationName(
         "Midna's Devotion — Ocarina of Time Mod Manager & Merger (for Longshot + Mozencaz's Randomizer)"
     )
@@ -37,3 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     win = MainWindow(cfg)
     win.show()
     return int(app.exec())
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

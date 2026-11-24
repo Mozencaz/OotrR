@@ -48,26 +48,62 @@ def clean_subprocess_env() -> Dict[str, str]:
     return env
 
 
+_STARTUP_MIGRATION_NOTICES: List[str] = []
+
+
+def _try_migrate_dir(old_path: str, new_path: str, label: str) -> str:
+    """Rename a legacy directory to its new name if safe; return the active path."""
+    old_abs = os.path.abspath(os.path.expanduser(old_path))
+    new_abs = os.path.abspath(os.path.expanduser(new_path))
+    if os.path.normcase(old_abs) == os.path.normcase(new_abs):
+        return new_abs
+    if os.path.isdir(new_abs):
+        return new_abs
+    if os.path.isdir(old_abs):
+        try:
+            os.makedirs(os.path.dirname(new_abs), exist_ok=True)
+            shutil.move(old_abs, new_abs)
+            msg = f"{label}: {old_abs}  →  {new_abs}"
+            if msg not in _STARTUP_MIGRATION_NOTICES:
+                _STARTUP_MIGRATION_NOTICES.append(msg)
+            return new_abs
+        except Exception:
+            return old_abs
+    return new_abs
+
+
 def default_config_dir() -> str:
     if sys.platform == "win32":
-        legacy = os.path.join(os.path.expanduser("~"), ".config", "ootmodman")
-        if os.path.isfile(os.path.join(legacy, "settings.json")):
-            return legacy
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
-        return os.path.join(base, "ootmodman")
+        new_dir = os.path.join(base, "midnas_devotion")
+        for legacy in (
+            os.path.join(base, "ootmodman"),
+            os.path.join(os.path.expanduser("~"), ".config", "ootmodman"),
+        ):
+            if os.path.isdir(legacy) and not os.path.isdir(new_dir):
+                return _try_migrate_dir(legacy, new_dir, "Settings Folder")
+        return new_dir
     xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    return os.path.join(xdg, "ootmodman")
+    new_dir = os.path.join(xdg, "midnas_devotion")
+    legacy = os.path.join(xdg, "ootmodman")
+    return _try_migrate_dir(legacy, new_dir, "Settings Folder")
 
 
 def default_workspace_dir() -> str:
     if sys.platform == "win32":
-        legacy = os.path.join(os.path.expanduser("~"), ".local", "share", "ootmodman")
-        if os.path.isdir(legacy):
-            return legacy
         base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or os.path.expanduser("~")
-        return os.path.join(base, "ootmodman")
+        new_dir = os.path.join(base, "midnas_devotion")
+        for legacy in (
+            os.path.join(base, "ootmodman"),
+            os.path.join(os.path.expanduser("~"), ".local", "share", "ootmodman"),
+        ):
+            if os.path.isdir(legacy) and not os.path.isdir(new_dir):
+                return _try_migrate_dir(legacy, new_dir, "Midna's Devotion Workspace")
+        return new_dir
     xdg = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
-    return os.path.join(xdg, "ootmodman")
+    new_dir = os.path.join(xdg, "midnas_devotion")
+    legacy = os.path.join(xdg, "ootmodman")
+    return _try_migrate_dir(legacy, new_dir, "Midna's Devotion Workspace")
 
 
 def read_randomizer_state() -> Dict:
@@ -128,11 +164,17 @@ def auto_detect_from_folder(folder: str) -> Dict[str, str]:
     if os.path.isdir(cand_mods) or os.path.isdir(result["romfs_dir"]):
         result["live_mods_dir"] = cand_mods
 
-    cand_backup = os.path.join(ver_dir, "mods_backup")
-    if os.path.isdir(cand_backup) or os.path.isdir(result["romfs_dir"]):
-        result["backup_dir"] = cand_backup
+    cand_lib = os.path.join(ver_dir, "UserModLibrary")
+    cand_legacy_backup = os.path.join(ver_dir, "mods_backup")
+    if os.path.isdir(cand_lib):
+        result["backup_dir"] = cand_lib
+    elif os.path.isdir(cand_legacy_backup):
+        result["backup_dir"] = cand_legacy_backup
+    elif os.path.isdir(result["romfs_dir"]):
+        result["backup_dir"] = cand_lib
 
     for seeds_cand in (
+        os.path.join(ver_dir, "ArchivedSeeds"),
         os.path.join(root_dir, "OoT-Randomizer-linux", "data", "seeds-uninstalled"),
         os.path.join(ver_dir, "seeds-uninstalled"),
     ):
@@ -221,6 +263,8 @@ class AppConfig:
         self.sandbox_mode: bool = True
         self.saved_state: Dict = {}
         self.rando_synced_keys: set[str] = set()
+        self.migration_notices: List[str] = list(_STARTUP_MIGRATION_NOTICES)
+        _STARTUP_MIGRATION_NOTICES.clear()
         self._codec_cache: Tuple[str, Optional[CodecBundle]] = ("", None)
         self.load_settings()
 
@@ -318,7 +362,74 @@ class AppConfig:
             self.ui_theme = raw_theme if raw_theme in ("mozencaz", "araragi") else ""
         except Exception:
             self.saved_state = {}
+        self._migrate_legacy_folders()
         self.sync_from_randomizer(persist=False)
+
+    @staticmethod
+    def _rewrite_path_prefix(value, old_prefix: str, new_prefix: str):
+        old_norm = os.path.normcase(os.path.abspath(old_prefix))
+        if isinstance(value, str) and value:
+            cand = os.path.abspath(os.path.expanduser(value))
+            cand_norm = os.path.normcase(cand)
+            if cand_norm == old_norm:
+                return new_prefix
+            if cand_norm.startswith(old_norm + os.sep):
+                return new_prefix + cand[len(os.path.abspath(old_prefix)):]
+            return value
+        if isinstance(value, list):
+            return [AppConfig._rewrite_path_prefix(v, old_prefix, new_prefix) for v in value]
+        if isinstance(value, dict):
+            return {k: AppConfig._rewrite_path_prefix(v, old_prefix, new_prefix) for k, v in value.items()}
+        return value
+
+    def _migrate_legacy_folders(self) -> None:
+        """Gracefully rename legacy ootmodman / mods_backup folders and update saved references."""
+        migrated_pairs: List[Tuple[str, str, str]] = []
+
+        if self.workspace_dir:
+            ws_abs = os.path.abspath(os.path.expanduser(self.workspace_dir))
+            if os.path.basename(ws_abs).lower() == "ootmodman":
+                new_ws = os.path.join(os.path.dirname(ws_abs), "midnas_devotion")
+                if os.path.isdir(ws_abs) and not os.path.isdir(new_ws):
+                    try:
+                        shutil.move(ws_abs, new_ws)
+                        migrated_pairs.append(("Midna's Devotion Workspace", ws_abs, new_ws))
+                        self.workspace_dir = new_ws
+                    except Exception:
+                        pass
+                elif os.path.isdir(new_ws) and not os.path.isdir(ws_abs):
+                    self.workspace_dir = new_ws
+                    migrated_pairs.append(("Midna's Devotion Workspace", ws_abs, new_ws))
+
+        if self.backup_dir:
+            bk_abs = os.path.abspath(os.path.expanduser(self.backup_dir))
+            if os.path.basename(bk_abs).lower() == "mods_backup":
+                new_bk = os.path.join(os.path.dirname(bk_abs), "UserModLibrary")
+                if os.path.isdir(bk_abs) and not os.path.isdir(new_bk):
+                    try:
+                        shutil.move(bk_abs, new_bk)
+                        migrated_pairs.append(("User Mod Library", bk_abs, new_bk))
+                        self.backup_dir = new_bk
+                    except Exception:
+                        pass
+                elif os.path.isdir(new_bk) and not os.path.isdir(bk_abs):
+                    self.backup_dir = new_bk
+                    migrated_pairs.append(("User Mod Library", bk_abs, new_bk))
+
+        if not migrated_pairs:
+            return
+
+        for label, old_p, new_p in migrated_pairs:
+            msg = f"{label}: {old_p}  →  {new_p}"
+            if msg not in self.migration_notices:
+                self.migration_notices.append(msg)
+            self.saved_state = self._rewrite_path_prefix(self.saved_state, old_p, new_p)
+            if self.uninstalled_seeds_dir:
+                self.uninstalled_seeds_dir = self._rewrite_path_prefix(self.uninstalled_seeds_dir, old_p, new_p)
+        try:
+            self.save_settings()
+        except Exception:
+            pass
 
     def sync_from_randomizer(self, mods_dir: Optional[str] = None, *, persist: bool = False) -> bool:
         """Prioritize the main randomizer's Setup mods/port paths over Midna's local settings."""
@@ -448,7 +559,7 @@ class AppConfig:
     def remove_core_mod(self, entry: CoreModEntry) -> None:
         if entry.source_label == "Library":
             raise RuntimeError(
-                f"'{entry.name}' comes from your Mod Library (mods_backup/) and is protected from deletion here."
+                f"'{entry.name}' comes from your User Mod Library (UserModLibrary/) and is protected from deletion here."
             )
         if entry.source_label == "Custom":
             cmap = self._custom_core_map()

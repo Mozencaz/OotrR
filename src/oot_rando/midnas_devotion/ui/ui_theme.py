@@ -46,11 +46,11 @@ def central_stylesheet(plain: bool, compact: bool = False) -> str:
     if plain:
         return (
             f"QWidget#backdropCentral {{ background-color: #f2eee3; color: #1f2a24; {font_rule}}} "
-            f"QWidget#backdropCentral QLabel {{ color: #1f2a24; background-color: transparent; {font_rule}}} "
+            f"QWidget#backdropCentral .QLabel {{ color: #1f2a24; background-color: transparent; {font_rule}}} "
             f"QWidget#backdropCentral QCheckBox {{ color: #1f2a24; background-color: transparent; spacing: 6px; {font_rule}}} "
             "QWidget#backdropCentral .QFrame { background-color: #fffdf8; color: #1f2a24; } "
             "QWidget#backdropCentral QSplitter { background-color: transparent; } "
-            f"QWidget#backdropCentral QLabel {{ color: #1f2a24; background-color: transparent; {font_rule}}} "
+            f"QWidget#backdropCentral .QLabel {{ color: #1f2a24; background-color: transparent; {font_rule}}} "
             "QWidget#backdropCentral QPushButton { "
             f"  background-color: #f7f3ea; color: #1f2a24; border: 1px solid #cfc5ad; "
             f"  border-radius: 5px; padding: {btn_pad}; {font_rule}"
@@ -70,9 +70,23 @@ def central_stylesheet(plain: bool, compact: bool = False) -> str:
             "QWidget#backdropCentral QListWidget::item:selected { "
             "  background-color: #dcebe0; color: #1f2a24; "
             "} "
+            "QWidget#backdropCentral QComboBox QFrame { "
+            "  background-color: #fffdf8; border: 1px solid #cfc5ad; "
+            "} "
             "QWidget#backdropCentral QComboBox QAbstractItemView { "
             "  background-color: #fffdf8; color: #1f2a24; border: 1px solid #cfc5ad; "
-            "  selection-background-color: #e4efe7; selection-color: #1f2a24; "
+            "  selection-background-color: #e4efe7; selection-color: #1f2a24; outline: 0; "
+            "} "
+            "QWidget#backdropCentral QComboBox QAbstractItemView::item { "
+            "  background-color: #fffdf8; color: #1f2a24; padding: 4px 8px; "
+            "} "
+            "QWidget#backdropCentral QComboBox QAbstractItemView::item:hover, "
+            "QWidget#backdropCentral QComboBox QAbstractItemView::item:selected { "
+            "  background-color: #e4efe7; color: #1f2a24; "
+            "} "
+            "QWidget#backdropCentral QToolTip { "
+            "  background-color: #fffdf8; color: #1f2a24; "
+            "  border: 1px solid #b8ac92; border-radius: 4px; padding: 4px 8px; "
             "} "
             "QWidget#backdropCentral QProgressBar { "
             f"  background-color: #f7f3ea; color: #1f2a24; border: 1px solid #cfc5ad; "
@@ -88,11 +102,11 @@ def central_stylesheet(plain: bool, compact: bool = False) -> str:
             "QWidget#backdropCentral QScrollBar::sub-line:vertical { height: 0px; } "
         )
     return (
-        f"QWidget#backdropCentral, QWidget#backdropCentral QLabel {{ color: #FFFFFF; background-color: transparent; {font_rule}}} "
+        f"QWidget#backdropCentral, QWidget#backdropCentral .QLabel {{ color: #FFFFFF; background-color: transparent; {font_rule}}} "
         f"QWidget#backdropCentral QCheckBox {{ color: #FFFFFF; background-color: transparent; spacing: 6px; {font_rule}}} "
         "QWidget#backdropCentral .QFrame { background-color: rgba(22, 26, 33, 145); color: #FFFFFF; } "
         "QWidget#backdropCentral QSplitter { background-color: transparent; } "
-        f"QWidget#backdropCentral QLabel {{ color: #FFFFFF; background-color: transparent; {font_rule}}} "
+        f"QWidget#backdropCentral .QLabel {{ color: #FFFFFF; background-color: transparent; {font_rule}}} "
         "QWidget#backdropCentral QPushButton { "
         f"  background-color: rgba(34, 42, 54, 185); color: #f0f4f8; border: 1px solid #485b70; "
         f"  border-radius: 5px; padding: {btn_pad}; {font_rule}"
@@ -127,10 +141,150 @@ def central_stylesheet(plain: bool, compact: bool = False) -> str:
         "} "
         f"QWidget#backdropCentral QComboBox {{ padding: {combo_pad}; }} "
         "QWidget#backdropCentral QComboBox QAbstractItemView { "
-        "  background-color: rgba(22, 26, 33, 235); "
+        "  background-color: #161a21; "
         "  color: #FFFFFF; "
-        "  selection-background-color: rgba(43, 108, 176, 220); "
+        "  border: 1px solid #3c4856; "
+        "  selection-background-color: #2b6cb0; "
         "  selection-color: #FFFFFF; "
+        "} "
+    )
+
+
+def app_palette(plain: bool):
+    """Build a complete light (Mozencaz) or dark (Araragi) QPalette for Fusion."""
+    from PySide6.QtGui import QColor, QPalette
+
+    pal = QPalette()
+    if plain:
+        pal.setColor(QPalette.ColorRole.Window, QColor("#f2eee3"))
+        pal.setColor(QPalette.ColorRole.WindowText, QColor("#1f2a24"))
+        pal.setColor(QPalette.ColorRole.Base, QColor("#fffdf8"))
+        pal.setColor(QPalette.ColorRole.AlternateBase, QColor("#f7f3ea"))
+        pal.setColor(QPalette.ColorRole.ToolTipBase, QColor("#fffdf8"))
+        pal.setColor(QPalette.ColorRole.ToolTipText, QColor("#1f2a24"))
+        pal.setColor(QPalette.ColorRole.Text, QColor("#1f2a24"))
+        pal.setColor(QPalette.ColorRole.Button, QColor("#f7f3ea"))
+        pal.setColor(QPalette.ColorRole.ButtonText, QColor("#1f2a24"))
+        pal.setColor(QPalette.ColorRole.BrightText, QColor("#b71c1c"))
+        pal.setColor(QPalette.ColorRole.Link, QColor("#2f7a55"))
+        pal.setColor(QPalette.ColorRole.Highlight, QColor("#dcebe0"))
+        pal.setColor(QPalette.ColorRole.HighlightedText, QColor("#1f2a24"))
+        pal.setColor(QPalette.ColorRole.PlaceholderText, QColor("#7c857d"))
+        pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor("#9aa39a"))
+        pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor("#9aa39a"))
+        pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor("#9aa39a"))
+        return pal
+
+    pal.setColor(QPalette.ColorRole.Window, QColor("#1b2028"))
+    pal.setColor(QPalette.ColorRole.WindowText, QColor("#f0f4f8"))
+    pal.setColor(QPalette.ColorRole.Base, QColor("#14181f"))
+    pal.setColor(QPalette.ColorRole.AlternateBase, QColor("#1d232c"))
+    pal.setColor(QPalette.ColorRole.ToolTipBase, QColor("#1b222c"))
+    pal.setColor(QPalette.ColorRole.ToolTipText, QColor("#f0f4f8"))
+    pal.setColor(QPalette.ColorRole.Text, QColor("#f0f4f8"))
+    pal.setColor(QPalette.ColorRole.Button, QColor("#252d38"))
+    pal.setColor(QPalette.ColorRole.ButtonText, QColor("#f0f4f8"))
+    pal.setColor(QPalette.ColorRole.BrightText, QColor("#ff8a80"))
+    pal.setColor(QPalette.ColorRole.Link, QColor("#64b5f6"))
+    pal.setColor(QPalette.ColorRole.Highlight, QColor("#2b6cb0"))
+    pal.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+    pal.setColor(QPalette.ColorRole.PlaceholderText, QColor("#8a95a2"))
+    pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor("#6d7782"))
+    pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor("#6d7782"))
+    pal.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor("#6d7782"))
+    return pal
+
+
+def app_stylesheet(plain: bool) -> str:
+    """Global QApplication stylesheet for top-level popups, menus, and child dialogs."""
+    if plain:
+        return (
+            "QToolTip { "
+            "  background-color: #fffdf8; color: #1f2a24; "
+            "  border: 1px solid #b8ac92; border-radius: 4px; padding: 4px 8px; "
+            "} "
+            "QMenu { "
+            "  background-color: #fffdf8; color: #1f2a24; "
+            "  border: 1px solid #cfc5ad; padding: 4px 0px; "
+            "} "
+            "QMenu::item { padding: 6px 18px; background-color: transparent; color: #1f2a24; } "
+            "QMenu::item:selected { background-color: #e4efe7; color: #1f2a24; } "
+            "QMenu::separator { height: 1px; background: #e3dccb; margin: 4px 8px; } "
+            "QComboBox QAbstractItemView { "
+            "  background-color: #fffdf8; color: #1f2a24; "
+            "  border: 1px solid #cfc5ad; "
+            "  selection-background-color: #e4efe7; selection-color: #1f2a24; "
+            "  outline: 0; "
+            "} "
+            "QDialog, QMessageBox { background-color: #f2eee3; color: #1f2a24; } "
+            "QDialog QLineEdit { "
+            "  background-color: #fffdf8; color: #1f2a24; "
+            "  border: 1px solid #cfc5ad; border-radius: 4px; padding: 4px 7px; "
+            "} "
+            "QDialog QLineEdit:focus { border-color: #2f7a55; } "
+            "QDialog QPushButton { "
+            "  background-color: #f7f3ea; color: #1f2a24; "
+            "  border: 1px solid #cfc5ad; border-radius: 5px; padding: 5px 11px; "
+            "} "
+            "QDialog QPushButton:hover { background-color: #efe9db; border-color: #b8ac92; } "
+            "QDialog QPushButton:pressed { background-color: #e6dfd0; } "
+            "QDialog QPushButton:disabled { background-color: #ede8dc; color: #9aa39a; border-color: #dfd8c6; } "
+            "QDialog QComboBox { "
+            "  background-color: #fffdf8; color: #1f2a24; "
+            "  border: 1px solid #cfc5ad; border-radius: 4px; padding: 4px 8px; "
+            "} "
+            "QDialog QTableWidget { "
+            "  background-color: #fffdf8; color: #1f2a24; "
+            "  gridline-color: #e3dccb; border: 1px solid #cfc5ad; border-radius: 4px; "
+            "} "
+            "QDialog QHeaderView::section { "
+            "  background-color: #ebe5d7; color: #1f2a24; "
+            "  border: none; border-right: 1px solid #d8d0be; border-bottom: 1px solid #cfc5ad; "
+            "  padding: 5px 8px; font-weight: bold; "
+            "} "
+        )
+    return (
+        "QToolTip { "
+        "  background-color: #1b222c; color: #f0f4f8; "
+        "  border: 1px solid #485b70; border-radius: 4px; padding: 4px 8px; "
+        "} "
+        "QMenu { "
+        "  background-color: #1b2028; color: #f0f4f8; "
+        "  border: 1px solid #3c4856; padding: 4px 0px; "
+        "} "
+        "QMenu::item { padding: 6px 18px; background-color: transparent; color: #f0f4f8; } "
+        "QMenu::item:selected { background-color: #2b6cb0; color: #ffffff; } "
+        "QMenu::separator { height: 1px; background: #333c48; margin: 4px 8px; } "
+        "QComboBox QAbstractItemView { "
+        "  background-color: #161a21; color: #f0f4f8; "
+        "  border: 1px solid #3c4856; "
+        "  selection-background-color: #2b6cb0; selection-color: #FFFFFF; "
+        "  outline: 0; "
+        "} "
+        "QDialog, QMessageBox { background-color: #1b2028; color: #f0f4f8; } "
+        "QDialog QLineEdit { "
+        "  background-color: #14181f; color: #f0f4f8; "
+        "  border: 1px solid #3c4856; border-radius: 4px; padding: 4px 7px; "
+        "} "
+        "QDialog QLineEdit:focus { border-color: #64b5f6; } "
+        "QDialog QPushButton { "
+        "  background-color: #252d38; color: #f0f4f8; "
+        "  border: 1px solid #3c4856; border-radius: 5px; padding: 5px 11px; "
+        "} "
+        "QDialog QPushButton:hover { background-color: #2f3a48; border-color: #64b5f6; } "
+        "QDialog QPushButton:disabled { background-color: #1f242c; color: #6d7782; border-color: #2d343e; } "
+        "QDialog QComboBox { "
+        "  background-color: #14181f; color: #f0f4f8; "
+        "  border: 1px solid #3c4856; border-radius: 4px; padding: 4px 8px; "
+        "} "
+        "QDialog QTableWidget { "
+        "  background-color: #14181f; color: #f0f4f8; "
+        "  gridline-color: #2c3440; border: 1px solid #3c4856; border-radius: 4px; "
+        "} "
+        "QDialog QHeaderView::section { "
+        "  background-color: #232a34; color: #e6eef8; "
+        "  border: none; border-right: 1px solid #333c48; border-bottom: 1px solid #3c4856; "
+        "  padding: 5px 8px; font-weight: bold; "
         "} "
     )
 

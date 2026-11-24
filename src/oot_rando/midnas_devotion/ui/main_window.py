@@ -21,6 +21,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QToolTip,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -76,6 +77,8 @@ from oot_rando.midnas_devotion.ui.ui_theme import (
     THEME_ARARAGI,
     THEME_MOZENCAZ,
     UiExperienceDialog,
+    app_palette,
+    app_stylesheet,
     central_stylesheet,
     status_color,
 )
@@ -381,6 +384,8 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
         self._build_ui()
         self.apply_ui_theme(self.cfg.effective_ui_theme, persist=False)
+        if getattr(self.cfg, "migration_notices", None):
+            QTimer.singleShot(300, self._show_migration_notice)
         self.refresh_all()
 
         if not self.cfg.has_ui_theme_choice:
@@ -417,7 +422,8 @@ class MainWindow(QMainWindow):
         outer_root.addWidget(self._view_stack)
 
         self._main_page = QWidget()
-        self._main_page.setStyleSheet("background: transparent;")
+        self._main_page.setObjectName("midnaMainPage")
+        self._main_page.setStyleSheet("QWidget#midnaMainPage { background: transparent; }")
         root = QVBoxLayout(self._main_page)
         self._main_root_layout = root
         root.setContentsMargins(12, 10, 12, 10)
@@ -806,7 +812,8 @@ class MainWindow(QMainWindow):
 
     def _create_build_progress_page(self) -> QWidget:
         page = QWidget()
-        page.setStyleSheet("background: transparent;")
+        page.setObjectName("midnaBuildPage")
+        page.setStyleSheet("QWidget#midnaBuildPage { background: transparent; }")
         outer = QVBoxLayout(page)
         outer.setContentsMargins(24, 24, 24, 24)
         outer.addStretch(1)
@@ -1002,6 +1009,66 @@ class MainWindow(QMainWindow):
             self.mode_btn.setText("Test Mode" if compact else "Switch to Test Mode")
             self.build_btn.setText("Apply (Live Game)" if compact else "Apply & Build to Live Game")
 
+    def _show_migration_notice(self) -> None:
+        notices = list(getattr(self.cfg, "migration_notices", []) or [])
+        if not notices:
+            return
+        self.cfg.migration_notices.clear()
+        body = (
+            "Midna's Devotion updated its folder naming to be clearer and automatically "
+            "migrated your existing folders and saved links:\n\n• "
+            + "\n• ".join(notices)
+            + "\n\nNo action is required — all of your mods and settings are preserved."
+        )
+        QMessageBox.information(self, "Midna's Devotion Folder Structure Updated", body)
+
+    def _sync_popup_palettes(self, plain: bool) -> None:
+        """Force opaque light/dark palettes on QToolTip and QComboBox popups across Linux & Windows."""
+        from PySide6.QtGui import QPalette
+
+        bg = QColor("#fffdf8") if plain else QColor("#161a21")
+        fg = QColor("#1f2a24") if plain else QColor("#f0f4f8")
+        sel_bg = QColor("#e4efe7") if plain else QColor("#2b6cb0")
+        sel_fg = QColor("#1f2a24") if plain else QColor("#ffffff")
+        tip_bg = QColor("#fffdf8") if plain else QColor("#1b222c")
+
+        tip_pal = QToolTip.palette()
+        tip_pal.setColor(QPalette.ColorRole.ToolTipBase, tip_bg)
+        tip_pal.setColor(QPalette.ColorRole.ToolTipText, fg)
+        tip_pal.setColor(QPalette.ColorRole.Window, tip_bg)
+        tip_pal.setColor(QPalette.ColorRole.WindowText, fg)
+        QToolTip.setPalette(tip_pal)
+
+        for combo in (getattr(self, "char_combo", None), getattr(self, "seed_combo", None)):
+            if combo is None:
+                continue
+            view = combo.view()
+            if view is None:
+                continue
+            pal = view.palette()
+            pal.setColor(QPalette.ColorRole.Window, bg)
+            pal.setColor(QPalette.ColorRole.Base, bg)
+            pal.setColor(QPalette.ColorRole.AlternateBase, bg)
+            pal.setColor(QPalette.ColorRole.Text, fg)
+            pal.setColor(QPalette.ColorRole.WindowText, fg)
+            pal.setColor(QPalette.ColorRole.Highlight, sel_bg)
+            pal.setColor(QPalette.ColorRole.HighlightedText, sel_fg)
+            bg_hex = bg.name()
+            border_hex = "#cfc5ad" if plain else "#3c4856"
+            popup = view.parentWidget()
+            for target in (view, view.viewport(), popup):
+                if target is not None:
+                    target.setPalette(pal)
+                    target.setAutoFillBackground(True)
+            if popup is not None:
+                popup.setStyleSheet(
+                    f"background-color: {bg_hex}; border: 1px solid {border_hex}; padding: 0px; margin: 0px;"
+                )
+                lay = popup.layout()
+                if lay is not None:
+                    lay.setContentsMargins(0, 0, 0, 0)
+                    lay.setSpacing(0)
+
     def apply_ui_theme(self, theme_id: str, persist: bool = True, notify: bool = True) -> None:
         chosen = THEME_MOZENCAZ if theme_id == THEME_MOZENCAZ else THEME_ARARAGI
         if persist:
@@ -1013,6 +1080,11 @@ class MainWindow(QMainWindow):
 
         self.central_widget.set_plain_mode(plain)
         self.central_widget.setStyleSheet(central_stylesheet(plain, compact=compact))
+        qapp = QApplication.instance()
+        if qapp is not None:
+            qapp.setPalette(app_palette(plain))
+            qapp.setStyleSheet(app_stylesheet(plain))
+        self._sync_popup_palettes(plain)
         self.drop_zone.set_plain_mode(plain)
         self._style_build_page(plain, compact)
 

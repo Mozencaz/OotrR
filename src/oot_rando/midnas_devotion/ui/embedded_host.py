@@ -91,6 +91,7 @@ class EmbeddedMidnaHost:
         app = QApplication.instance()
         if app is None:
             app = QApplication(qt_argv)
+            app.setStyle("Fusion")
             app.setQuitOnLastWindowClosed(False)
             app.setApplicationName(
                 "Midna's Devotion — Ocarina of Time Mod Manager & Merger (for Longshot + Mozencaz's Randomizer)"

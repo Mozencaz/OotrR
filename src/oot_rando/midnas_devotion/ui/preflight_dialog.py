@@ -57,43 +57,62 @@ def _extract_archive_paths(mime_data) -> List[str]:
     return paths
 
 
-def _classify_row(st: str) -> Tuple[str, str, QColor, QColor]:
-    """Returns (severity, friendly_label, text_color, row_bg_tint)."""
-    if st == "EXEFS":
-        return ("unsupported", "✕ Code Mod (Unsupported)", QColor("#e1bee7"), QColor("#2a1436"))
-    if "DECOMPRESS_ERR" in st:
-        return ("danger", "✕ Unreadable .zs File", QColor("#ef9a9a"), QColor("#381414"))
+def _classify_row(status: str, plain: bool = False) -> Tuple[str, str, QColor, QColor]:
+    """Returns (severity, friendly_label, fg_color, bg_color)."""
+    st = status or ""
+    if plain:
+        c_danger = (QColor("#b71c1c"), QColor("#fbe9e9"))
+        c_warn = (QColor("#8a5308"), QColor("#fdf3e3"))
+        c_auto = (QColor("#1b5e8a"), QColor("#e7f2fa"))
+        c_ok = (QColor("#1f5439"), QColor("#eaf4ed"))
+    else:
+        c_danger = (QColor("#ef9a9a"), QColor("#381414"))
+        c_warn = (QColor("#ffcc80"), QColor("#33220d"))
+        c_auto = (QColor("#81d4fa"), QColor("#102938"))
+        c_ok = (QColor("#a5d6a7"), QColor("#122616"))
+
+    if st == "ZSTD_ERROR":
+        return ("danger", "✕ Unreadable .zs File", *c_danger)
     if st == "RESTBL_111":
-        return ("danger", "✕ Clobbers v1.1.1 RESTBL", QColor("#ef9a9a"), QColor("#381414"))
+        return ("danger", "✕ Clobbers v1.1.1 RESTBL", *c_danger)
     if "OVER_RESTBL" in st or "SUB_OVER" in st:
         lbl = "✕ Overlap + Over Memory" if "OVERLAP" in st else (
             "✕ Subfile Over Memory" if "SUB_OVER" in st else "✕ Over Memory Limit"
         )
-        return ("danger", lbl, QColor("#ef9a9a"), QColor("#381414"))
+        return ("danger", lbl, *c_danger)
     if st == "RESTBL_OLD":
-        return ("warn", "⚠ Old v1.0.0 Table (Ignored)", QColor("#ffcc80"), QColor("#33220d"))
+        return ("warn", "⚠ Old v1.0.0 Table (Ignored)", *c_warn)
     if "TIGHT" in st and "OVERLAP" in st:
-        return ("warn", "⚠ Overlap + Tight Memory", QColor("#ffcc80"), QColor("#33220d"))
+        return ("warn", "⚠ Overlap + Tight Memory", *c_warn)
     if "TIGHT" in st:
         lbl = "⚠ Subfile Tight Memory" if "SUB_" in st else "⚠ Tight Memory Margin"
-        return ("warn", lbl, QColor("#ffcc80"), QColor("#33220d"))
+        return ("warn", lbl, *c_warn)
     if "OVERLAP" in st:
-        return ("warn", "⚠ File Conflict", QColor("#ffcc80"), QColor("#33220d"))
+        return ("warn", "⚠ File Conflict", *c_warn)
     if "AUTO_MERGE_BARS" in st:
-        return ("ok", "⇄ Auto-Merged Audio", QColor("#81d4fa"), QColor("#102938"))
+        return ("ok", "⇄ Auto-Merged Audio", *c_auto)
     if st == "SUB_OK":
-        return ("ok", "✓ Safe (Subfile)", QColor("#a5d6a7"), QColor("#122616"))
-    return ("ok", "✓ Safe", QColor("#a5d6a7"), QColor("#122616"))
+        return ("ok", "✓ Safe (Subfile)", *c_ok)
+    return ("ok", "✓ Safe", *c_ok)
 
 
-def _pill_style(kind: str) -> str:
-    palettes = {
-        "ok": ("#16331b", "#2e7d32", "#a5d6a7"),
-        "warn": ("#3a2409", "#ef6c00", "#ffcc80"),
-        "danger": ("#3d1313", "#c62828", "#ef9a9a"),
-        "unsupported": ("#2e1340", "#8e24aa", "#e1bee7"),
-        "neutral": ("#252525", "#444444", "#bdbdbd"),
-    }
+def _pill_style(kind: str, plain: bool = False) -> str:
+    if plain:
+        palettes = {
+            "ok": ("#eaf4ed", "#8ec29e", "#1f5439"),
+            "warn": ("#fdf3e3", "#dfaa5c", "#7a4d0e"),
+            "danger": ("#fbe9e9", "#dc8c8c", "#9e1c1c"),
+            "unsupported": ("#f3eaf8", "#b992d1", "#5c2778"),
+            "neutral": ("#f7f3ea", "#cfc5ad", "#5c665d"),
+        }
+    else:
+        palettes = {
+            "ok": ("#16331b", "#2e7d32", "#a5d6a7"),
+            "warn": ("#3a2409", "#ef6c00", "#ffcc80"),
+            "danger": ("#3d1313", "#c62828", "#ef9a9a"),
+            "unsupported": ("#2e1340", "#8e24aa", "#e1bee7"),
+            "neutral": ("#252525", "#444444", "#bdbdbd"),
+        }
     bg, border, fg = palettes.get(kind, palettes["neutral"])
     return (
         f"background: {bg}; border: 1px solid {border}; color: {fg}; "
@@ -114,6 +133,7 @@ class PreflightDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.cfg = cfg
+        self._plain = (self.cfg.effective_ui_theme == "mozencaz")
         self.enabled_standalone = enabled_standalone
         self.archive: Optional[ArchiveHandle] = None
         self.current_report: Optional[PreflightReport] = None
@@ -159,7 +179,7 @@ class PreflightDialog(QDialog):
         self.summary_card = QFrame()
         self.summary_card.setFrameShape(QFrame.Shape.StyledPanel)
         self.summary_card.setStyleSheet(
-            "QFrame { background: #232323; border: 1px solid #3c3c3c; border-radius: 6px; }"
+            "QFrame { background: #fffdf8; border: 1px solid #dfd8c6; border-radius: 6px; }" if self._plain else "QFrame { background: #232323; border: 1px solid #3c3c3c; border-radius: 6px; }"
         )
         card_lay = QVBoxLayout(self.summary_card)
         card_lay.setContentsMargins(12, 10, 12, 10)
@@ -176,7 +196,7 @@ class PreflightDialog(QDialog):
             "Checks whether a mod can safely sit standalone next to your main game setup without conflicts or crashes."
         )
         self.verdict_desc.setWordWrap(True)
-        self.verdict_desc.setStyleSheet("border: none; color: #cccccc;")
+        self.verdict_desc.setStyleSheet("border: none; color: #3a463f;" if self._plain else "border: none; color: #cccccc;")
 
         card_lay.addWidget(self.verdict_title)
         card_lay.addWidget(self.verdict_desc)
@@ -189,7 +209,7 @@ class PreflightDialog(QDialog):
         self.pill_sizes = QLabel("Crash / Size Risk: —")
         for pill in (self.pill_exefs, self.pill_overlap, self.pill_restbl, self.pill_sizes):
             pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            pill.setStyleSheet(_pill_style("neutral"))
+            pill.setStyleSheet(_pill_style("neutral", self._plain))
             pills_row.addWidget(pill, 1)
         card_lay.addLayout(pills_row)
         layout.addWidget(self.summary_card)
@@ -242,7 +262,7 @@ class PreflightDialog(QDialog):
         # Action row
         btn_row = QHBoxLayout()
         self.counts_lbl = QLabel("")
-        self.counts_lbl.setStyleSheet("color: #aaaaaa;")
+        self.counts_lbl.setStyleSheet("color: #5c665d;" if self._plain else "color: #aaaaaa;")
         btn_row.addWidget(self.counts_lbl, 1)
         self.install_btn = QPushButton("Add to Extra Mods")
         self.install_btn.setEnabled(False)
@@ -405,46 +425,46 @@ class PreflightDialog(QDialog):
         # 1. Update 4 traffic-light pills
         if exefs_n:
             self.pill_exefs.setText(f"✕ Code Mod ({exefs_n} file(s))")
-            self.pill_exefs.setStyleSheet(_pill_style("unsupported"))
+            self.pill_exefs.setStyleSheet(_pill_style("unsupported", self._plain))
         else:
             self.pill_exefs.setText("✓ No Code Mods")
-            self.pill_exefs.setStyleSheet(_pill_style("ok"))
+            self.pill_exefs.setStyleSheet(_pill_style("ok", self._plain))
 
         auto_bars_rows = [r for r in report.rows if "AUTO_MERGE_BARS" in r.status]
         if overlap_rows:
             owners = sorted({o for r in overlap_rows for o in r.overlap_with})
             self.pill_overlap.setText(f"⚠ {len(overlap_rows)} Conflict(s)")
             self.pill_overlap.setToolTip("Collides with: " + ", ".join(owners))
-            self.pill_overlap.setStyleSheet(_pill_style("warn"))
+            self.pill_overlap.setStyleSheet(_pill_style("warn", self._plain))
         elif auto_bars_rows:
             self.pill_overlap.setText(f"⇄ {len(auto_bars_rows)} Auto-Merged Audio")
             self.pill_overlap.setToolTip("Shared .bars audio table(s) touch different tracks and merge automatically on build.")
-            self.pill_overlap.setStyleSheet(_pill_style("ok"))
+            self.pill_overlap.setStyleSheet(_pill_style("ok", self._plain))
         else:
             self.pill_overlap.setText("✓ No File Conflicts")
             self.pill_overlap.setToolTip("")
-            self.pill_overlap.setStyleSheet(_pill_style("ok"))
+            self.pill_overlap.setStyleSheet(_pill_style("ok", self._plain))
 
         if rstb_111_n:
             self.pill_restbl.setText("✕ Clobbers v1.1.1 Table")
-            self.pill_restbl.setStyleSheet(_pill_style("danger"))
+            self.pill_restbl.setStyleSheet(_pill_style("danger", self._plain))
         elif rstb_old_n:
             self.pill_restbl.setText("⚠ Ignored v1.0.0 Table")
-            self.pill_restbl.setStyleSheet(_pill_style("warn"))
+            self.pill_restbl.setStyleSheet(_pill_style("warn", self._plain))
         else:
             self.pill_restbl.setText("✓ No Table Conflict")
-            self.pill_restbl.setStyleSheet(_pill_style("ok"))
+            self.pill_restbl.setStyleSheet(_pill_style("ok", self._plain))
 
         if over_n or dec_err_n:
             self.pill_sizes.setText(f"✕ {over_n + dec_err_n} Size/Read Risk")
-            self.pill_sizes.setStyleSheet(_pill_style("danger"))
+            self.pill_sizes.setStyleSheet(_pill_style("danger", self._plain))
         elif tight_n:
             self.pill_sizes.setText(f"⚠ {tight_n} Tight Margin(s)")
-            self.pill_sizes.setStyleSheet(_pill_style("warn"))
+            self.pill_sizes.setStyleSheet(_pill_style("warn", self._plain))
         else:
             suffix = "" if report.advanced_ran else " (Basic)"
             self.pill_sizes.setText(f"✓ Sizes Safe{suffix}")
-            self.pill_sizes.setStyleSheet(_pill_style("ok"))
+            self.pill_sizes.setStyleSheet(_pill_style("ok", self._plain))
 
         # 2. Update plain-English summary card
         has_hard_danger = bool(rstb_111_n or over_n or dec_err_n)
@@ -456,14 +476,14 @@ class PreflightDialog(QDialog):
             )
             self.install_btn.setEnabled(False)
         elif not report.rows:
-            self._set_card_theme("#33220d", "#ef6c00", "#ffcc80")
+            self._set_card_theme("#fdf3e3" if self._plain else "#33220d", "#dfaa5c" if self._plain else "#ef6c00", "#7a4d0e" if self._plain else "#ffcc80")
             self.verdict_title.setText("⚠ NO MOD FILES FOUND")
             self.verdict_desc.setText(
                 "No romfs/ folder was found under this variant. Try choosing a different variant above or check the archive manually."
             )
             self.install_btn.setEnabled(False)
         elif has_hard_danger:
-            self._set_card_theme("#381414", "#c62828", "#ef9a9a")
+            self._set_card_theme("#fbe9e9" if self._plain else "#381414", "#dc8c8c" if self._plain else "#c62828", "#9e1c1c" if self._plain else "#ef9a9a")
             self.verdict_title.setText("✕ NOT SAFE AS A DROP-IN MOD")
             reasons = []
             if rstb_111_n:
@@ -477,7 +497,7 @@ class PreflightDialog(QDialog):
             )
             self.install_btn.setEnabled(True)
         elif report.verdict == "NEEDS_ATTENTION":
-            self._set_card_theme("#33220d", "#ef6c00", "#ffcc80")
+            self._set_card_theme("#fdf3e3" if self._plain else "#33220d", "#dfaa5c" if self._plain else "#ef6c00", "#7a4d0e" if self._plain else "#ffcc80")
             self.verdict_title.setText("⚠ CAUTION — REVIEW BEFORE INSTALLING")
             notes = []
             if overlap_rows:
@@ -490,7 +510,7 @@ class PreflightDialog(QDialog):
             self.verdict_desc.setText("Worth checking first: " + "; ".join(notes) + ".")
             self.install_btn.setEnabled(True)
         else:
-            self._set_card_theme("#122b16", "#2e7d32", "#a5d6a7")
+            self._set_card_theme("#eaf4ed" if self._plain else "#122b16", "#8ec29e" if self._plain else "#2e7d32", "#1f5439" if self._plain else "#a5d6a7")
             self.verdict_title.setText("✓ SAFE TO DROP IN STANDALONE")
             extra = (
                 f" Deep check also verified memory margins and {report.subfiles_scanned} packed subfile(s)."
@@ -521,7 +541,7 @@ class PreflightDialog(QDialog):
         only_issues = self.only_issues_cb.isChecked()
 
         for row in report.rows:
-            sev, friendly_label, fg_color, bg_color = _classify_row(row.status)
+            sev, friendly_label, fg_color, bg_color = _classify_row(row.status, plain=self._plain)
             if only_issues and sev == "ok":
                 continue
 
@@ -545,8 +565,11 @@ class PreflightDialog(QDialog):
             items[COL_STATUS].setToolTip(f"Raw code: {row.status}")
 
             bg_brush = QBrush(bg_color)
+            row_fg_brush = QBrush(QColor("#1f2a24" if self._plain else "#f1f5f9"))
             for col_idx, item in enumerate(items):
                 item.setBackground(bg_brush)
+                if col_idx != COL_STATUS:
+                    item.setForeground(row_fg_brush)
                 self.table.setItem(r, col_idx, item)
 
     def _install_mod(self) -> None:
