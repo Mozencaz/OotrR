@@ -149,7 +149,7 @@ class FlowRun:
                 continue
             if kind == 'ActionEvent':
                 action = data.actor_action.v.v
-                if action == 'EventTriggerSetGameDataBool':
+                if action in ('EventTriggerSetGameDataBool', 'EventTriggerSetGameDataEnum'):
                     self.flags[params['GameDataName']] = params['Value']
                 elif action == 'EventTriggerAddOrRemovePouchContent':
                     self.add(params['Actor'], params['Num'])
@@ -284,6 +284,22 @@ class WithGame(unittest.TestCase):
                 self.find(game, progressive.token_actor(family, number))
             self.assertEqual(game.level(family), len(levels) - 1, family)
             self.assertEqual(game.windows[-len(levels):], levels, family)
+
+    def test_strength_sets_the_lift_grade(self):
+        # User report (0.8.3): three gauntlets held, PlayerStatus.LiftGrade still None,
+        # the golden rock of the Ganon's Castle fairy stayed put.
+        game = self.game()
+        game.run(progressive.CONVERTER_ENTRY)
+        self.assertNotIn(progressive.LIFT_GRADE, game.flags)           # no strength: untouched
+        for number, grade in ((3, 'Low'), (1, 'Middle'), (2, 'High')):
+            self.find(game, progressive.token_actor(progressive.STRENGTH, number))
+            self.assertEqual(game.flags[progressive.LIFT_GRADE], grade, number)
+        # A save already stuck (levels held, no grade) is repaired by its next item get.
+        stuck = self.game()
+        for actor in PROGRESSIVE[progressive.STRENGTH]:
+            stuck.add(actor)
+        self.find(stuck, 'Item_Prog_Hookshot_1')
+        self.assertEqual(stuck.flags[progressive.LIFT_GRADE], 'High')
 
     def test_each_token_converts_once(self):
         game = self.game()

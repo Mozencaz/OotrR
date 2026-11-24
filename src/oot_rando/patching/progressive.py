@@ -280,6 +280,48 @@ def check_tier_chain(start, name, tiers, given, done):
         raise ValueError('Progressive chain without its first level: ' + name)
 
 
+# ---------------------------------------------------------------- lift grade
+# Link's strength is the saved ``PlayerStatus.LiftGrade`` (None/Low/Middle/High), not
+# the pouch: the game sets it from the ExpansionAbilityActor of the actor Link picks
+# up, and a token has none. A player's save held the three levels with the grade
+# still None (golden rock of the Ganon's Castle fairy, user report, 0.8.3). The
+# converter therefore ends by setting the grade of the highest level held; it runs on
+# every item get, so a save already stuck is repaired at its next item.
+STRENGTH = 'Progressive Strength Upgrade'
+LIFT_GRADE = 'PlayerStatus.LiftGrade'
+LIFT_GRADES = ('Low', 'Middle', 'High')
+LIFT_PREFIX = 'RandoProgLift_'
+
+
+def add_lift_grade(editor):
+    """Events setting the lift grade of the highest strength level held. Returns the first."""
+    tiers = PROGRESSIVE[STRENGTH]
+    otherwise = None
+    # Built from the lowest level up: each check falls back to the one below it.
+    for level, actor in enumerate(tiers):
+        grade = editor.action(f'{LIFT_PREFIX}Set{level}', 'GameDataActor', 'EventTriggerSetGameDataEnum',
+                              {'GameDataName': LIFT_GRADE, 'Value': LIFT_GRADES[level], 'Index': -1})
+        otherwise = editor.switch(f'{LIFT_PREFIX}Has{level}', *held_query(actor), grade, otherwise)
+    return otherwise
+
+
+def check_lift_grade(event):
+    """Raise unless ``event`` starts the chain written by add_lift_grade."""
+    tiers = PROGRESSIVE[STRENGTH]
+    for level in reversed(range(len(tiers))):
+        if event is None or event.name != f'{LIFT_PREFIX}Has{level}' or not _is_query(event, tiers[level]):
+            raise ValueError('Lift grade wrongly checked.')
+        grade = _case(event, 0)
+        if (_named(grade) != f'{LIFT_PREFIX}Set{level}' or getattr(grade.data.nxt, 'v', None) is not None
+                or grade.data.actor_action.v.v != 'EventTriggerSetGameDataEnum'
+                or dict(grade.data.params.data) != {'GameDataName': LIFT_GRADE, 'Value': LIFT_GRADES[level],
+                                                    'Index': -1}):
+            raise ValueError('Lift grade wrongly set.')
+        event = _case(event, 1)
+    if event is not None:
+        raise ValueError('Unexpected end of the lift grade.')
+
+
 # ---------------------------------------------------------------- converter
 def _stem(token):
     return token[len('Item_'):]
@@ -315,7 +357,9 @@ def add_converter(raw, tokens):
         event = editor.subflow(name, GIVE_CALL[0], GIVE_CALL[1], {'ActorName': actor})
         return event, event, [event]
 
-    following, subflows = None, []
+    # The lift grade last, once every token is converted (starting levels too: added
+    # silently, they set no grade either).
+    following, subflows = add_lift_grade(editor), []
     # Built from the last token backwards: each one goes on with the next.
     for token in reversed(tokens):
         stem = _stem(token)
@@ -357,9 +401,10 @@ def add_converter(raw, tokens):
 def check_converter(entry, tokens):
     """The converter entry checks each token, converts it once and gives the next level."""
     event = entry.main_event.v
+    last = f'{LIFT_PREFIX}Has{len(PROGRESSIVE[STRENGTH]) - 1}'
     for index, token in enumerate(sorted(tokens)):
         stem = _stem(token)
-        after = f'RandoProgHeld_{_stem(sorted(tokens)[index + 1])}' if index + 1 < len(tokens) else None
+        after = f'RandoProgHeld_{_stem(sorted(tokens)[index + 1])}' if index + 1 < len(tokens) else last
         held = event
         if (_named(held) != f'RandoProgHeld_{stem}'
                 or held.data.params.data != {'GameDataName': got_flag(token), 'Index': -1}
@@ -377,8 +422,7 @@ def check_converter(entry, tokens):
         check_tier_chain(take.data.nxt.v, f'RandoProgTier_{stem}', PROGRESSIVE[token_family(token)],
                          _given_by_window, after)
         event = _case(held, 1)
-    if event is not None:
-        raise ValueError('Unexpected end of the progressive converter.')
+    check_lift_grade(event)
 
 
 # ---------------------------------------------------------------- gifts outside item gets

@@ -145,7 +145,7 @@
   },
   "GC Woods Warp -> Goron City": {
    "rule": "'GC Woods Warp Open'",
-   "why": "A closed Kokiri Forest does not block the Lost Woods shortcut to Goron City once its rock is broken (bombs, Din's Fire): AP's can_leave_forest is dropped. Kakariko stays behind its gate (Kak Behind Gate -> Kakariko Village still needs the gate open for child Link)."
+   "why": "A closed Kokiri Forest does not block the Lost Woods shortcut to Goron City once its rock is broken (bombs; Din's Fire does not work): AP's can_leave_forest is dropped. Kakariko stays behind its gate (Kak Behind Gate -> Kakariko Village still needs the gate open for child Link)."
   },
   "Death Mountain Summit -> DMC Upper Local": {
    "rule": "is_adult",
@@ -177,6 +177,12 @@
   }
  },
  "events": {
+  "GC Woods Warp": {
+   "GC Woods Warp Open": {
+    "rule": "can_blast_or_smash",
+    "why": "Din's Fire does not break the Lost Woods rock of the shortcut to Goron City in the remake (in-game report): only bombs, bombchus or the hammer do."
+   }
+  },
   "Hyrule Field": {
    "HF Fairy Memory Chest": {
     "rule": "is_child and at('Hyrule Field', is_adult)",

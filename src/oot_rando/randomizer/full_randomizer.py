@@ -1093,7 +1093,7 @@ def tracker_checks(data, matches, shuffled):
                        'collection_state': 'unverified', 'logic': entry['kind']})
     for location in sorted(data.location_table):
         areas = data.location_areas(location)
-        if location in covered or data.location_type(location) not in TRACKED_TYPES:
+        if location in covered or location in UNTRACKED_LOCATIONS or data.location_type(location) not in TRACKED_TYPES:
             continue
         if data.location_type(location) in ORIGINAL_ONLY_TYPES and not _is_reward(data.vanilla_item(location)):
             # Rupees, hearts and ammo of the original game's pots, crates, beehives
@@ -1113,6 +1113,8 @@ def tracker_checks(data, matches, shuffled):
     return checks
 
 
+# AP locations with no readable trace in the remake (absent from the spoiler, unticked by the tracker).
+UNTRACKED_LOCATIONS = frozenset({'Gift from Sages'})
 ORIGINAL_ONLY_TYPES = {'Freestanding', 'Pot', 'FlyingPot', 'Crate', 'SmallCrate', 'Beehive', 'RupeeTower'}
 _JUNK_PREFIXES = ('Rupee', 'Rupees', 'Recovery Heart', 'Deku Nuts', 'Deku Stick', 'Deku Seeds', 'Arrows',
                   'Bombs', 'Bombchus', 'Fairy', 'Magic Jar')

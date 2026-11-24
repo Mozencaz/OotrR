@@ -469,6 +469,21 @@ KOKIRI_INACCESSIBLE_ROCKS = {
 }
 
 
+# Checks reported in game as unusable (labels at report time; filtered by stable actor ID):
+# a tree sharing its spot with another, crates/rocks hiding a Skulltula whose drop is not
+# the randomized item, invisible or unbreakable crates, a pot behind silver boulders.
+BROKEN_SOURCES = frozenset({
+    11354987278416404894,   # HF_tree_19 (child; shares its tree with HF_tree_21)
+    16274291912323313727,   # LH_crate_1 (adult; Skulltula overrides)
+    14951295602089760727,   # Market_crate_2 (Skulltula crate)
+    5803622411498968148,    # DMT_rock_17 (megaton rock hiding a Skulltula)
+    8694345348366441423,    # GC_crate_1 (Skulltula crate)
+    14131098108744088630,   # ZF_pot_6 (child; behind silver boulders)
+    6542764537258522428, 15851182856759542692, 1454416379990914625, 4199675919137048754,   # FiT room10 crates 1-4
+    16293430382336788523, 621843243819307036,   # Jabu room17 crates 1-2
+})
+
+
 def inaccessible_child_actor(path, actor):
     """Inaccessible actors kept out of the shuffle and the logic.
 
@@ -484,6 +499,8 @@ def inaccessible_child_actor(path, actor):
 
     Filter candidates only: decoded maps and original actor indices stay intact.
     """
+    if actor.get('Hash') in BROKEN_SOURCES:
+        return True
     if path.startswith('Banc/KokiriForest/'):
         return actor.get('Hash') in KOKIRI_INACCESSIBLE_ROCKS.get(map_age(path), ())
     if map_age(path) != 'child':

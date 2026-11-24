@@ -14,6 +14,7 @@ TABLE = RSDB_FILES['PouchActorInfo']
 UI = 'UI/Pouch/PouchTable/PouchTable.game__ui__PouchTable.bgyml'
 ACTOR = 'Pouch_Range_BowAndArrow_Normal'
 PARAM = 'GameParameter/AssginableItemParam/Rando_NormalBow.game__actor__AssginableItemParam.bgyml'
+SOURCE_PARAM = 'GameParameter/AssginableItemParam/Item_Arrow_Ice.game__actor__AssginableItemParam.bgyml'
 GAME_TABLE = 'GameParameter/GameParameterTable/Pouch_Range_Bow.engine__actor__GameParameterTable.bgyml'
 ELEMENTS = ('Fire', 'Ice', 'Light')
 
@@ -23,7 +24,7 @@ def patch_pack(raw):
     doc = byml.load(files[GAME_TABLE])
     doc['root']['Components']['AssignableItemParam'] = '?' + PARAM
     files[GAME_TABLE] = byml.dump(doc)
-    source = 'GameParameter/AssginableItemParam/Item_Arrow_Ice.game__actor__AssginableItemParam.bgyml'
+    source = SOURCE_PARAM
     param = byml.load(files[source])
     param['root']['AssignableItem'] = byml.U32(murmur3('Bow'))
     files[PARAM] = byml.dump(param)

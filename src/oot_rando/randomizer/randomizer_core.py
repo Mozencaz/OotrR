@@ -858,11 +858,15 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
             growths[path] = max(len(raw) - len(read(path)), 0)
             files[path] = raw
         new_sizes = {}
-        rest_raw = decompress(read(RESTBL), d) if new_files else None
+        rest_raw = decompress(read(RESTBL), d)
         for path, (raw, template) in sorted(new_files.items()):
             compress(path, raw, read(template))
             # A copy of a resource (model, texture) needs at least the original's allocation.
             new_sizes[path] = max((len(raw) + 0x1000 + 4095) & ~4095, allocation(rest_raw, template) or 0)
+        # The private bow parameter inside the bow pack needs its own resource table entry,
+        # like every file of a pack: without one the game dereferences null loading the table.
+        from oot_rando.patching import elemental_arrows
+        new_sizes[elemental_arrows.PARAM] = allocation(rest_raw, elemental_arrows.SOURCE_PARAM) or 0x2000
         allocations = grow_resource_table(files, growths, new_sizes, read, d)
         if settings.skip_locked_cutscenes:
             report('Skippable cutscenes…')
