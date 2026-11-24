@@ -243,17 +243,19 @@ def ask_directory(
             ]
         res = _run_picker_cmd(cmd)
         if res is not None:
-            return res
+            return os.path.normpath(res) if res else ""
 
     if qt_parent is not None:
         from PySide6.QtWidgets import QFileDialog
-        return QFileDialog.getExistingDirectory(qt_parent, title, start_dir) or ""
+        chosen = QFileDialog.getExistingDirectory(qt_parent, title, start_dir) or ""
+        return os.path.normpath(chosen) if chosen else ""
 
     from tkinter import filedialog
     kwargs = {"title": title, "initialdir": start_dir}
     if tk_parent is not None:
         kwargs["parent"] = tk_parent
-    return filedialog.askdirectory(**kwargs) or ""
+    chosen = filedialog.askdirectory(**kwargs) or ""
+    return os.path.normpath(chosen) if chosen else ""
 
 
 def ask_open_file(

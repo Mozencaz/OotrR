@@ -1415,7 +1415,7 @@ class MainWindow(QMainWindow):
         self.status_lbl.setText(f"✓  Created {len(created)} missing folder(s) for Midna's Devotion.")
 
     def _open_settings(self) -> None:
-        dlg = SettingsDialog(self.cfg, None)
+        dlg = SettingsDialog(self.cfg, None, on_jump_to_setup=getattr(self, "_on_jump_to_setup", None))
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.refresh_all()
 
@@ -1603,13 +1603,37 @@ class MainWindow(QMainWindow):
 
     def _add_selected_library_visuals(self) -> None:
         added_names: List[str] = []
+        from oot_rando.midnas_devotion.core.dedupe import (
+            ExistingModTarget,
+            check_mod_duplicates,
+            fingerprint_mod_dir,
+        )
+        from oot_rando.midnas_devotion.ui.dedupe_dialog import prompt_duplicate_resolution
+        active_targets = [
+            ExistingModTarget(name=m.name, path=m.source_path, origin=m.origin)
+            for m in self.standalone_mods
+        ]
         for it in self.visual_lib_list.selectedItems():
             path = it.data(Qt.ItemDataRole.UserRole)
             if not path:
                 continue
             try:
+                cand_fp = fingerprint_mod_dir(str(path))
+                matches = check_mod_duplicates(cand_fp, active_targets)
+                if matches:
+                    action, _ = prompt_duplicate_resolution(
+                        self,
+                        cand_fp.display_name,
+                        matches,
+                        allow_replace=False,
+                        allow_keep_both=True,
+                        sandbox_mode=self.cfg.sandbox_mode,
+                    )
+                    if action == "cancel":
+                        continue
                 name = self.cfg.add_mod_folder_to_list(str(path))
                 added_names.append(name)
+                active_targets.append(ExistingModTarget(name=name, path=os.path.abspath(str(path)), origin="linked"))
             except Exception as exc:
                 QMessageBox.warning(self, "Could Not Add Mod", str(exc))
         if not added_names:
@@ -1627,6 +1651,29 @@ class MainWindow(QMainWindow):
         if not folder:
             return
         try:
+            from oot_rando.midnas_devotion.core.dedupe import (
+                ExistingModTarget,
+                check_mod_duplicates,
+                fingerprint_mod_dir,
+            )
+            from oot_rando.midnas_devotion.ui.dedupe_dialog import prompt_duplicate_resolution
+            active_targets = [
+                ExistingModTarget(name=m.name, path=m.source_path, origin=m.origin)
+                for m in self.standalone_mods
+            ]
+            cand_fp = fingerprint_mod_dir(folder)
+            matches = check_mod_duplicates(cand_fp, active_targets)
+            if matches:
+                action, _ = prompt_duplicate_resolution(
+                    self,
+                    cand_fp.display_name,
+                    matches,
+                    allow_replace=False,
+                    allow_keep_both=True,
+                    sandbox_mode=self.cfg.sandbox_mode,
+                )
+                if action == "cancel":
+                    return
             name = self.cfg.add_mod_folder_to_list(folder)
         except Exception as exc:
             QMessageBox.warning(self, "Invalid Mod Folder", str(exc))
@@ -1713,8 +1760,32 @@ class MainWindow(QMainWindow):
                     )
                     return
 
+                from oot_rando.midnas_devotion.core.dedupe import (
+                    check_mod_duplicates,
+                    collect_existing_mod_targets,
+                    fingerprint_archive_variant,
+                )
+                from oot_rando.midnas_devotion.ui.dedupe_dialog import prompt_duplicate_resolution
+                cand_fp = fingerprint_archive_variant(arc, chosen_variant, display_name=safe_name)
+                matches = check_mod_duplicates(cand_fp, collect_existing_mod_targets(self.cfg, self.standalone_mods))
+                install_dir = target_parent_dir
+                if matches:
+                    action, target_match = prompt_duplicate_resolution(
+                        self,
+                        safe_name,
+                        matches,
+                        allow_replace=True,
+                        allow_keep_both=True,
+                        sandbox_mode=self.cfg.sandbox_mode,
+                    )
+                    if action == "cancel":
+                        return
+                    if action == "replace" and target_match is not None:
+                        safe_name = target_match.existing_name
+                        install_dir = os.path.dirname(target_match.existing_path)
+
                 QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-                dst = install_archive_to_dir(arc, chosen_variant, safe_name, target_parent_dir)
+                dst = install_archive_to_dir(arc, chosen_variant, safe_name, install_dir)
         except Exception as exc:
             QMessageBox.critical(self, "Import Failed", str(exc))
             return
@@ -2277,6 +2348,8 @@ class MainWindow(QMainWindow):
         normal_font = QFont()
 
         malon_skipped: List[str] = []
+        from oot_rando.midnas_devotion.core.dedupe import find_internal_duplicates
+        internal_dupes = find_internal_duplicates(self.standalone_mods)
 
         self.mod_list.blockSignals(True)
         try:
@@ -2306,6 +2379,16 @@ class MainWindow(QMainWindow):
                     it.setBackground(QBrush(QColor("#f8eecf") if plain else QColor(68, 42, 12, 135)))
                     it.setToolTip(
                         "Automatically skipped while Playable Malon is selected in Step 1 to prevent Adult Malon skeleton glitches."
+                    )
+                elif name in internal_dupes:
+                    dup_others = ", ".join(pretty_mod_name(o) for o in internal_dupes[name])
+                    it.setText(f"⚠   {disp}   —   Exact Duplicate of {dup_others}")
+                    it.setFont(bold_font)
+                    it.setForeground(QBrush(QColor("#8a540b" if plain else "#ffcc80")))
+                    it.setBackground(QBrush(QColor("#f8eecf" if plain else QColor(68, 42, 12, 135))))
+                    it.setToolTip(
+                        f"Identical CRC32/SHA-256 romfs/ contents to: {dup_others}.\n"
+                        "You can safely uncheck or remove one copy."
                     )
                 elif name in mod_conflicts:
                     other_names = sorted(mod_conflicts[name].keys())

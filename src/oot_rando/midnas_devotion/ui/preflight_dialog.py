@@ -30,6 +30,7 @@ from oot_rando.midnas_devotion.core.preflight import (
     ArchiveHandle,
     PreflightReport,
     inspect_archive,
+    install_archive_to_dir,
     install_archive_variant,
     list_archive_variants,
     run_advanced_checks,
@@ -619,8 +620,31 @@ class PreflightDialog(QDialog):
             )
             return
         variant = self.variant_combo.currentData() or ""
+        install_parent = self.cfg.staged_mods_dir
         try:
-            dst = install_archive_variant(self.archive, variant, mod_name, self.cfg)
+            from oot_rando.midnas_devotion.core.dedupe import (
+                check_mod_duplicates,
+                collect_existing_mod_targets,
+                fingerprint_archive_variant,
+            )
+            from oot_rando.midnas_devotion.ui.dedupe_dialog import prompt_duplicate_resolution
+            cand_fp = fingerprint_archive_variant(self.archive, variant, display_name=mod_name)
+            matches = check_mod_duplicates(cand_fp, collect_existing_mod_targets(self.cfg))
+            if matches:
+                action, target_match = prompt_duplicate_resolution(
+                    self,
+                    mod_name,
+                    matches,
+                    allow_replace=True,
+                    allow_keep_both=True,
+                    sandbox_mode=self.cfg.sandbox_mode,
+                )
+                if action == "cancel":
+                    return
+                if action == "replace" and target_match is not None:
+                    mod_name = target_match.existing_name
+                    install_parent = os.path.dirname(target_match.existing_path)
+            dst = install_archive_to_dir(self.archive, variant, mod_name, install_parent)
         except Exception as exc:
             QMessageBox.critical(self, "Install Failed", str(exc))
             return

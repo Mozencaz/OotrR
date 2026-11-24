@@ -181,14 +181,33 @@ def auto_detect_from_folder(folder: str) -> Dict[str, str]:
         ver_dir = os.path.dirname(folder)
         root_dir = ver_dir
 
-    stable_dir = os.path.join(ver_dir, "stable")
-    if os.path.isdir(stable_dir):
-        ver_dirs = sorted(glob.glob(os.path.join(stable_dir, "v*")), key=_version_sort_key)
-        valid_vers = [d for d in ver_dirs if os.path.isdir(d)]
-        if valid_vers:
-            ver_dir = valid_vers[-1]
-    elif os.path.basename(os.path.dirname(ver_dir)) == "stable":
-        root_dir = os.path.dirname(os.path.dirname(ver_dir))
+    try:
+        from oot_rando.pc_port import canonical_channel_name, discover_longshot_channels, is_port_folder
+        parent_chan = canonical_channel_name(os.path.basename(os.path.dirname(ver_dir)))
+        if parent_chan is not None:
+            root_dir = os.path.dirname(os.path.dirname(ver_dir))
+        elif not is_port_folder(ver_dir):
+            channels = discover_longshot_channels(ver_dir) or discover_longshot_channels(ver_dir, require_image_bin=False)
+            if channels:
+                ver_dir = str(channels[0]["port_dir"])
+                root_dir = folder
+            else:
+                self_chan = canonical_channel_name(os.path.basename(ver_dir))
+                if self_chan is not None:
+                    root_dir = os.path.dirname(ver_dir)
+                    all_ch = discover_longshot_channels(root_dir) or discover_longshot_channels(root_dir, require_image_bin=False)
+                    chans = [c for c in all_ch if c["channel"] == self_chan]
+                    if chans:
+                        ver_dir = str(chans[0]["port_dir"])
+    except Exception:
+        stable_dir = os.path.join(ver_dir, "stable")
+        if os.path.isdir(stable_dir):
+            ver_dirs = sorted(glob.glob(os.path.join(stable_dir, "v*")), key=_version_sort_key)
+            valid_vers = [d for d in ver_dirs if os.path.isdir(d)]
+            if valid_vers:
+                ver_dir = valid_vers[-1]
+        elif os.path.basename(os.path.dirname(ver_dir)) == "stable":
+            root_dir = os.path.dirname(os.path.dirname(ver_dir))
 
     result: Dict[str, str] = {
         "romfs_dir": "",
@@ -496,6 +515,9 @@ class AppConfig:
             return False
 
         abs_mods = os.path.abspath(os.path.expanduser(rando_mods))
+        prev_mods = os.path.abspath(os.path.expanduser(self.live_mods_dir)) if self.live_mods_dir else ""
+        prev_port = os.path.dirname(prev_mods) if prev_mods and os.path.basename(prev_mods).lower() == "mods" else ""
+        new_port = os.path.dirname(abs_mods) if abs_mods and os.path.basename(abs_mods).lower() == "mods" else ""
         changed = False
 
         if abs_mods and self.live_mods_dir != abs_mods:
@@ -519,9 +541,19 @@ class AppConfig:
                 changed = True
             self.rando_synced_keys.add("longshot_binary")
 
-        # Only fill optional folders if blank/missing so custom library paths stay intact
+        # Update UserModLibrary when blank/missing OR when switching Longshot port versions.
         det_bkp = detected.get("backup_dir") or ""
-        if det_bkp and (not self.backup_dir or not os.path.isdir(self.backup_dir)):
+        bkp_in_prev_port = bool(prev_port and self.backup_dir and _is_within_dir(self.backup_dir, prev_port))
+        if not bkp_in_prev_port and self.backup_dir and new_port:
+            try:
+                from oot_rando.pc_port import longshot_layout_root
+                new_lay = longshot_layout_root(new_port)
+                bkp_lay = longshot_layout_root(self.backup_dir)
+                if new_lay and bkp_lay and new_lay[0].resolve() == bkp_lay[0].resolve():
+                    bkp_in_prev_port = True
+            except Exception:
+                pass
+        if det_bkp and (not self.backup_dir or not os.path.isdir(self.backup_dir) or bkp_in_prev_port):
             if os.path.isdir(det_bkp) and self.backup_dir != det_bkp:
                 self.backup_dir = det_bkp
                 changed = True
@@ -530,6 +562,13 @@ class AppConfig:
         if det_seeds and not self.uninstalled_seeds_dir and os.path.isdir(det_seeds):
             self.uninstalled_seeds_dir = det_seeds
             changed = True
+
+        # Rewrite saved mod paths from old port folder to new port folder when target exists.
+        if prev_port and new_port and os.path.normcase(prev_port) != os.path.normcase(new_port):
+            rewritten = self._rewrite_path_prefix(self.saved_state, prev_port, new_port)
+            if rewritten != self.saved_state:
+                self.saved_state = rewritten
+                changed = True
 
         if persist and changed:
             self.save_settings()

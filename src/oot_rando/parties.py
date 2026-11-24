@@ -300,6 +300,52 @@ class PartyLibrary:
         party['ap_address'] = address.strip()
         _write(self.folder(ident) / 'party.json', party)
 
+
+    @_operation
+    def migrate_mods_directory(self, new_mods, *, old_mods=None, root=None, restore_active_seed=True):
+        """Rewrite parties pointing at an old/missing Longshot version to ``new_mods``."""
+        from oot_rando.pc_port import longshot_layout_root
+
+        target_mods = validate_mod_directory(new_mods)
+        target_norm = os.path.normcase(os.path.abspath(str(target_mods)))
+        old_norm = os.path.normcase(os.path.abspath(str(old_mods))) if old_mods else ""
+        target_root = None
+        if root:
+            target_root = Path(root).resolve()
+        else:
+            lay = longshot_layout_root(target_mods)
+            if lay is not None:
+                target_root = lay[0].resolve()
+
+        migrated = []
+        active_id = self.active_id
+        for party in self.list():
+            p_mods = os.path.abspath(str(party["mods"]))
+            p_norm = os.path.normcase(p_mods)
+            if p_norm == target_norm:
+                continue
+            should_migrate = bool(old_norm and p_norm == old_norm)
+            if not should_migrate and target_root is not None:
+                p_lay = longshot_layout_root(p_mods)
+                if p_lay is not None and p_lay[0].resolve() == target_root and not Path(p_mods).exists():
+                    should_migrate = True
+            if not should_migrate:
+                continue
+            updated = dict(party, mods=str(target_mods))
+            _write(self.folder(party["id"]) / "party.json", updated)
+            migrated.append(party["name"])
+            if restore_active_seed and party["id"] == active_id:
+                live_seed = target_mods / party["mod_name"]
+                snap_seed = self.bundle(updated) / "seed"
+                has_other_seed = target_mods.is_dir() and any(
+                    is_randomizer_seed(p) for p in target_mods.iterdir()
+                )
+                has_merged = (target_mods / "Merged_Zelda_Rando").is_dir()
+                if snap_seed.is_dir() and not live_seed.exists() and not has_other_seed and not has_merged:
+                    target_mods.mkdir(parents=True, exist_ok=True)
+                    _copy(snap_seed, live_seed)
+        return migrated
+
     @_operation
     def delete(self, ident):
         if ident == self.active_id:
@@ -344,14 +390,25 @@ class PartyLibrary:
         from oot_rando.randomizer.randomizer_services import qol_seed_warning
         if qol_seed_warning(mods):
             raise ValueError('Move OoT_QoL out of this mods folder before activating a randomizer party.')
+        outgoing_mods_missing = bool(outgoing and not Path(outgoing['mods']).exists())
         if outgoing:
-            outgoing = self.refresh(ap_address)
+            if outgoing_mods_missing:
+                # Outgoing port folder was removed (e.g. Longshot version update); archive saves
+                # with the existing party snapshot seed so switching does not fail on missing old mods.
+                if ap_address is not None:
+                    outgoing['ap_address'] = ap_address
+                out_saves = Path(outgoing['saves'])
+                outgoing = self._snapshot(outgoing, self.bundle(outgoing) / 'seed', out_saves if out_saves.is_dir() else None)
+            else:
+                outgoing = self.refresh(ap_address)
         # One transaction can exchange two distinct destinations. Outgoing destinations
         # are emptied only after being archived, so every installed pair has one owner.
         replacements = {}
         if outgoing:
-            replacements[Path(outgoing['mods']) / outgoing['mod_name']] = None
-            replacements[Path(outgoing['saves'])] = None
+            if not outgoing_mods_missing:
+                replacements[Path(outgoing['mods']) / outgoing['mod_name']] = None
+            if Path(outgoing['saves']).exists():
+                replacements[Path(outgoing['saves'])] = None
         replacements[mods / target['mod_name']] = incoming / 'seed'
         replacements[saves] = incoming / 'save'
         paths = list(replacements)

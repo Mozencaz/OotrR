@@ -24,12 +24,14 @@ class EmbeddedMidnaHost:
         container: tk.Frame,
         on_fallback_window: Optional[Callable[[], None]] = None,
         on_theme_changed: Optional[Callable[[str], None]] = None,
+        on_jump_to_setup: Optional[Callable[[], None]] = None,
     ) -> None:
         """Initialize host state and bind container resize/map events (mount is deferred)."""
         self._tk_root = tk_root
         self._container = container
         self._on_fallback = on_fallback_window
         self._on_theme_changed = on_theme_changed
+        self._on_jump_to_setup = on_jump_to_setup
 
         self._qapp = None
         self._parent_qwindow = None
@@ -124,7 +126,10 @@ class EmbeddedMidnaHost:
         self._parent_qwindow = parent_qwin
 
         cfg = AppConfig()
+        cfg.embedded_in_randomizer = True
+        cfg.sync_from_randomizer(persist=True)
         win = MainWindow(cfg)
+        win._on_jump_to_setup = self._on_jump_to_setup
         win.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         win.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
         win.setMinimumSize(0, 0)

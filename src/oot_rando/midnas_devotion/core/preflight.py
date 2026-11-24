@@ -50,15 +50,48 @@ def _remove_path(path: str) -> None:
         shutil.rmtree(path)
 
 
+def _find_bundled_7zip() -> Optional[str]:
+    """Return path to bundled 7-Zip CLI (7z.exe + 7z.dll on Windows) if shipped with the package."""
+    exe_name = "7z.exe" if sys.platform == "win32" else "7zz"
+    candidates: List[str] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(os.path.join(meipass, "oot_rando", "midnas_devotion", "vendor", "7zip", exe_name))
+        candidates.append(os.path.join(meipass, "vendor", "7zip", exe_name))
+    if getattr(sys, "frozen", False):
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        candidates.append(os.path.join(exe_dir, "vendor", "7zip", exe_name))
+        candidates.append(os.path.join(exe_dir, exe_name))
+    pkg_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidates.append(os.path.join(pkg_root, "vendor", "7zip", exe_name))
+    for cand in candidates:
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
+def _find_windows_system_tar() -> Optional[str]:
+    """Locate Windows 11 native bsdtar (System32/tar.exe) which supports .7z and .rar via libarchive."""
+    if sys.platform != "win32":
+        return None
+    sys_root = os.environ.get("SystemRoot") or os.environ.get("WINDIR") or ("C:" + os.sep + "Windows")
+    cand = os.path.join(sys_root, "System32", "tar.exe")
+    return cand if os.path.isfile(cand) else None
+
+
 def _find_extractor_tool(name: str, clean_path: Optional[str]) -> Optional[str]:
-    """Locate an external archive extractor on ``PATH`` or common Windows install locations."""
+    """Locate an external archive extractor: bundled 7-Zip, PATH, or Windows install folders."""
+    if name == "7z":
+        bundled = _find_bundled_7zip()
+        if bundled:
+            return bundled
     found = shutil.which(name, path=clean_path)
     if found:
         return found
     if sys.platform == "win32":
         prog_files = [
-            os.environ.get("ProgramFiles", r"C:\Program Files"),
-            os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+            os.environ.get("ProgramFiles", "C:" + os.sep + "Program Files"),
+            os.environ.get("ProgramFiles(x86)", "C:" + os.sep + "Program Files (x86)"),
         ]
         win_candidates = {
             "7z": [os.path.join(pf, "7-Zip", "7z.exe") for pf in prog_files if pf],
@@ -124,25 +157,44 @@ class ArchiveHandle:
         clean_path = clean_env.get("PATH")
         candidates: List[Tuple[str, List[str]]] = []
 
+        seen_exes: set[str] = set()
+
+        def _push(label: str, exe_path: Optional[str], cmd: List[str]) -> None:
+            if not exe_path:
+                return
+            key = os.path.normcase(os.path.abspath(exe_path))
+            if key in seen_exes:
+                return
+            seen_exes.add(key)
+            candidates.append((label, cmd))
+
+        bundled_7z = _find_bundled_7zip()
+        if bundled_7z:
+            _push("bundled-7z", bundled_7z, [bundled_7z, "x", "-y", f"-o{dst_dir}", self.path])
+
         if self.ext == ".7z":
             for tool in ("7z", "7zz"):
                 exe = _find_extractor_tool(tool, clean_path)
                 if exe:
-                    candidates.append((tool, [exe, "x", "-y", f"-o{dst_dir}", self.path]))
+                    _push(tool, exe, [exe, "x", "-y", f"-o{dst_dir}", self.path])
             bsdtar = _find_extractor_tool("bsdtar", clean_path)
             if bsdtar:
-                candidates.append(("bsdtar", [bsdtar, "-xf", self.path, "-C", dst_dir]))
+                _push("bsdtar", bsdtar, [bsdtar, "-xf", self.path, "-C", dst_dir])
         elif self.ext == ".rar":
             unrar = _find_extractor_tool("unrar", clean_path)
             if unrar:
-                candidates.append(("unrar", [unrar, "x", "-y", "-o+", self.path, dst_dir + os.sep]))
+                _push("unrar", unrar, [unrar, "x", "-y", "-o+", self.path, dst_dir + os.sep])
             bsdtar = _find_extractor_tool("bsdtar", clean_path)
             if bsdtar:
-                candidates.append(("bsdtar", [bsdtar, "-xf", self.path, "-C", dst_dir]))
+                _push("bsdtar", bsdtar, [bsdtar, "-xf", self.path, "-C", dst_dir])
             for tool in ("7z", "7zz"):
                 exe = _find_extractor_tool(tool, clean_path)
                 if exe:
-                    candidates.append((tool, [exe, "x", "-y", f"-o{dst_dir}", self.path]))
+                    _push(tool, exe, [exe, "x", "-y", f"-o{dst_dir}", self.path])
+
+        win_tar = _find_windows_system_tar()
+        if win_tar:
+            _push("windows-tar", win_tar, [win_tar, "-xf", self.path, "-C", dst_dir])
 
         if not candidates:
             hint = _missing_extractor_hint(self.ext)

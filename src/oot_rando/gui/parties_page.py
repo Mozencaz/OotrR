@@ -223,14 +223,13 @@ class PartiesPage:
         return data_dir() / "staged_for_generation"
 
     def _party_seed_dir(self, party):
-        """Return the live seed directory, or its party snapshot when Midna merged it into ``Merged_Zelda_Rando``."""
+        """Return the live seed directory, falling back to its party snapshot if merged or migrated."""
         live_seed = Path(party["mods"]) / party["mod_name"]
         if live_seed.is_dir():
             return live_seed
-        if (Path(party["mods"]) / "Merged_Zelda_Rando").is_dir():
-            snapshot_seed = self.party_library.bundle(party) / "seed"
-            if snapshot_seed.is_dir():
-                return snapshot_seed
+        snapshot_seed = self.party_library.bundle(party) / "seed"
+        if snapshot_seed.is_dir():
+            return snapshot_seed
         return live_seed
 
     def _run_with_midna_bridge(self, target_mods, target_manifest, action, outgoing=None):
@@ -254,7 +253,7 @@ class PartiesPage:
             if outgoing:
                 out_mods = Path(outgoing["mods"])
                 out_seed = out_mods / outgoing["mod_name"]
-                if not out_seed.exists() and (out_mods / "Merged_Zelda_Rando").is_dir():
+                if out_mods.is_dir() and not out_seed.exists():
                     snap_seed = self.party_library.bundle(outgoing) / "seed"
                     if snap_seed.is_dir():
                         _copy(snap_seed, out_seed)
@@ -365,7 +364,12 @@ class PartiesPage:
 
     def party_opened(self, party):
         self.party_job_paused = False
-        self.mods.set(party["mods"])
+        party_mods = party["mods"]
+        if not Path(party_mods).exists() and hasattr(self, "_resolve_stale_mods_path"):
+            resolved = self._resolve_stale_mods_path(party_mods)
+            if resolved:
+                party_mods = resolved
+        self.mods.set(party_mods)
         self.save_path.set("")
         self.auto_save.set(True)
         self.ap_password.set("")

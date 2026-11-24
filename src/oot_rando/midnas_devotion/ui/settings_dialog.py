@@ -146,14 +146,17 @@ def prompt_create_missing_folders(
 class SettingsDialog(QDialog):
     """User-friendly folder picker for every important directory (zero hardcoded paths)."""
 
-    def __init__(self, cfg: AppConfig, parent=None) -> None:
+    def __init__(self, cfg: AppConfig, parent=None, *, on_jump_to_setup=None) -> None:
         super().__init__(parent)
         self.cfg = cfg
+        self._on_jump_to_setup = on_jump_to_setup
+        self._embedded = bool(getattr(self.cfg, "embedded_in_randomizer", False))
         self.setWindowTitle("Folder & Path Settings")
         self.resize(820, 520)
         self._plain = (self.cfg.effective_ui_theme == "mozencaz")
         self.edits: Dict[str, QLineEdit] = {}
         self.badges: Dict[str, QLabel] = {}
+        self.browse_buttons: Dict[str, QPushButton] = {}
         self._build_ui()
         self._load_from_cfg()
 
@@ -258,6 +261,7 @@ class SettingsDialog(QDialog):
 
             self.edits[key] = edit
             self.badges[key] = badge
+            self.browse_buttons[key] = browse_btn
 
             grid.addWidget(lbl, row_idx, 0)
             grid.addWidget(edit, row_idx, 1)
@@ -307,21 +311,50 @@ class SettingsDialog(QDialog):
         self.edits["longshot_binary"].setText(self.cfg.longshot_binary)
         self.edits["workspace_dir"].setText(self.cfg.workspace_dir or default_workspace_dir())
         synced = sorted(getattr(self.cfg, "rando_synced_keys", set()))
-        if synced:
+        if self._embedded:
+            live_edit = self.edits["live_mods_dir"]
+            live_btn = self.browse_buttons["live_mods_dir"]
+            live_edit.setReadOnly(True)
+            live_edit.setEnabled(False)
+            live_edit.setToolTip("Managed by OoT Randomizer → Setup tab (MODS FOLDER).")
+            live_edit.setStyleSheet(
+                "QLineEdit { background: #ebe6d9; color: #6e756d; border: 1px solid #cfc8b6; }"
+                if self._plain else
+                "QLineEdit { background: #1a1d22; color: #7c8591; border: 1px solid #303640; }"
+            )
+            if self._on_jump_to_setup is not None:
+                live_btn.setText("Open Setup…")
+                live_btn.setToolTip("Switch to OoT Randomizer → Setup to change MODS FOLDER.")
+                try:
+                    live_btn.clicked.disconnect()
+                except Exception:
+                    pass
+                live_btn.clicked.connect(self._jump_to_setup)
+            else:
+                live_btn.setEnabled(False)
+                live_btn.setToolTip("Change MODS FOLDER in the main Randomizer Setup tab.")
+
+        if self._embedded or synced:
             friendly = {
                 "live_mods_dir": "Live Mods Folder",
                 "romfs_dir": "Base Game romfs/",
                 "longshot_binary": "Longshot Executable",
             }
-            names = ", ".join(friendly.get(k, k) for k in synced)
+            names = ", ".join(friendly.get(k, k) for k in (synced or ["live_mods_dir"]))
             self.rando_sync_lbl.setText(
-                f"Synced automatically from the main Randomizer's Setup tab: {names}. "
-                "To change these paths, update MODS FOLDER in the Setup tab (it takes priority over this dialog)."
+                f"Managed by OoT Randomizer → Setup: {names}. "
+                "Live Mods Folder is locked here because Setup's MODS FOLDER is the single source of truth."
             )
             self.rando_sync_lbl.setVisible(True)
         else:
             self.rando_sync_lbl.setVisible(False)
         self._update_badges()
+
+    def _jump_to_setup(self) -> None:
+        cb = self._on_jump_to_setup
+        self.reject()
+        if cb is not None:
+            cb()
 
     def _current_paths_dict(self) -> Dict[str, str]:
         return {k: e.text().strip() for k, e in self.edits.items()}
@@ -346,6 +379,8 @@ class SettingsDialog(QDialog):
             return
         detected = auto_detect_from_folder(folder)
         for key, val in detected.items():
+            if key == "live_mods_dir" and self._embedded:
+                continue
             if val:
                 self.edits[key].setText(val)
         if not self.edits["workspace_dir"].text().strip():
@@ -448,7 +483,8 @@ class SettingsDialog(QDialog):
             return os.path.abspath(os.path.expanduser(s)) if s else ""
 
         self.cfg.romfs_dir = romfs
-        self.cfg.live_mods_dir = _norm_opt(paths_now["live_mods_dir"])
+        if not self._embedded:
+            self.cfg.live_mods_dir = _norm_opt(paths_now["live_mods_dir"])
         self.cfg.backup_dir = _norm_opt(paths_now["backup_dir"])
         self.cfg.uninstalled_seeds_dir = _norm_opt(paths_now["uninstalled_seeds_dir"])
         self.cfg.longshot_binary = _norm_opt(self.edits["longshot_binary"].text())
