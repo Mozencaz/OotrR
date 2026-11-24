@@ -59,7 +59,10 @@ def starting_pouch_items(full):
     full = full or {}
     starting = (full.get('archipelago') or {}).get('starting') if full.get('archipelago') else full.get('starting')
     from oot_rando.patching import adult_start
-    held = adult_start.START_ACTORS if adult_start.enabled(full.get('options')) else ()
+    options = full.get('options')
+    # With the Master Sword shuffled, it is a find like any other: not given at start.
+    held = (adult_start.START_ACTORS
+            if adult_start.enabled(options) and not (options or {}).get('shuffle_master_sword') else ())
     return list(STARTING_ITEMS) + list(held) + [s['actor'] for s in starting or []]
 # Archipelago goal flag: after Defeat_Ganon's native "Complete" step (Ganon's death),
 # before the transition to Dm_Ending_0000.

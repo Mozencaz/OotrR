@@ -37,7 +37,7 @@ class PartiesGuiTests(unittest.TestCase):
         self.library = PartyLibrary(self.base / 'Parties')
         mock('oot_rando.gui.parties_page.PartyLibrary', return_value=self.library)
         mock('oot_rando.gui.randomizer_gui.STATE', new=self.base / 'state')
-        mock('oot_rando.gui.randomizer_gui.Application.read_app_state', return_value={})
+        mock('oot_rando.gui.randomizer_gui.Application.read_app_state', return_value={'parties_enabled': True})
         mock('oot_rando.gui.randomizer_gui.Application.register_hotkey')
         mock('oot_rando.gui.randomizer_gui.Application.start_turbo')
         mock('oot_rando.gui.randomizer_gui.Application.restore_last_artifact')
@@ -161,6 +161,27 @@ class PartiesGuiTests(unittest.TestCase):
         self.assertNotEqual(self.library.active_id, self.a['id'])
         self.assertEqual(save.read_bytes(), b'original-progress')
         self.assertTrue(self.library.get(self.a['id']))
+
+
+class PartiesOptInTests(unittest.TestCase):
+    def test_disabled_by_default(self):
+        import tkinter as tk
+        from oot_rando.gui.parties_page import PartiesPage
+
+        class Fake(PartiesPage):
+            app_state = {}
+        try:
+            root = tk.Tk()
+        except tk.TclError:
+            self.skipTest('Tk is not available')
+        try:
+            fake = Fake()
+            fake.parties_enabled = tk.BooleanVar(value=fake.app_state.get('parties_enabled') is True)
+            self.assertFalse(fake.parties_enabled.get())
+            self.assertFalse(fake.restore_party())
+        finally:
+            root.destroy()
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -177,6 +177,19 @@ CASTLE_JUNK = 'Rupee (1)'
 CASTLE_SONG = 'Zeldas Lullaby'
 
 
+# Adult start (patching/adult_start.py): the first-adult cinematics never play (not at the start,
+# nor when travelling back and forth later), so Rauru's Light Medallion and the Master Sword
+# pull cannot be collected. Both checks hold a green rupee; their items are shuffled elsewhere
+# (the Master Sword is the player's from the start unless it is shuffled).
+ADULT_START_CHECKS = ('Links Pocket', 'ToT Master Sword')
+
+
+def adult_start_check(entry, options):
+    ap = list(entry.get('ap') or ())
+    return (options.get('starting_age') == 'adult' and len(ap) == 1 and ap[0] in ADULT_START_CHECKS
+            and entry.get('source') in ('boss', 'master_sword'))
+
+
 def skipped_castle_check(entry):
     """True for a check of the child castle grounds or one of the castle's gifts."""
     ap = list(entry.get('ap') or ())
@@ -266,7 +279,7 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
     sources = enabled_sources(options)
     if extra:
         import copy as _copy
-        chosen = {gid: _copy.deepcopy(e) for gid, e in extra.items() if source_in_scope(e, sources)}
+        chosen = {gid: _copy.deepcopy(e) for gid, e in extra.items() if source_in_scope(e, sources) or adult_start_check(e, options)}
         used = {l for e in matches.values() if e['kind'] in ('exact', 'group') for l in e['ap']}
         match_sources(chosen, data, probe, used)
         for gid, entry in chosen.items():
@@ -516,6 +529,8 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             item = POOL_FILLER
         if item == 'Rutos Letter' and ruto_letter_removed(options):
             item = 'Bottle'
+        if item == 'Master Sword' and adult_start_check(entry, options) and not options.get('shuffle_master_sword'):
+            item = POOL_FILLER   # held from the start (randomizer_core.starting_pouch_items)
         pool.append(item)
 
     def removable(item):
@@ -559,6 +574,9 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
         # Every shuffled castle check holds a green rupee, reserved in the pool.
         castle_junk = sorted(g for g in shuffled if skipped_castle_check(shuffled[g]))
         pool.extend([CASTLE_JUNK] * len(castle_junk))
+    adult_junk = sorted(g for g in shuffled if adult_start_check(shuffled[g], options))
+    pool.extend([CASTLE_JUNK] * len(adult_junk))
+    castle_junk = castle_junk + adult_junk
     # Whatever was added or replaced above: exactly one item per shuffled check.
     pool = balance_pool(pool, len(shuffled), removable, keep={CASTLE_JUNK: len(castle_junk)})
     logic_locations =sorted(g for g in shuffled if vname(g) in logic.virtual)
@@ -591,10 +609,11 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             canonical_cache[key] = item_actor(item, shuffled[gid]['folder'])
         return canonical_cache[key]
 
-    castle_junk_set = set(castle_junk) if options.get('skip_child_zelda') else None
+    castle_junk_set = set(castle_junk)
+    castle_skipped = bool(options.get('skip_child_zelda'))
 
     def allowed(item, gid):
-        if castle_junk_set and gid in castle_junk_set:
+        if gid in castle_junk_set:
             return item == CASTLE_JUNK
         rule, dungeon = restricted_dungeon.get(item, (None, None))
         if rule == 'dungeon' and folder_dungeon[gid] != dungeon:
@@ -605,7 +624,7 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             return False
         actor = canonical(item, gid)
         song_mode = options.get('shuffle_song_items', 'song')
-        if castle_junk_set is not None and item == CASTLE_SONG:
+        if castle_skipped and item == CASTLE_SONG:
             # The castle skipped, Impa's song has no song location left: it goes
             # anywhere a song can be given, whatever the song mode.
             song_mode = 'everywhere'

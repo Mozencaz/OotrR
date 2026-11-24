@@ -79,12 +79,12 @@ class AdultStartFlowTests(unittest.TestCase):
     def test_opening_leaves_for_the_temple_of_time(self):
         from oot_rando.patching.event_patch import _flow, _snapshot
         raw, report = adult_start.patch_opening(self.raw)
-        self.assertEqual(report['events'], [adult_start.ERA_EVENT, adult_start.WARP_EVENT])
+        self.assertEqual(report['events'], list(adult_start.event_params()))
         before, after = _snapshot(_flow(self.raw)), _snapshot(_flow(raw))
         self.assertEqual({k: v for k, v in after.items() if k in before}, before)
         self.assertEqual({k: v for k, v in after.items() if k not in before}, adult_start.event_params())
         events = {e.name: e for e in _flow(raw).flowchart.events}
-        self.assertEqual(events[adult_start.ANCHOR].data.nxt.v.name, adult_start.ERA_EVENT)
+        self.assertEqual(events[adult_start.ANCHOR].data.nxt.v.name, adult_start.ARRIVAL_EVENTS[0])
         self.assertIsNone(events[adult_start.WARP_EVENT].data.nxt.v)
         with self.assertRaises(ValueError):
             adult_start.patch_opening(raw)    # never twice
@@ -102,7 +102,7 @@ class AdultStartFlowTests(unittest.TestCase):
         while event is not None:
             chain.append(event.name)
             event = getattr(event.data, 'nxt', None) and event.data.nxt.v
-        self.assertEqual(chain, names + [adult_start.ERA_EVENT, adult_start.WARP_EVENT])
+        self.assertEqual(chain, names + [*adult_start.ARRIVAL_EVENTS, adult_start.ERA_EVENT, adult_start.WARP_EVENT])
 
 
 if __name__ == '__main__':

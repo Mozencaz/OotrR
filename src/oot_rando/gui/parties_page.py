@@ -30,33 +30,83 @@ class PartiesPage:
         self.party_search = tk.StringVar()
         self.party_library = None
         self.party_library_error = ''
+        # Opt-in: off unless the player ticked the box on the My Games page.
+        self.parties_enabled = tk.BooleanVar(value=self.app_state.get('parties_enabled') is True)
+        if self.parties_enabled.get():
+            self.open_party_library()
+
+    def open_party_library(self):
+        self.party_library, self.party_library_error = None, ''
         try:
             self.party_library = PartyLibrary()
         except Exception as error:
             self.party_library_error = str(error)
 
+    def parties_on(self):
+        return self.parties_enabled.get()
+
+    def toggle_parties(self):
+        enabled = self.parties_enabled.get()
+        self.write_app_state(parties_enabled=enabled)
+        if enabled:
+            if self.party_library is None:
+                self.open_party_library()
+            self.restore_party()
+        else:
+            # The installed seed stays where it is; it is simply no longer managed.
+            self.party_context = None
+            if self.slot.get().startswith('party-'):
+                self.slot.set('My game')
+            if self.artifact:
+                self.seed_chip.set('Seed  ' + self.seed_name)
+            self.update_home()
+        self.sync_parties_page()
+
+    def sync_parties_page(self):
+        if not hasattr(self, 'parties_rows'):
+            return
+        enabled = self.parties_enabled.get()
+        for widget in (self.parties_actions, self.parties_search):
+            if enabled:
+                widget.pack(fill='x', pady=(0, 14), before=self.parties_rows)
+            else:
+                widget.pack_forget()
+        if enabled:
+            self.party_name_box.pack(fill='x', pady=(0, 14))
+        else:
+            self.party_name_box.pack_forget()
+        self.render_parties()
+
     def build_parties(self):
         parent = self.scrollable(self.parties_tab)
-        actions = ttk.Frame(parent, style='Page.TFrame')
-        actions.pack(fill='x', pady=(0, 14))
+        optin = self.card(parent, 'Keep each adventure with its save',
+                          'Optional and off by default. When on, every generated seed is kept with its '
+                          'own save in a named game that you can switch between. When off, seeds are '
+                          'installed directly in the mods folder as before.')
+        ttk.Checkbutton(optin, text='Enable My Games', variable=self.parties_enabled,
+                        command=self.toggle_parties).pack(anchor='w', pady=(8, 0))
+        actions = self.parties_actions = ttk.Frame(parent, style='Page.TFrame')
         ttk.Button(actions, text='+ New party', style='Accent.TButton',
                    command=self.new_party).pack(side='left')
         ttk.Button(actions, text='Import a seed…', command=self.import_party).pack(side='left', padx=8)
         ttk.Button(actions, text='Keep the installed party…',
                    command=self.capture_party).pack(side='left')
-        search = ttk.Frame(parent, style='Page.TFrame')
-        search.pack(fill='x', pady=(0, 14))
+        search = self.parties_search = ttk.Frame(parent, style='Page.TFrame')
         ttk.Label(search, text='Search by name', style='Page.TLabel').pack(side='left', padx=(0, 12))
         ttk.Entry(search, textvariable=self.party_search).pack(side='left', fill='x', expand=True)
         self.parties_rows = ttk.Frame(parent, style='Page.TFrame')
         self.parties_rows.pack(fill='both', expand=True)
         self.party_search.trace_add('write', lambda *args: self.render_parties())
-        self.render_parties()
-        box = self.card(self.settings_body, 'Party name',
+        holder = ttk.Frame(self.settings_body, style='Page.TFrame')   # keeps the card at the top
+        holder.pack(fill='x')
+        box = self.party_name_box = self.card(holder, 'Party name',
                         'The seed and its progress are kept together in My Games.')
         ttk.Entry(box, textvariable=self.party_name).pack(fill='x')
+        self.sync_parties_page()
 
     def parties_ready(self):
+        if not self.parties_enabled.get():
+            raise ValueError('Enable My Games first.')
         if self.busy:
             self.status.set('An operation is already running.')
             return False
@@ -70,6 +120,8 @@ class PartiesPage:
             return
         for child in self.parties_rows.winfo_children():
             child.destroy()
+        if not self.parties_enabled.get():
+            return
         try:
             if self.party_library is None:
                 raise ValueError(self.party_library_error)
@@ -390,7 +442,7 @@ class PartiesPage:
 
     def match_party(self, directory):
         self.party_context = None
-        if self.party_library and self.party_library.active_id:
+        if self.parties_enabled.get() and self.party_library and self.party_library.active_id:
             party = self.party_library.get(self.party_library.active_id)
             resolved = Path(directory).resolve()
             candidates = {(Path(party["mods"]) / party["mod_name"]).resolve()}
@@ -403,7 +455,7 @@ class PartiesPage:
             self.slot.set("My game")
 
     def restore_party(self):
-        if self.party_library and self.party_library.active_id:
+        if self.parties_enabled.get() and self.party_library and self.party_library.active_id:
             try:
                 self.party_opened(self.party_library.get(self.party_library.active_id))
             except Exception as error:
@@ -446,6 +498,8 @@ class PartiesPage:
             self.error(error)
 
     def generate_party(self, nup, mods, settings, continuing=None):
+        if not self.parties_enabled.get():
+            return self.generate_plain(nup, mods, settings)
         if not self.parties_ready() or not self.ensure_party_destination(mods):
             return
         initial = continuing["name"] + " (updated)" if continuing else settings.seed
@@ -488,6 +542,26 @@ class PartiesPage:
             self.party_generated(party, continued=bool(continuing))
             if continuing:
                 self.offer_save_migration(self.artifact_manifest, previous)
+        self.run_job(job, done)
+
+    def generate_plain(self, nup, mods, settings):
+        """Install the seed straight into the mods folder (My Games off)."""
+        from oot_rando.gui.randomizer_gui import ARCHIVE
+        from oot_rando.randomizer.randomizer_services import qol_seed_warning
+        def job(progress):
+            installed = generate_isolated(nup, mods, settings, ARCHIVE, progress)
+            return installed, installed
+        def done(result):
+            directory, installed = result
+            previous = self.artifact_manifest
+            self.use_artifact(directory)
+            self.show_page('tracker')
+            self.status.set('Seed generated and installed: ' + str(installed))
+            warning = qol_seed_warning(Path(installed).parent)
+            messagebox.showinfo('Seed ready', 'Seed installed in:\n' + str(installed)
+                                + '\n\nStart a new game to enable automatic tracking and first collections.'
+                                + ('\n\n' + warning if warning else ''), parent=self.root)
+            self.offer_save_migration(self.artifact_manifest, previous)
         self.run_job(job, done)
 
     def party_generated(self, party, continued=False):

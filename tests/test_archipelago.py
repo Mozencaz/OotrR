@@ -131,6 +131,14 @@ class Units(unittest.TestCase):
         self.assertEqual(starting_item_events(['Item_Bottle', 'Obj_Heart_Piece', 'Item_Bottle']),
                          ['RandoStartItem_Item_Bottle', 'RandoStartItem_Obj_Heart_Piece', 'RandoStartItem_Item_Bottle_2'])
 
+    def test_adult_start_master_sword_only_when_not_shuffled(self):
+        from oot_rando.randomizer.randomizer_core import STARTING_ITEMS, starting_pouch_items
+        adult = {'starting_age': 'adult'}
+        self.assertEqual(starting_pouch_items({'options': adult}),
+                         list(STARTING_ITEMS) + ['Weapon_Sword_Master'])
+        self.assertEqual(starting_pouch_items({'options': dict(adult, shuffle_master_sword=True)}),
+                         list(STARTING_ITEMS))
+
     def test_starting_pouch_items(self):
         from oot_rando.randomizer.randomizer_core import STARTING_ITEMS, starting_pouch_items
         self.assertEqual(starting_pouch_items(None), list(STARTING_ITEMS))
