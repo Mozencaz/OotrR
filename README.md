@@ -22,21 +22,49 @@ the quality-of-life options below. Details of the full mode and in-game pilots:
 ## Usage
 
 1. Portable build: run **`OoT-Randomizer.exe`** (Windows) or **`OoT-Randomizer`** (Linux);
-   no installation or Python needed. Seeds and state go to `data/` next to it.
+   no installation or Python needed. State goes to `data/`; named games go to `Parties/` next to it.
    From the sources: **`run_from_source.cmd`** (or `python -m oot_rando` with `src` on `PYTHONPATH`).
    Dependencies: Python with Tkinter, then `python -m pip install -r requirements.txt`.
-2. In **Game**, choose the NUP file and the mods folder (both are remembered).
-   Choose a preset and the options in **Settings**. JSON and YAML import/export are available.
-3. With the game closed, click **Generate and install** at the bottom of **Settings**.
+2. In **Setup**, choose the NUP file and the mods folder (both are remembered).
+   Choose a preset and the options in **New seed**. JSON and YAML import/export are available.
+3. With the game and emulator closed, name the party and click **Generate and install** in **New seed**.
    The seed is written to `OoT_Randomizer_<identity>` inside the title's mods folder.
-   The previous seed of this application is uninstalled automatically (moved to
-   `seeds-uninstalled` in the data folder); other mods are never changed, and a
-   conflict with them stops the installation without writing anything.
+   The previous managed seed and its saves are stored in **My Games** before switching;
+   other mods are preserved. Preserve an existing unmanaged installation first with
+   **Keep the installed party…**. Conflicting mods stop activation.
 4. Start a **new game**: tracking and first collections need the markers added by
    the seed. Save after the intro.
-5. In **Tracker**, click **Detect** or select your `progress.sav`, then load the
-   tracker. It rereads the save about every two seconds; changes show up when the
-   game saves.
+5. **Tracker** follows the active party's save account automatically; changes show up
+   when the game saves. It never switches to another account merely because its save is newer.
+
+## My Games
+
+Each named party keeps its complete seed, the account's save slots and ancillary files,
+and independent manual tracker checks. **New party** opens seed generation;
+**Import a seed…** adds an existing generated folder. Multiworld patches selected in
+**Multiworld** also create named parties. A new party starts with empty saves; importing
+a seed does not import the currently installed progress.
+
+On first creation, select the **account directory directly containing `slot_00`, `slot_01`, …**
+for this game and destination. For an emulator, select the account/title directory, never
+the whole NAND. For a recomp, select its actual account under its save directory (Longshot
+may use AppData or `~/.local/share/longshot/save`). An empty dedicated account directory is
+also accepted. That path is retained with the party; changing Setup does not retarget old parties.
+
+Click **Activate** with the game and emulator closed. The outgoing installation is copied
+and verified, then the incoming seed and saves are installed together. When switching
+destinations, the outgoing files are removed only after archiving. Copy/rename failures
+roll back; an interrupted installation is recovered on the next application start, also
+with the game closed. The tracker and Archipelago address/player follow the party;
+the connection is stopped and its password cleared before switching.
+
+`Parties/` sits beside the executable (at the project root when running sources). Keep
+this folder when moving or updating the randomizer. Each party has a stable internal ID,
+so renaming it does not lose its saves or tracker. The current and previous snapshots
+are retained. **Delete** removes an inactive party from the list, retaining its directory
+in `Parties/.deleted/`; the active party cannot be deleted. Regeneration creates a separately
+named updated party with a copy of the progress and keeps the original available. As before,
+changed randomizer versions may require a new game or the offered save migration.
 
 **Updates:** the portable build checks the latest GitHub release at start-up
 (Help → *Check at start-up*; also a *Check for updates* button). Accepting
@@ -155,6 +183,14 @@ world, with the same locations, item pool and glitchless rules as the built-in f
    Windows and Linux) and the goal (Ganon defeated, read live: set just before the ending). The row
    also shows the server messages and takes chat or server commands (`!hint`…).
    Checks ticked by hand in the tracker are sent too.
+
+Connection troubleshooting: copy the current server address from the room page. The
+portable app includes a public CA certificate bundle and also keeps the computer's
+trusted certificates. A TLS certificate failure stops the connection and reports the
+verification reason and code. Check the computer clock, update the app and OS, and
+compare with the official Archipelago Text Client on the same computer; VPN or antivirus
+HTTPS filtering may also affect the connection. Updating the connection client does
+not require regenerating the multiworld, reinstalling the patch, or starting a new save.
 
 Items of other players show in game as an Archipelago medallion with the item and player
 name. Items of this game found in other worlds are handed over in game by the client

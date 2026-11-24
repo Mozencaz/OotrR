@@ -167,6 +167,10 @@
    "rule": "(can_build_rainbow_bridge or (bridge == 'vanilla' and Shadow_Medallion and Spirit_Medallion)) and at_dampe_time",
    "why": "The rainbow bridge scene follows the Shadow and Spirit Medallions held (story_fixes.bridge_on_medallions, 21/11): Zelda's revelation (Light Arrows) is no longer needed first."
   },
+  "Kakariko Village -> Kak Impas Ledge": {
+   "rule": "is_adult and logic_visible_collisions",
+   "why": "In the remake the cow cage behind Impa's house (Kak_heart_piece_1) cannot be reached on foot as child Link: it is only reached when coming back with the owl from the top of Death Mountain (Death Mountain Summit -> DMT Owl Flight -> Kak Impas Rooftop -> Kak Impas Ledge). AP's 'is_child and at_day' walk is dropped (in-game report, 23/11: the seed's first Bomb Bag sat there and needed bombs to be reached)."
+  },
   "SFM Entryway -> SFM Wolfos Grotto": {
    "rule": "can_open_storm_grotto",
    "why": "The remake hides the Wolfos grotto under a cover the Song of Storms lifts (Discord 16/11), not under a bombable rock as in the base world."

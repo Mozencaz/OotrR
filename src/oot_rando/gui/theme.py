@@ -433,7 +433,7 @@ def rule(parent):
 
 
 # ------------------------------------------------------------------ sidebar
-NAV_ICONS = {'home': '', 'newseed': '', 'setup': '', 'game': '', 'settings': '', 'tracker': '', 'multiworld': '',
+NAV_ICONS = {'home': '', 'parties': '\ue8f1', 'newseed': '', 'setup': '', 'game': '', 'settings': '', 'tracker': '', 'multiworld': '',
              'spoiler': '', 'help': ''}
 
 

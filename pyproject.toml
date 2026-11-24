@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oot-rando"
-version = "0.8.0"
+version = "0.8.2"
 description = "Randomizer for the Ocarina of Time remake (RomFS mods for Hookshot / emulator)"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE", "src/oot_rando/logic/world/LICENSE-archipelago-oot.txt"]
 requires-python = ">=3.11"
-dependencies = ["zstandard>=0.23,<1", "evfl>=1.3,<2", "ainb==0.2.17"]
+dependencies = ["zstandard>=0.23,<1", "evfl>=1.3,<2", "ainb==0.2.17", "certifi>=2026.11.20"]
 
 [project.optional-dependencies]
 yaml = ["PyYAML>=6"]

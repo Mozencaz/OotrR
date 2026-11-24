@@ -57,6 +57,7 @@ def plan_records(placements, map_root, identity, settings_rows):
     ``map_root(resource)`` → current map root; ``settings_rows``: EventSetting rows by id.
     Returns (records, skipped gids with a reason).
     """
+    from oot_rando.game.remake_world import is_treasure_game_reward
     records, skipped = [], {}
     for placement in placements:
         if placement.get('source') != 'chest' or not placement.get('variants'):
@@ -65,7 +66,9 @@ def plan_records(placements, map_root, identity, settings_rows):
         variants, bases = [], set()
         for resource, index in placement['variants']:
             actor = map_root(resource)['Actors'][index]
-            if not str(actor.get('Gyaml', '')).startswith('Obj_TBox'):
+            if not (str(actor.get('Gyaml', '')).startswith('Obj_TBox')
+                    or (gid.startswith('Market#')
+                        and is_treasure_game_reward(actor.get('Gyaml'), actor.get('Hash')))):
                 bases.add(None)
                 continue
             current = (actor.get('Dynamic') or {}).get('GetEventName')

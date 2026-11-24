@@ -28,6 +28,7 @@ Every source becomes an *entry* with the same fields as a chest group of
 
 Only static evidence backs these adapters; each family needs an in-game pilot.
 """
+import math
 from collections import defaultdict
 
 from oot_rando.game.item_forms import WORLD_CANONICAL
@@ -246,6 +247,46 @@ def _entry(source, form, gid, folder, before, vanilla, ident=''):
             'dungeon': FOLDER_DUNGEON.get(folder), 'kind': 'junk', 'ap': [], 'guards': [], 'reason': None}
 
 
+BURNT_BANC = 'Adult_Alternative_'
+BURNT_MERGE_RADIUS = 0.5  # observed offsets between the two bancs: at most 0.15
+
+
+def merge_burnt_kakariko(entries):
+    """Merge each adult Kakariko source with its copy of the burnt banc.
+
+    The village has two adult bancs (before / after the fire) whose actors carry
+    different hashes at the same place: pots, beehives, the central tree. One
+    reward across both bancs prevents losing a check to that irreversible
+    transition (and a duplicate one). The repeatable adapter keys its shared
+    collection flag by gid. Pairing is one-to-one by source and position."""
+    normal, burnt = [], []
+    for gid, entry in sorted(entries.items()):
+        if entry['folder'] != 'KakarikoVillage' or entry['source'] == 'shop' or len(entry['variants']) != 1:
+            continue
+        resource = entry['variants'][0]['resource']
+        if '_Adult_' in resource:
+            (burnt if BURNT_BANC in resource else normal).append(gid)
+    pairs = sorted((math.dist(entries[n]['variants'][0]['position'], entries[b]['variants'][0]['position']), n, b)
+                   for n in normal for b in burnt
+                   if entries[n]['source'] == entries[b]['source']
+                   and entries[n]['variants'][0]['resource'].endswith(
+                       entries[b]['variants'][0]['resource'].split(BURNT_BANC)[-1]))
+    done = set()
+    for distance, n, b in pairs:
+        if distance > BURNT_MERGE_RADIUS:
+            break
+        if n in done or b in done:
+            continue
+        done |= {n, b}
+        original, replacement = entries[n], entries[b]
+        if replacement['reason'] is not None:
+            original['reason'] = replacement['reason']
+        if original['before'] != replacement['before']:
+            original['reason'] = 'variant_mismatch'
+        original['variants'].extend(entries.pop(b)['variants'])
+    return entries
+
+
 def scan_map_sources(maps, instance_param=None, world_respawn=None):
     """Entries of map-based sources. ``maps`` maps resource → {'root': …}.
 
@@ -339,18 +380,7 @@ def scan_map_sources(maps, instance_param=None, world_respawn=None):
                     entries[gid]['reason'] = 'special_drop_behavior'
                 elif not instance_param(name, 'Drop__DropActor'):
                     entries[gid]['reason'] = 'instance_parameter_not_proven'
-    # The central adult Kakariko tree is replaced when the village burns.
-    # One reward across both bancs prevents losing a check to that irreversible
-    # transition. The repeatable adapter keys its shared collection flag by gid.
-    normal = 'KakarikoVillage#trees#16206101463308204390'
-    burnt = 'KakarikoVillage#trees#17337529934879425827'
-    if normal in entries and burnt in entries:
-        original, replacement = entries[normal], entries[burnt]
-        if replacement['reason'] is not None:
-            original['reason'] = replacement['reason']
-        if original['before'] != replacement['before']:
-            original['reason'] = 'variant_mismatch'
-        original['variants'].extend(entries.pop(burnt)['variants'])
+    merge_burnt_kakariko(entries)
     for entry in entries.values():
         if entry['reason'] is None and len({v['resource'] for v in entry['variants']}) != len(entry['variants']) \
                 and entry['source'] != 'shop':

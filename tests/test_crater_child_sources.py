@@ -70,7 +70,7 @@ class CraterChildSources(unittest.TestCase):
         nup = Nup(os.environ['OOT_NUP'])
         try:
             members = {p: v for p, v in effective_members(nup).items()
-                       if p.startswith('Banc/DeathMountainCrater/')}
+                       if p.startswith(('Banc/DeathMountainCrater/', 'Logic/'))}
             maps, groups, enemies = scan_maps(nup, dictionaries(nup), members)
             sources = scan_map_sources(maps, lambda *_: True)
         finally:

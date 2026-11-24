@@ -16,6 +16,17 @@ import re
 from collections import Counter, defaultdict
 
 
+TREASURE_GAME_REWARD = 'Market#16881481538337649070'
+TREASURE_GAME_LOCATION = 'Market Treasure Chest Game Reward'
+TREASURE_GAME_EVENT = 'MiniGame_ChoiceTreasure_OpenClearTreasureBox'
+
+
+def is_treasure_game_reward(actor, ident):
+    """The first-prize chest; the minigame's keys and repeat rupees stay native."""
+    return (actor == 'Obj_HrlCity_Shop_TBox_A_02'
+            and str(ident) == TREASURE_GAME_REWARD.split('#')[1])
+
+
 # Remake region folder → AP hint areas (first element of LocationList categories).
 FOLDER_AREAS = {
     'KokiriForest': ('Kokiri Forest',), 'LostWood': ('the Lost Woods',),
@@ -191,7 +202,18 @@ PROGRESSIVE = {
 # Families whose NPC upgrades need the base item (chest) in the remake.
 BASE_REQUIRED = ('Bomb Bag', 'Bow', 'Slingshot')
 # Unshuffled sources giving a fixed tier (others upgrade dynamically).
-STATIC_TIER_SOURCES = {'GC Darunias Joy': ('Progressive Strength Upgrade', 0)}
+STATIC_TIER_SOURCES = {
+    'GC Darunias Joy': ('Progressive Strength Upgrade', 0),
+    # Unshuffled Great Fairies set the meter outright (24 / 48): found before the shuffled
+    # copy, the double fairy made the single one useless (user report, 0.8.0).
+    'HC Great Fairy Reward': ('Magic Meter', 0),
+    'DMC Great Fairy Reward': ('Magic Meter', 1),
+}
+
+
+def static_tier_gid(location):
+    """Source id of a STATIC_TIER_SOURCES location (fairies are ``fairy#``, NPC gifts ``npc#``)."""
+    return ('fairy#' if location.endswith('Great Fairy Reward') else 'npc#') + location
 
 
 def actor_item(actor, folder):
@@ -363,6 +385,16 @@ def scan_maps(nup, dictionaries, members, progress=None):
     from oot_rando.formats.inspect_resources import Byml, decompress  # zstd: not needed by the logic
     report = progress or (lambda message: None)
     maps, groups, enemies = {}, defaultdict(list), []
+    from oot_rando.game.combat import combat_dependencies
+    import ainb
+    modules = {}
+
+    def read_module(path):
+        if path not in modules:
+            if path not in members:
+                raise ValueError('Missing combat logic module: ' + path)
+            modules[path] = ainb.AINB.from_binary(nup.read(members[path])).as_dict()
+        return modules[path]
     walls = defaultdict(list)  # folder -> (age, position) of destructible walls
     gimmicks = defaultdict(list)  # folder -> (age, guard, radius, position) of NEAR_GUARDS actors
     names = sorted(p for p in members if p.startswith('Banc/') and p.endswith('.bcett.byml.zs'))
@@ -376,6 +408,7 @@ def scan_maps(nup, dictionaries, members, progress=None):
         folder = path.split('/')[1]
         room_locks = enemy_counter_locks(path, root)
         mechanics = enemy_mechanics(root)
+        combat = combat_dependencies(path, root, read_module)
         for actor_index, actor in enumerate(root.get('Actors', [])):
             if inaccessible_child_actor(path, actor):
                 continue
@@ -388,7 +421,9 @@ def scan_maps(nup, dictionaries, members, progress=None):
             if type(actor.get('Hash')) is not int:
                 continue
             dynamic = actor.get('Dynamic') if isinstance(actor.get('Dynamic'), dict) else {}
-            if name.startswith('Obj_TBox') and isinstance(dynamic.get('Drop__DropActor'), str):
+            if ((name.startswith('Obj_TBox')
+                 or (folder == 'Market' and is_treasure_game_reward(name, actor['Hash'])))
+                    and isinstance(dynamic.get('Drop__DropActor'), str)):
                 groups[folder + '#' + str(actor['Hash'])].append({
                     'resource': path, 'index': actor_index, 'actor': name, 'folder': folder,
                     'hash': str(actor['Hash']), 'before': dynamic['Drop__DropActor'],
@@ -397,7 +432,8 @@ def scan_maps(nup, dictionaries, members, progress=None):
                 enemies.append({'resource': path, 'index': actor_index, 'actor': name, 'folder': folder,
                                 'hash': str(actor['Hash']), 'presence': actor.get('Presence'),
                                 'locks': room_locks.get(actor['Hash'], []),
-                                'mechanics': mechanics.get(actor['Hash'], [])})
+                                'mechanics': mechanics.get(actor['Hash'], []),
+                                'combat': combat.get(actor['Hash'], [])})
     merge_same_chests(groups)
     for variants in groups.values():
         for variant in variants:
@@ -498,7 +534,13 @@ def junk_reason(variants):
         return 'ambiguous_hash'
     for variant in variants:
         dynamic = variant['dynamic']
-        if dynamic.get('IsEnableRepeatOpen'):
+        # This actor respawns for each game, but only exists until the first win:
+        # the native IsClear flag selects a separate red-rupee chest thereafter.
+        first_prize = (variant['folder'] == 'Market'
+                       and is_treasure_game_reward(variant['actor'], variant.get('hash'))
+                       and variant['before'] == 'Obj_Heart_Piece'
+                       and dynamic.get('GetEventName') == TREASURE_GAME_EVENT)
+        if dynamic.get('IsEnableRepeatOpen') and not first_prize:
             return 'repeatable'
         if 'Drop__CheckActor' in dynamic or 'Drop__DropActor_Substitute' in dynamic:
             return 'substitution_rule'
@@ -556,7 +598,10 @@ CHEST_RULE_EVENTS = {
 # apart, the one chest in game had two items (KF_chest_1 and LW_chest_1, 20/11), one of
 # them under the rule of the storms grotto chest. The copy joins the group of the
 # chest it copies: one item, one opening flag, the Lost Woods rule (adult bean ledge).
-SAME_CHESTS = {'KokiriForest#4349272251343787229': 'LostWood#17479747339356189279'}
+# Kakariko's rooftop chest has one hash per adult banc (before / after the fire): the
+# burnt copy joins the normal one, so a single item and opening flag span the fire.
+SAME_CHESTS = {'KokiriForest#4349272251343787229': 'LostWood#17479747339356189279',
+               'KakarikoVillage#13080955777249750889': 'KakarikoVillage#11929552275106311978'}
 
 
 def merge_same_chests(groups):
@@ -642,7 +687,12 @@ def match_locations(groups, data, logic, mode='strict'):
                  'dungeon': FOLDER_AP_DUNGEON.get(folder), 'kind': 'junk', 'ap': [], 'reason': reason,
                  'guards': chest_guards(variants)}
         result[group_id] = entry
-        if not reason:
+        if not reason and group_id == TREASURE_GAME_REWARD and TREASURE_GAME_LOCATION in ap_chests:
+            # AP calls this heart piece a special item; the remake uses an ordinary
+            # heart piece. Match by physical identity, keeping the Lens access rule.
+            entry.update(kind='exact', ap=[TREASURE_GAME_LOCATION])
+            used.add(TREASURE_GAME_LOCATION)
+        elif not reason:
             pending[group_id] = entry
 
     def candidates(item, areas):

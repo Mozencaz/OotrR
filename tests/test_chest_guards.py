@@ -35,7 +35,7 @@ class SameChestTests(unittest.TestCase):
     def test_map_copy_joins_its_chest(self):
         # 20/11: KF_chest_1 was the Lost Woods ledge chest seen from the Kokiri Forest map.
         from oot_rando.game.remake_world import SAME_CHESTS, merge_same_chests
-        (copy_id, original_id), = SAME_CHESTS.items()
+        copy_id, original_id = next(iter(SAME_CHESTS.items()))
         groups = {copy_id: [variant(resource='Banc/KokiriForest/K.bcett.byml.zs')],
                   original_id: [variant(resource='Banc/LostWood/L.bcett.byml.zs')], 'Other#1': [variant()]}
         merged = merge_same_chests(groups)
@@ -43,6 +43,14 @@ class SameChestTests(unittest.TestCase):
         self.assertEqual([v['resource'] for v in merged[original_id]],
                          ['Banc/LostWood/L.bcett.byml.zs', 'Banc/KokiriForest/K.bcett.byml.zs'])
         self.assertEqual(merge_same_chests({copy_id: [variant()]}), {copy_id: [variant()]})  # original absent
+
+    def test_kakariko_burnt_chest_joins_the_normal_one(self):
+        from oot_rando.game.remake_world import SAME_CHESTS, merge_same_chests
+        burnt, normal = 'KakarikoVillage#13080955777249750889', 'KakarikoVillage#11929552275106311978'
+        self.assertEqual(SAME_CHESTS[burnt], normal)
+        merged = merge_same_chests({burnt: [variant(resource='Alt')], normal: [variant(resource='Norm')]})
+        self.assertEqual([v['resource'] for v in merged[normal]], ['Norm', 'Alt'])
+        self.assertNotIn(burnt, merged)
 
     def test_rule_events_exist(self):
         # Each chest's own rule is a remake event of the logic.
@@ -64,7 +72,7 @@ class RealGameGuardTests(unittest.TestCase):
         from oot_rando.game.world_maps import effective_members
         nup = Nup(NUP)
         _, groups, _ = scan_maps(nup, dictionaries(nup), effective_members(nup))
-        (copy_id, original_id), = SAME_CHESTS.items()
+        copy_id, original_id = next(iter(SAME_CHESTS.items()))
         self.assertNotIn(copy_id, groups)
         chest = groups[original_id]
         self.assertEqual(sorted(v['folder'] for v in chest), ['KokiriForest'] * 2 + ['LostWood'] * 2)

@@ -456,6 +456,150 @@ def add_converter_calls(raw, events, flow_name):
     return result
 
 
+# ---------------------------------------------------------------- global watcher
+# Safety net: a token got by a route that reaches neither ActionGuide nor a hook
+# stays a dead key item (no bracelet, no gauntlets) until some later item get. The
+# global sequence (``Sequence/MainUpdate``) therefore watches every token: while
+# ``IsGet.<token>`` is true and ``RandoProg.<token>`` is not, it requests the
+# converter entry itself as an event (EventSetting row = the entry's name). The
+# converter is idempotent (each token is marked, then converted), so racing the
+# ActionGuide call or running again after a load is harmless.
+MAIN_UPDATE = 'Sequence/MainUpdate.module.ainb'
+EVENT_SETTINGS = 'RSDB/EventSetting.Product.111.rstbl.byml.zs'
+WATCH_EVENT = CONVERTER_ENTRY
+WATCH_TEMPLATE_ROW = 'CrumblingGanonCastle_Arrive'   # as patching.ap_mailbox: started without an actor
+WATCH_TEMPLATE_ANALYZED = 'NaviLockOnHint'
+WATCH_NODES = ['SeqQueryGetNonStructGameDataBool', 'Element_BoolSelector', 'SeqQueryGetNonStructGameDataBool',
+               'Element_BoolSelector', 'SeqOneShotRequestEvent', 'SeqExecuteGenericDummyAction',
+               'SeqExecuteGenericDummyAction']
+
+
+def watch_event_row(settings_raw):
+    """EventSetting row requesting the converter entry of ActionGuide (no actor)."""
+    import copy
+    from oot_rando.formats import byml_codec
+    document = byml_codec.load(settings_raw)
+    rows = document['root']
+    by_id = {row['__RowId']: row for row in rows}
+    if WATCH_EVENT in by_id:
+        raise ValueError('EventSetting row already present: ' + WATCH_EVENT)
+    row = copy.deepcopy(by_id[WATCH_TEMPLATE_ROW])
+    row.pop('EventEffectSetting', None)
+    row['__RowId'] = WATCH_EVENT
+    row['FlowchartFileName'] = f'Work/Event/EventFlow/{ACTION_GUIDE}.evfc'
+    row['EntryPointName'] = CONVERTER_ENTRY
+    rows.append(row)
+    rows.sort(key=lambda r: r['__RowId'])
+    return byml_codec.dump(document)
+
+
+def watch_analyzed_row(info_raw, current):
+    """GameAnalyzedEventInfo row listing everything the converter calls. ``current(name)``: raw of a flow."""
+    import copy
+    from oot_rando.formats import byml_codec
+    from oot_rando.patching.event_info import _cached_charts, closure, reachable_transitions
+    document = byml_codec.load(info_raw)
+    rows = document['root']
+    by_id = {row['__RowId']: row for row in rows}
+    if WATCH_EVENT in by_id:
+        raise ValueError('GameAnalyzedEventInfo row already present: ' + WATCH_EVENT)
+    current = _cached_charts(current)
+    call = (ACTION_GUIDE, CONVERTER_ENTRY)
+    row = copy.deepcopy(by_id[WATCH_TEMPLATE_ANALYZED])
+    flows = closure({call}, current) - {ACTION_GUIDE}
+    if flows:
+        row['SubFlowList'] = sorted(flows, key=str.lower)
+    children = set(reachable_transitions(call, current))
+    for child in list(children):
+        children.update((by_id.get(child) or {}).get('ChildEventList') or [])
+    if children:
+        row['ChildEventList'] = sorted(children, key=str.lower)
+    row['__RowId'] = WATCH_EVENT
+    rows.append(row)
+    rows.sort(key=lambda r: r['__RowId'])
+    return byml_codec.dump(document), {'subflows': row.get('SubFlowList', []), 'children': row.get('ChildEventList', [])}
+
+
+def patch_main_update(raw, tokens):
+    """The global sequence with one watcher per token (7 nodes each, in groups under the root)."""
+    import copy
+    import ainb
+    from oot_rando.patching.ap_mailbox import WATCHER_GROUP, _input, ainb_to_binary
+    document = ainb.AINB.from_binary(raw).as_dict()
+    nodes = document['Nodes']
+    root = nodes[0]
+    if root['Node Type'] != 'Element_Simultaneous' or 'Is Root Node' not in root['Flags']:
+        raise ValueError('Unexpected MainUpdate root.')
+    dummy = next(n for n in nodes if n['Name'] == 'SeqExecuteGenericDummyAction')
+    selector_model = next(n for n in nodes if n['Node Type'] == 'Element_BoolSelector')
+    first = len(nodes)
+    once = {'Bool': [{'Name': 'ExecuteEveryFrame', 'Default Value': False, 'Flags': []}]}
+    tokens = sorted(tokens)
+
+    def guid(index):
+        return f'0a9a9b00-0000-4000-8000-{index:012x}'
+
+    def user(index, name, inputs, outputs=None, flags=(), properties=None):
+        return {'Node Type': 'UserDefined', 'Node Index': index, 'Name': name, 'GUID': guid(index),
+                'Flags': list(flags), 'Queries': [], 'Attachments': [], 'Properties': properties or {},
+                'Parameters': {'Inputs': inputs, 'Outputs': outputs or {}}, 'XLink Actions': [], 'Plugs': {}}
+
+    def query(index, flag):
+        return user(index, 'SeqQueryGetNonStructGameDataBool', {
+            'Int': [_input('GameDataIndex', -1, True)], 'Bool': [_input('IsDirect', True)],
+            'String': [_input('GameDataFullName', flag)]},
+            {'Bool': [{'Name': 'Value', 'Is Output': True}]}, ['Is Query'],
+            {'Bool': [{'Name': 'OutputOnlyOnEnter', 'Default Value': False, 'Flags': []}]})
+
+    def selector(index, query_index, true_index, false_index):
+        node = copy.deepcopy(selector_model)
+        node.update({'Node Index': index, 'GUID': guid(index), 'Queries': [query_index],
+                     'Flags': [f for f in node['Flags'] if f != 'Is Root Node']})
+        node['Parameters'] = {'Inputs': {'Bool': [{'Name': 'Input', 'Default Value': False, 'Node Index': query_index,
+                                                    'Output Index': 0, 'Flags': []}]}, 'Outputs': {}}
+        node['Plugs'] = {'Generic': [{'Node Index': query_index, 'Name': 'Input', 'Unknown 1': 0, 'Unknown 2': 0}],
+                         'Child': [{'Node Index': true_index, 'Name': 'True'}, {'Node Index': false_index, 'Name': 'False'}]}
+        return node
+
+    groups = []
+    for position, token in enumerate(tokens):
+        if position % WATCHER_GROUP == 0:
+            group = copy.deepcopy(root)
+            group.update({'Node Index': len(nodes), 'GUID': guid(len(nodes)), 'Flags': [], 'Plugs': {'Child': []}})
+            nodes.append(group)
+            root['Plugs']['Child'].append({'Node Index': group['Node Index'], 'Name': ''})
+            groups.append(group)
+        got_q, got_s, applied_q, applied_s, request_i, idle_a, idle_b = range(len(nodes), len(nodes) + 7)
+        request = user(request_i, 'SeqOneShotRequestEvent', {
+            'Bool': [_input('IsBancParamValue', False, True)], 'String': [_input('EventName', WATCH_EVENT)]},
+            properties=once)
+        idle = []
+        for index in (idle_a, idle_b):
+            node = copy.deepcopy(dummy)
+            node.update({'Node Index': index, 'GUID': guid(index)})
+            idle.append(node)
+        # Got and not yet converted: request; any other state does nothing.
+        nodes.extend([query(got_q, got_flag(token)), selector(got_s, got_q, applied_s, idle_a),
+                      query(applied_q, applied_flag(token)), selector(applied_s, applied_q, idle_b, request_i),
+                      request, idle[0], idle[1]])
+        groups[-1]['Plugs']['Child'].append({'Node Index': got_s, 'Name': ''})
+    result = ainb_to_binary(document)
+    check = ainb.AINB.from_binary(result).as_dict()['Nodes']
+    for index, token in enumerate(tokens):
+        group_index, slot = divmod(index, WATCHER_GROUP)
+        group = first + group_index * (1 + WATCHER_GROUP * 7)
+        base = group + 1 + slot * 7
+        if check[group]['Node Type'] != 'Element_Simultaneous' or [
+                n['Name'] or n['Node Type'] for n in check[base:base + 7]] != WATCH_NODES:
+            raise ValueError('MainUpdate token watcher not written as expected: ' + token)
+        names = [check[base + k]['Parameters']['Inputs']['String'][0]['Default Value'] for k in (0, 2, 4)]
+        if names != [got_flag(token), applied_flag(token), WATCH_EVENT]:
+            raise ValueError('MainUpdate token watcher misread: ' + token)
+        if check[group]['Plugs']['Child'][slot]['Node Index'] != base + 1:
+            raise ValueError('MainUpdate token watcher not attached: ' + token)
+    return result
+
+
 # ---------------------------------------------------------------- token actors
 def token_texts(token, language):
     _, english, french, _ = FAMILIES[token_family(token)]

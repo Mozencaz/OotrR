@@ -56,7 +56,7 @@ class GerudoValleySources(unittest.TestCase):
         nup = Nup(os.environ['OOT_NUP'])
         try:
             members = {p: v for p, v in effective_members(nup).items()
-                       if p.startswith('Banc/GerudoValley/')}
+                       if p.startswith(('Banc/GerudoValley/', 'Logic/'))}
             maps, groups, _ = scan_maps(nup, dictionaries(nup), members)
             sources = scan_map_sources(maps, lambda *_: True)
         finally:

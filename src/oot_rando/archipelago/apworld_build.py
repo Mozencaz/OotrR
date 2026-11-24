@@ -18,7 +18,7 @@ MINIMUM_AP_VERSION = '0.6.2'
 VENDORED = ('__init__.py', 'paths.py',
             'logic/__init__.py', 'logic/rules.py', 'logic/world.py', 'logic/rando_options.py',
             'randomizer/__init__.py', 'randomizer/full_randomizer.py',
-            'game/__init__.py', 'game/remake_world.py', 'game/item_forms.py', 'game/extra_sources.py',
+            'game/__init__.py', 'game/remake_world.py', 'game/combat.py', 'game/item_forms.py', 'game/extra_sources.py',
             'game/randomizer_categories.py',
             'patching/__init__.py', 'patching/soul_adapter.py', 'patching/key_adapter.py', 'patching/ap_item.py',
             'patching/ap_mailbox.py', 'patching/song_adapter.py', 'patching/child_castle_skip.py',
@@ -62,7 +62,7 @@ def vendored_files():
 
 def manifest():
     return {'game': 'OoT Remake', 'world_version': WORLD_VERSION, 'minimum_ap_version': MINIMUM_AP_VERSION,
-            'authors': ['OoT Randomizer'], 'version': 7, 'compatible_version': 7}
+            'authors': ['OoT Randomizer'], 'version': 8, 'compatible_version': 8}
 
 
 def write_apworld(catalog, output):

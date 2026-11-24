@@ -132,7 +132,7 @@ def soul_zones(metadata, counts):
 
 class TrackerSession:
     """A session observes one selected save; rollbacks replace its automatic state."""
-    def __init__(self, directory, slot, save_path='', live=None):
+    def __init__(self, directory, slot, save_path='', live=None, manual_directory=None):
         self.directory = Path(directory)
         self.live, self.live_status = live, ''   # live_memory.LiveGameData, optional
         self.live_bool64 = False
@@ -140,7 +140,7 @@ class TrackerSession:
         self.seed_id, self.slot = self.manifest['seed_id'], slot
         self.checks = catalogue['checks']
         self.save_path = str(save_path)
-        self.manual = ManualTracker(state_dir() / 'tracker',
+        self.manual = ManualTracker(manual_directory if manual_directory is not None else state_dir() / 'tracker',
                                     self.seed_id, slot, [c['id'] for c in self.checks])
         self.metadata = None
         if self.manifest.get('tracking'):

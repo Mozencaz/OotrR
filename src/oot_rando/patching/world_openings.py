@@ -277,9 +277,10 @@ def gerudo_fortress_fast(read_flow, gamedata_raw, challenges_raw, read_module=No
     from oot_rando.patching import gerudo_fortress as g
     values = {CARPENTERS_HELPED: 3, CARPENTERS_LEFT: 1}
     flow, freed = g.free_remaining_carpenters(read_flow(g.SPIRIT_FLOW))
-    files = {g.SPIRIT_FLOW: flow, g.CELL_MODULE: g.open_completed_cells((read_module or read_flow)(g.CELL_MODULE))}
+    unlock, _ = g.skip_completed_unlocks(read_flow(g.UNLOCK_FLOW))
+    files = {g.SPIRIT_FLOW: flow, g.UNLOCK_FLOW: unlock, g.CELL_MODULE: g.open_completed_cells((read_module or read_flow)(g.CELL_MODULE))}
     return game_defaults.set_new_game_defaults(gamedata_raw, values), files, {
-        'defaults': values, 'guarded': {}, 'freed': freed, 'modules': [g.CELL_MODULE]}
+        'defaults': values, 'guarded': {}, 'freed': freed, 'modules': [g.CELL_MODULE], 'unlock_flow': g.UNLOCK_FLOW}
 
 
 BRIDGE_MODULE = 'Logic/GerudoValley_Adult_Prefab_9e43.logic.module.ainb'

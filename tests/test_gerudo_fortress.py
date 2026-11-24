@@ -43,6 +43,23 @@ class Fortress(unittest.TestCase):
         with self.assertRaises(ValueError):
             g.free_remaining_carpenters(files[g.SPIRIT_FLOW])
 
+    def test_released_cells_do_not_replay_their_unlock(self):
+        # The released lock holds its key at every load: the unlock entries must end at once.
+        source = self.read(g.UNLOCK_FLOW)
+        raw, report = g.skip_completed_unlocks(source)
+        chart = _Chart(raw)
+        for entry in chart.chart.entry_points:
+            if entry.name not in g.UNLOCK_ENTRIES:
+                continue
+            guard = entry.main_event.v
+            self.assertEqual(guard.data.actor_query.v.v, 'EventQueryIsGameDataBool')
+            self.assertEqual(_params(guard), {'GameDataName': g.CELLS_RELEASED, 'Index': -1})
+            self.assertEqual(set(guard.data.cases), {0})  # flag set: no case, the flow ends
+            self.assertEqual(guard.data.cases[0].v.name, g.UNLOCK_ENTRIES[entry.name])
+        self.assertEqual(len(report['entries']), 4)
+        with self.assertRaises(ValueError):
+            g.skip_completed_unlocks(raw)
+
     def test_cell_lock_graph_preserves_key_path_until_completion(self):
         import ainb
         from test_world_openings import unflagged_links
@@ -101,6 +118,34 @@ class Fortress(unittest.TestCase):
                 self.assertIn(g.CARD.encode(), after[p])
             with self.assertRaises(ValueError):
                 g.guard_pack(g.guard_pack(raw)[0])
+
+    def test_every_guard_interest_reacts_until_the_card(self):
+        for identifier in g.GUARD_IDS:
+            raw = self.read(f'Pack/Actor/Npc_Gerudo_{identifier}.pack.zs')
+            for path, data in sarc(g.guard_pack(raw)[0]).items():
+                if '/InterestReceiveParam/' in path:
+                    self.assertNotIn(g.NOT_STARTED.encode(), data, (identifier, path))
+
+    def test_fortress_modules_follow_card_not_quest_step(self):
+        import ainb
+        for name in g.MEMBERSHIP_MODULES:
+            path = f'Logic/{name}.logic.module.ainb'
+            source = self.read(path)
+            raw, report = g.membership_module(source)
+            nodes = ainb.AINB.from_binary(raw).as_dict()['Nodes']
+            original = ainb.AINB.from_binary(source).as_dict()['Nodes']
+            self.assertFalse(any(n['Name'] == 'HoldChallengeCurrentStepCheckOrder'
+                                 and n['Parameters']['Inputs']['String'][1]['Default Value'] == 'Step01'
+                                 for n in nodes), name)
+            for index in report['checks']:
+                self.assertEqual(nodes[index]['Name'], 'HoldGameDataGetBoolSimple')
+                self.assertEqual(nodes[index]['Parameters']['Inputs']['String'][0]['Default Value'], g.CARD)
+            # Nodes added for the card's negation are wired to the card.
+            for node in nodes[len(original):]:
+                self.assertEqual(node['Name'], 'OperateOR')
+                self.assertIn(node['Parameters']['Inputs']['Bool'][0]['Sources'][0]['Node Index'], report['checks'])
+            with self.assertRaises(ValueError):
+                g.membership_module(raw)
 
     def test_prison_dialogue_and_compounds_read_card(self):
         for path, names in ((g.SPIRIT_FLOW, ('Event123', 'Event99', 'Event389')),

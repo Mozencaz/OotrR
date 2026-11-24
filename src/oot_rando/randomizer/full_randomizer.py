@@ -9,9 +9,10 @@ from types import SimpleNamespace
 
 from oot_rando.logic.rules import Logic, age_member, vanilla_placements
 from oot_rando.logic import rando_options
-from oot_rando.game.remake_world import (PROGRESSIVE, BASE_REQUIRED, STATIC_TIER_SOURCES, item_actor,
+from oot_rando.game.remake_world import (PROGRESSIVE, BASE_REQUIRED, STATIC_TIER_SOURCES, static_tier_gid, item_actor,
                           match_locations, coverage_summary, FOLDER_DUNGEON,
-                          ZONE_LABELS, TRACKED_TYPES, location_zone, source_age, zone_label)
+                          ZONE_LABELS, TRACKED_TYPES, location_zone, source_age, zone_label,
+                          TREASURE_GAME_REWARD)
 from oot_rando.game.item_forms import can_take, form_actor, underwater_actor
 from oot_rando.game.extra_sources import match_sources, area_locations
 from oot_rando.patching.soul_adapter import plan_souls, chest_requirements, soul_label
@@ -238,6 +239,10 @@ def ap_settings(options, open_forest):
     return values
 
 
+# Ring-dungeon spots checked in game as reachable without any key (remake_world.KNOWN_CHEST_GROUPS).
+KEY_FREE_SPOTS = frozenset({'Fire Temple Near Boss Chest', 'Forest Temple First Room Chest'})
+
+
 class FillError(ValueError):
     pass
 
@@ -290,6 +295,21 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             for location in probe.location_names():
                 if data.vanilla_item(location) == family and data.location_type(location) != 'Chest':
                     location_requirements.setdefault(location, set()).add(family)
+    # A key ring may only land where its dungeon's doors cannot lock it in: the matching of
+    # remake sources to AP locations never checked the remake's own chain locks, so every
+    # location of a ring dungeon needs one key of it (the ring), except verified spots.
+    from oot_rando.patching.key_adapter import small_key_item as _small_key
+    from oot_rando.game.extra_sources import BOSS_HEARTS
+    from oot_rando.game.remake_world import FOLDER_AP_DUNGEON as _AP_DUNGEON
+    for _folder in key_ring_folders(options, seed_key):
+        for _region in data.regions:
+            # Boss rooms carry no dungeon tag: they lie behind the dungeon's own doors too.
+            if (_region.get('dungeon') == _AP_DUNGEON.get(_folder)
+                    or (_region['region_name'].endswith('Boss Room')
+                        and BOSS_HEARTS.get(_folder) in _region.get('locations', {}))):
+                for _location in _region.get('locations', {}):
+                    if _location not in KEY_FREE_SPOTS:
+                        location_requirements.setdefault(_location, set()).add(_small_key(_folder))
     logic = Logic(data, settings, souls['exit_requirements'], location_requirements)
     relevant = set(logic.referenced) | set(souls['items'])
 
@@ -644,10 +664,12 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
     if forced is not None:
         state, collected, spheres = sweep(forced)
         child_missing = child_door_missing(c, forced)
+        soul_missing = sorted(item for item in souls['items'] if not state.has(item))
         sphere_of = {loc[len('Remake|'):]: index for index, sphere in enumerate(spheres)
                      for loc in sphere if loc.startswith('Remake|')}
-        return {'beatable': state.has('Triforce') and not child_missing,
+        return {'beatable': state.has('Triforce') and not child_missing and not soul_missing,
                 'before_adult_missing': child_missing, 'spheres': sphere_of, 'sphere_count': len(spheres),
+                'unreachable_souls': soul_missing,
                 'unreachable': sorted(g for g in logic_locations if vname(g) not in collected),
                 'progressive': progressive_plan(forced, c.natives),
                 # Read by verify: the chests left in place get their opening flag too.
@@ -707,6 +729,10 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
         state, collected, spheres = sweep(placed)
         if not state.has('Triforce'):
             last_error = 'victory not guaranteed'
+            continue
+        soul_missing = sorted(item for item in souls['items'] if not state.has(item))
+        if soul_missing:
+            last_error = 'Unreachable enemy souls: ' + ', '.join(soul_missing)
             continue
         if options['accessibility'] == 'full':
             missing = [g for g in logic_locations if vname(g) not in collected]
@@ -883,7 +909,7 @@ def native_sources(matches, shuffled, extra=None):
                 and entry.get('source', 'chest') in FIXED_LEVEL_SOURCES and entry['variants']):
             natives[gid] = entry
     for location, (family, tier) in STATIC_TIER_SOURCES.items():
-        gid = 'npc#' + location
+        gid = static_tier_gid(location)
         entry = (extra or {}).get(gid)
         if gid in shuffled or entry is None or entry['kind'] == 'junk':
             continue   # a junk gift has no reliable event to change: it stays native
@@ -1101,6 +1127,10 @@ def _patches(entry):
             result.append({'resource': variant['resource'],
                            'path': ['Actors', variant['index'], 'Dynamic', 'Drop__DropActor'],
                            'before': variant['before']})
+            if entry['id'] == TREASURE_GAME_REWARD:
+                result.append({'resource': variant['resource'],
+                               'path': ['Actors', variant['index'], 'Dynamic', 'DropViewActor'],
+                               'before': variant['dynamic']['DropViewActor']})
     return result
 
 

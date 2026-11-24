@@ -146,7 +146,12 @@ OPTIONS = [
            'The carpenters stay in their cells and the last rescue still '
            'brings the Gerudo Membership Card. To be confirmed in game.', kind='bool', experimental=(True,)),
     Option('starting_age', 'World', 'Starting age',
-           (('child', 'Child', OK), ('adult', 'Adult', NO_ADAPTER), ('random', 'Random', NO_ADAPTER)), 'child'),
+           (('child', 'Child', OK), ('adult', 'Adult', OK), ('random', 'Random', NO_ADAPTER)), 'child',
+           'Adult: a new game begins as adult Link in the Temple of Time, with the Door of Time open '
+           '(the "Door of Time open" option is forced on) and time travel possible both ways at the '
+           'pedestal. Link holds the Master Sword (needed to travel back) and the starting inventory '
+           'you choose, nothing else. New save required. To be confirmed in game.',
+           experimental=('adult',)),
     # ------------------------------------------------------------------- Goal
     Option('bridge', 'Goal', 'Rainbow Bridge',
            (('vanilla', 'Shadow and Spirit medallions (vanilla)', OK), ('open', 'Open', NO_ADAPTER),
@@ -433,6 +438,8 @@ def validate(values, supported_only=False):
             raise ValueError(f'Unknown value for {name}: {value!r}')
         if supported_only and not option.supported(value):
             raise ValueError(f'{option.label} = {value!r}: {option.reason(value)}')
+    if result['starting_age'] == 'adult':
+        result['open_door_of_time'] = True   # the adult starts beyond the door: it stands open
     if supported_only:
         moved = result['shuffle_smallkeys'] not in ('vanilla', 'remove')
         if moved and result['key_rings'] == 'off':
@@ -452,11 +459,12 @@ PRESETS = {
     'ap_defaults': {'label': 'AP glitchless — defaults', 'values': {}},
     'everything': {'label': 'Everything shuffled (available values)', 'values': {
         'shuffle_chests': True, 'shuffle_kokiri_sword': True, 'shuffle_remake_items': True,
-        'shuffle_mapcompass': 'dungeon', 'shuffle_smallkeys': 'vanilla', 'shuffle_bosskeys': 'dungeon',
+        'shuffle_mapcompass': 'dungeon', 'shuffle_smallkeys': 'keysanity', 'key_rings': 'all', 'shuffle_bosskeys': 'keysanity',
         'shuffle_enemy_spawns': 'all', 'chest_matching': 'scene', 'progressive_order': True,
         'tokensanity': 'all', 'shopsanity': '4', 'shuffle_freestanding_items': 'all', 'shuffle_npc_gifts': True,
         'shuffle_boss_rewards': True, 'shuffle_great_fairies': True, 'shuffle_quest_rewards': True,
         'shuffle_master_sword': True, 'shuffle_gerudo_card': True,
+        'shuffle_song_items': 'everywhere', 'blue_fire_arrows': True,
         'shuffle_pots': 'all', 'shuffle_crates': 'all', 'shuffle_beehives': True, 'shuffle_bushes': True,
         'shuffle_rocks': True, 'shuffle_trees': True, 'shuffle_scrubs': 'low'}},
     'prudent': {'label': 'Prudent (chests except keys, no souls)', 'values': {

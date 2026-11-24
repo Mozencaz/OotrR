@@ -27,6 +27,7 @@ for _name in VENDORED + (TEMPLATE,):
     _parent = Path(_name).parent.as_posix()
     datas.append((str(PKG / _name), 'oot_rando' + ('' if _parent == '.' else '/' + _parent)))
 datas += collect_data_files('ainb')
+datas += collect_data_files('certifi')
 hiddenimports = (collect_submodules('oot_rando') + collect_submodules('ainb') + collect_submodules('evfl')
                  + collect_submodules('websockets') + collect_submodules('oead') + collect_submodules('restbl') + collect_submodules('byml'))
 

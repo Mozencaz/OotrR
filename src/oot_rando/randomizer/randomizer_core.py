@@ -34,7 +34,7 @@ from oot_rando.game.resource_allocations import allocation, grow_resources, add_
 from oot_rando.formats.byml_writer import lift_actors, patch_strings
 from oot_rando.logic import rando_options
 
-GENERATOR_VERSION = '0.12.8'  # Optional ice arrows melting red ice; shops open day and night
+GENERATOR_VERSION = '0.12.18'  # Include the Treasure Chest Game first prize
 ADAPTER_VERSION = 'ap-glitchless-v5'   # v5: progressive tokens (every copy gives the next level)
 ADULT_MAP = MAP.replace('_Child_', '_Adult_')
 # The amiibo menu: given by Kaepora's first field arrival, now never played
@@ -58,7 +58,9 @@ def starting_pouch_items(full):
     """
     full = full or {}
     starting = (full.get('archipelago') or {}).get('starting') if full.get('archipelago') else full.get('starting')
-    return list(STARTING_ITEMS) + [s['actor'] for s in starting or []]
+    from oot_rando.patching import adult_start
+    held = adult_start.START_ACTORS if adult_start.enabled(full.get('options')) else ()
+    return list(STARTING_ITEMS) + list(held) + [s['actor'] for s in starting or []]
 # Archipelago goal flag: after Defeat_Ganon's native "Complete" step (Ganon's death),
 # before the transition to Dm_Ending_0000.
 GOAL_FLOW, GOAL_EVENT = 'Event/EventFlow/Defeat_Ganon.bfevfl.zs', 'Event37'
@@ -657,6 +659,10 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
             from oot_rando.patching.key_adapter import start_dungeon_values, check_start_values
             from oot_rando.patching import area_presentations, child_castle_skip
             castle_skip = child_castle_skip.enabled(settings.full)
+            from oot_rando.patching import adult_start
+            if adult_start.enabled(settings.full):
+                # Before the castle requests: they are chained after the same anchor, ahead of it.
+                extra_raw[opening], story['adult_start'] = adult_start.patch_opening(extra_raw[opening])
             start_values = dict(start_dungeon_values(settings.full), **story_fixes.story_start_values())
             start_values.update(area_presentations.start_values())
             if castle_skip:
@@ -773,6 +779,18 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
                 ap_mailbox.SIGNAL: False,
                 **{flag: False for record in mailbox_items for flag in (record['recv'], record['got'])}})
             skips['ap_mailbox'] = {'items': mailbox_items, 'row': mailbox_row, 'signal': ap_mailbox.SIGNAL}
+        if full is not None and full['progressive']['actors']:
+            # Safety net of the progressive tokens: the global sequence converts any token
+            # got by a route that reaches no converter call (patching.progressive).
+            from oot_rando.patching import progressive
+            from oot_rando.patching.event_info import GAME_ANALYZED_EVENT_INFO as info_path, flow_path as watch_flow_path
+            watch_raw = lambda path: extra_raw[path] if path in extra_raw else decompress(read(path), d)
+            watch_flows = lambda name: (watch_raw(watch_flow_path(name)) if watch_flow_path(name) in members else None)
+            extra_raw[EVENT_SETTINGS] = progressive.watch_event_row(watch_raw(EVENT_SETTINGS))
+            extra_raw[info_path], watch_row = progressive.watch_analyzed_row(watch_raw(info_path), watch_flows)
+            main_update = plain_raw.get(progressive.MAIN_UPDATE) or read(progressive.MAIN_UPDATE)
+            plain_raw[progressive.MAIN_UPDATE] = progressive.patch_main_update(main_update, full['progressive']['actors'])
+            skips['progressive_watch'] = {'tokens': list(full['progressive']['actors']), 'row': watch_row}
         if full is not None:
             # Chests save no flag of their own: each chest, shuffled or left in place, runs
             # its own copy of its opening event, which sets a saved Bool first (tracking,

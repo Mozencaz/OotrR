@@ -267,9 +267,13 @@ class ArchipelagoClient:
             if len(self.urls) < 2 or not tls_unsupported(error):
                 import ssl
                 if isinstance(error, ssl.SSLCertVerificationError):
-                    raise ClientError("The server's certificate is not valid: connection stopped so that "
-                                      'nothing is sent unencrypted. Type ws://address to connect '
-                                      'without encryption anyway.') from error
+                    reason = getattr(error, 'verify_message', None) or str(error)
+                    code = getattr(error, 'verify_code', None)
+                    detail = f'{reason} (code {code})' if code is not None else reason
+                    raise ClientError(f'TLS certificate verification failed for {self.urls[0]}: {detail}. '
+                                      'Connection stopped; no login data was sent. Check your computer clock, '
+                                      'update the app and OS certificates, and check VPN/antivirus HTTPS filtering. '
+                                      'Try the official Archipelago Text Client on this computer for comparison.') from error
                 raise
         if self.password:
             # A server that does not speak TLS gets the password only when asked explicitly:

@@ -45,6 +45,19 @@ class Units(unittest.TestCase):
                          ('GameDataActor', 'EventQueryIsGameDataBool',
                           {'GameDataName': 'IsGet.Item_FairyBless_MP', 'Index': -1}))
 
+    def test_watch_rows_copy_their_templates(self):
+        from oot_rando.formats import byml_codec
+        settings = byml_codec.dump({'endian': '<', 'version': 7, 'root': [
+            {'__RowId': progressive.WATCH_TEMPLATE_ROW, 'FlowchartFileName': 'Work/Event/EventFlow/X.evfc',
+             'EntryPointName': 'X', 'EventEffectSetting': {'a': 1}}]})
+        rows = {r['__RowId']: r for r in byml_codec.load(progressive.watch_event_row(settings))['root']}
+        row = rows[progressive.WATCH_EVENT]
+        self.assertEqual((row['EntryPointName'], row['FlowchartFileName']),
+                         (progressive.CONVERTER_ENTRY, 'Work/Event/EventFlow/ActionGuide.evfc'))
+        self.assertNotIn('EventEffectSetting', row)
+        with self.assertRaises(ValueError):
+            progressive.watch_event_row(progressive.watch_event_row(settings))
+
     def test_tier_events_highest_first(self):
         self.assertEqual(progressive.tier_events('X', 3), [('X', 2, 2), ('X_Has1', 1, 2), ('X_Has0', 0, 1)])
 
@@ -185,6 +198,46 @@ class WithGame(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.nup.stream.close()
+
+    def test_global_watcher_requests_the_converter_for_each_token(self):
+        import ainb
+        raw = self.nup.read(self.m[progressive.MAIN_UPDATE])
+        before = len(ainb.AINB.from_binary(raw).as_dict()['Nodes'])
+        tokens = self.tokens[:5]
+        nodes = ainb.AINB.from_binary(progressive.patch_main_update(raw, tokens)).as_dict()['Nodes']
+        self.assertEqual(len(nodes) - before, 1 + 7 * len(tokens))
+        group = nodes[nodes[0]['Plugs']['Child'][-1]['Node Index']]
+        for index, token in enumerate(tokens):
+            got = nodes[group['Plugs']['Child'][index]['Node Index']]
+            string = lambda node: node['Parameters']['Inputs']['String'][0]['Default Value']
+            self.assertEqual(string(nodes[got['Queries'][0]]), progressive.got_flag(token))
+            applied = nodes[got['Plugs']['Child'][0]['Node Index']]      # got: look at the converted flag
+            self.assertEqual(string(nodes[applied['Queries'][0]]), progressive.applied_flag(token))
+            request = nodes[applied['Plugs']['Child'][1]['Node Index']]   # not converted: request
+            self.assertEqual(string(request), progressive.WATCH_EVENT)
+            # Not got: nothing; already converted: nothing.
+            self.assertNotEqual(nodes[got['Plugs']['Child'][1]['Node Index']]['Name'], 'SeqOneShotRequestEvent')
+            self.assertNotEqual(nodes[applied['Plugs']['Child'][0]['Node Index']]['Name'], 'SeqOneShotRequestEvent')
+
+    def test_watcher_stacks_on_the_mailbox_watchers_and_groups(self):
+        import ainb
+        from oot_rando.patching.ap_mailbox import WATCHER_GROUP
+        raw = self.nup.read(self.m[progressive.MAIN_UPDATE])
+        tokens = [progressive.token_actor('Bow', n) for n in range(1, WATCHER_GROUP + 2)]
+        twice = progressive.patch_main_update(progressive.patch_main_update(raw, tokens[:3]), tokens)
+        nodes = ainb.AINB.from_binary(twice).as_dict()['Nodes']
+        self.assertTrue(all(len(n['Plugs'].get('Child', [])) <= 255 for n in nodes))
+
+    def test_watch_event_has_its_rows(self):
+        from oot_rando.formats import byml_codec
+        from oot_rando.patching.event_info import GAME_ANALYZED_EVENT_INFO
+        settings = progressive.watch_event_row(self.read(progressive.EVENT_SETTINGS))
+        row = next(r for r in byml_codec.load(settings)['root'] if r['__RowId'] == progressive.WATCH_EVENT)
+        self.assertEqual(row['EntryPointName'], progressive.CONVERTER_ENTRY)
+        current = lambda name: self.guide if name == progressive.ACTION_GUIDE else self.current(name)
+        info, report = progressive.watch_analyzed_row(self.read(GAME_ANALYZED_EVENT_INFO), current)
+        self.assertIn('GetPouchContent', report['subflows'])
+        self.assertTrue(any(r['__RowId'] == progressive.WATCH_EVENT for r in byml_codec.load(info)['root']))
 
     def current(self, name):
         from oot_rando.patching.event_info import flow_path
@@ -342,6 +395,26 @@ class WithGame(unittest.TestCase):
                 self.assertEqual((pickup['ASRef'], pickup['AnimationRef']), (native['ASRef'], native['AnimationRef']))
         ocarina = resolve_components(packs['Item_Prog_Ocarina_1'], 'Item_Prog_Ocarina_1', byml_codec)
         self.assertEqual(ocarina['ASRef'], '?AS/DemoDummy.root.asb')
+
+    def test_unshuffled_great_fairies_give_magic_tokens(self):
+        # An unshuffled double-magic fairy set the meter outright, making a shuffled single copy useless.
+        from oot_rando.game.remake_world import static_tier_gid
+        from oot_rando.randomizer.full_randomizer import native_sources, progressive_plan
+        fairies = {}
+        for location, (family, tier) in STATIC_TIER_SOURCES.items():
+            if family != 'Magic Meter':
+                continue
+            gid = static_tier_gid(location)
+            self.assertTrue(gid.startswith('fairy#'))
+            fairies[gid] = {'id': gid, 'source': 'fairy', 'form': 'event', 'folder': 'Npc', 'vanilla': family,
+                            'before': PROGRESSIVE[family][tier], 'kind': 'exact', 'ap': [location],
+                            'variants': [{'resource': 'Event/EventFlow/F.bfevfl.zs', 'event': 'E',
+                                          'param': 'ActorName', 'before': PROGRESSIVE[family][tier]}]}
+        self.assertEqual(len(fairies), 2)
+        self.assertEqual(set(native_sources({}, {}, fairies)), set(fairies))
+        self.assertEqual(native_sources({}, dict(fairies), fairies), {})   # shuffled: placed copies give tokens
+        plan = progressive_plan({}, native_sources({}, {}, fairies))
+        self.assertEqual(sorted(r['token'] for r in plan['natives']), ['Item_Prog_Magic_1', 'Item_Prog_Magic_2'])
 
     def test_gifts_outside_item_gets_call_the_converter(self):
         from oot_rando.game.extra_sources import scan_npc_sources
