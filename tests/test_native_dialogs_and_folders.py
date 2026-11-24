@@ -94,8 +94,8 @@ class MissingFoldersHelperTests(unittest.TestCase):
 
             chosen_root = os.path.join(td, "user_dir")
             created = create_missing_folders_in_dir(missing, chosen_root)
-            self.assertEqual(created["backup_dir"], os.path.join(chosen_root, "mods_backup"))
-            self.assertEqual(created["uninstalled_seeds_dir"], os.path.join(chosen_root, "seeds-uninstalled"))
+            self.assertEqual(created["backup_dir"], os.path.join(chosen_root, "UserModLibrary"))
+            self.assertEqual(created["uninstalled_seeds_dir"], os.path.join(chosen_root, "ArchivedSeeds"))
             self.assertTrue(os.path.isdir(created["backup_dir"]))
             self.assertTrue(os.path.isdir(created["uninstalled_seeds_dir"]))
 
