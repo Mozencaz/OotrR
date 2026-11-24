@@ -9,7 +9,7 @@ has a native Linux build: the same folder, with ``bin/longshot`` (no '.exe').
 """
 from pathlib import Path
 
-KNOWN_EXES = ('hookshot.exe', 'longshot.exe')
+KNOWN_EXES = ('hookshot.exe', 'longshot.exe', 'impshot.exe')
 KNOWN_NAMES = tuple(Path(exe).stem for exe in KNOWN_EXES)   # native Linux builds: no '.exe'
 DEFAULT_OPTIONS = 'hookshot_options.ini'
 
