@@ -45,11 +45,13 @@ class NativeDialogsTests(unittest.TestCase):
 
     def test_kdialog_directory_and_cancel(self):
         fake_ok = mock.Mock(returncode=0, stdout="/tmp/my_mods\n")
+        fake_trailing = mock.Mock(returncode=0, stdout="/tmp/my_mods/\n")
         fake_cancel = mock.Mock(returncode=1, stdout="")
         with (
             mock.patch.object(native_dialogs, "_linux_backends", return_value=[("kdialog", "/usr/bin/kdialog")]),
-            mock.patch("subprocess.run", side_effect=[fake_ok, fake_cancel]) as run_mock,
+            mock.patch("subprocess.run", side_effect=[fake_ok, fake_trailing, fake_cancel]) as run_mock,
         ):
+            self.assertEqual(native_dialogs.ask_directory("Pick Mods", "/tmp"), "/tmp/my_mods")
             self.assertEqual(native_dialogs.ask_directory("Pick Mods", "/tmp"), "/tmp/my_mods")
             self.assertEqual(native_dialogs.ask_directory("Pick Mods", "/tmp"), "")
             cmd0 = run_mock.call_args_list[0].args[0]

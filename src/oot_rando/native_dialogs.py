@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -243,7 +244,7 @@ def ask_directory(
             ]
         res = _run_picker_cmd(cmd)
         if res is not None:
-            return os.path.normpath(res) if res else ""
+            return posixpath.normpath(res) if res else ""
 
     if qt_parent is not None:
         from PySide6.QtWidgets import QFileDialog

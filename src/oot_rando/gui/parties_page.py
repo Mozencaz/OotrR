@@ -51,6 +51,8 @@ class PartiesPage:
         if enabled:
             if self.party_library is None:
                 self.open_party_library()
+            if hasattr(self, "_reconcile_longshot_installation"):
+                self._reconcile_longshot_installation()
             self.restore_party()
         else:
             # The installed seed stays where it is; it is simply no longer managed.
@@ -555,6 +557,9 @@ class PartiesPage:
             directory, installed = result
             previous = self.artifact_manifest
             self.use_artifact(directory)
+            midna_host = getattr(self, "_midna_host", None)
+            if midna_host is not None and midna_host.is_mounted:
+                midna_host.sync_from_randomizer(self.mods.get(), refresh_always=True)
             self.show_page('tracker')
             self.status.set('Seed generated and installed: ' + str(installed))
             warning = qol_seed_warning(Path(installed).parent)
