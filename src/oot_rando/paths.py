@@ -39,7 +39,11 @@ def resource(*parts):
 
 
 def open_in_file_manager(target, env=None):
-    """Open a folder or file in the OS file manager (Windows, Linux, macOS)."""
+    """Open a folder or file in the OS file manager (Windows, Linux, macOS).
+
+    On Linux, strips AppImage / PyInstaller / embedded-Qt environment overrides
+    when ``env`` is not explicitly supplied so ``xdg-open`` launches cleanly.
+    """
     import os
     import subprocess
     target_str = str(target)
@@ -48,4 +52,7 @@ def open_in_file_manager(target, env=None):
     elif sys.platform == "darwin":
         subprocess.Popen(["open", target_str], env=env)
     else:
+        if env is None:
+            from oot_rando.native_dialogs import _clean_native_env
+            env = _clean_native_env()
         subprocess.Popen(["xdg-open", target_str], env=env)

@@ -1,6 +1,6 @@
-from typing import Optional
 """Desktop application (Tkinter). Run with ``python -m oot_rando``."""
 import ctypes
+from typing import Optional
 import json
 import os
 from pathlib import Path
@@ -26,7 +26,7 @@ from oot_rando.patching.randomize_kokiri import POOL, TITLE
 from oot_rando.game.randomizer_categories import CATEGORIES
 from oot_rando.game.world_maps import SAFE_CATEGORIES
 from oot_rando.logic import rando_options
-from oot_rando.paths import data_dir, seeds_dir, state_dir
+from oot_rando.paths import data_dir, open_in_file_manager, seeds_dir, state_dir
 from oot_rando.gui import theme
 from oot_rando.gui.parties_page import PartiesPage
 from oot_rando import __version__ as APP_VERSION, updater
@@ -490,6 +490,7 @@ class Application(PartiesPage):
         self.page_changed()
 
     def _set_full_bleed_chrome(self, full_bleed: bool) -> None:
+        """Hide or restore outer Tk header/status chrome so the embedded Midna tab fills the viewport."""
         if full_bleed == self._chrome_hidden:
             return
         self._chrome_hidden = full_bleed
@@ -1652,7 +1653,7 @@ class Application(PartiesPage):
         self.status.set('Seed opened.')
 
     def _add_mod_manager_sidebar_action(self) -> None:
-        import tkinter as tk
+        """Register the Midna's Devotion entry in the Tkinter sidebar with a downscaled icon."""
         from oot_rando.midnas_devotion.launcher import resolve_asset
         if not hasattr(self.sidebar, 'add_action'):
             return
@@ -1663,12 +1664,14 @@ class Application(PartiesPage):
                 img = tk.PhotoImage(file=icon_p)
                 while img.width() > 20 or img.height() > 20:
                     img = img.subsample(2, 2)
+                # Hold a reference on self so Tk does not garbage-collect the PhotoImage.
                 self._midna_sidebar_icon = img
             except Exception:
                 img = None
         self.sidebar.add_action('midnas_devotion', "Midna's Devotion (Mods)", self.launch_mod_manager, icon_image=img)
 
     def _is_midna_tab_active(self) -> bool:
+        """Return True when the embedded Midna's Devotion notebook tab is currently selected."""
         try:
             current = self.tabs.select()
             frame = self.pages.get('midnas_devotion', (None,))[0]
@@ -1677,6 +1680,7 @@ class Application(PartiesPage):
             return False
 
     def _on_mods_dir_changed(self, *_args) -> None:
+        """Persist mods_dir edits and debounce syncing the new path into the embedded Midna tab."""
         self.write_app_state(mods_dir=self.mods.get())
         after_id = getattr(self, "_midna_path_sync_after", None)
         if after_id is not None:
@@ -1684,20 +1688,32 @@ class Application(PartiesPage):
                 self.root.after_cancel(after_id)
             except Exception:
                 pass
+        if getattr(self, "closed", False):
+            self._midna_path_sync_after = None
+            return
         try:
             self._midna_path_sync_after = self.root.after(300, self._flush_midna_path_sync)
         except Exception:
             self._midna_path_sync_after = None
 
     def _flush_midna_path_sync(self) -> None:
+        """Deliver the debounced mods_dir update to Midna once mounted."""
         self._midna_path_sync_after = None
+        if getattr(self, "closed", False):
+            return
         if self._midna_host is not None and self._midna_host.is_mounted:
             self._midna_host.sync_from_randomizer(self.mods.get())
 
     def _sync_midna_sidebar_theme(self, is_midna: Optional[bool] = None, forced_theme: str = "") -> None:
+        """Match the Tk sidebar and notebook chrome to Midna's active theme when its tab is visible."""
         if not hasattr(self.sidebar, 'set_midna_style'):
             return
         active_tab = self._is_midna_tab_active() if is_midna is None else bool(is_midna)
+        if not active_tab:
+            # Fast-path: never read Midna's AppConfig from disk while switching non-Midna tabs.
+            self.sidebar.set_midna_style(False)
+            self._apply_midna_chrome_style(False)
+            return
         theme_id = forced_theme.strip().lower()
         if not theme_id and self._midna_host is not None and getattr(self._midna_host, '_window', None) is not None:
             try:
@@ -1710,11 +1726,12 @@ class Application(PartiesPage):
                 theme_id = str(AppConfig().effective_ui_theme or "").strip().lower()
             except Exception:
                 theme_id = "mozencaz"
-        midna_dark = bool(active_tab and theme_id == "araragi")
+        midna_dark = bool(theme_id == "araragi")
         self.sidebar.set_midna_style(midna_dark)
         self._apply_midna_chrome_style(midna_dark)
 
     def _apply_midna_chrome_style(self, active: bool) -> None:
+        """Switch Tk root/notebook chrome between dark borderless Midna styling and default parchment."""
         if getattr(self, "_midna_chrome_active", None) == active:
             return
         self._midna_chrome_active = active
@@ -1752,6 +1769,7 @@ class Application(PartiesPage):
         self.root.update_idletasks()
 
     def _build_midna_embedded_tab(self) -> None:
+        """Create the Tkinter host frame and wire theme/fallback callbacks for ``EmbeddedMidnaHost``."""
         from oot_rando.midnas_devotion.ui.embedded_host import EmbeddedMidnaHost
         container = tk.Frame(self.midna_tab, background='#161a21', highlightthickness=0, bd=0)
         container.pack(fill='both', expand=True)
@@ -1770,9 +1788,11 @@ class Application(PartiesPage):
         )
 
     def launch_mod_manager(self) -> None:
+        """Switch the main notebook to the embedded Midna's Devotion tab."""
         self.show_page('midnas_devotion')
 
     def launch_mod_manager_external(self) -> None:
+        """Fallback launcher: open Midna's Devotion in a standalone process when embedding fails."""
         import subprocess
         import sys
         from oot_rando.paths import FROZEN
@@ -2506,6 +2526,13 @@ class Application(PartiesPage):
         if self.ap_client:
             self.ap_client.stop()
         self.save_extra_emulators()
+        after_id = getattr(self, "_midna_path_sync_after", None)
+        if after_id is not None:
+            try:
+                self.root.after_cancel(after_id)
+            except Exception:
+                pass
+            self._midna_path_sync_after = None
         if self._midna_host is not None:
             self._midna_host.destroy()
         self.closed = True

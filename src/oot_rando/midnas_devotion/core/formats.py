@@ -1,3 +1,9 @@
+"""Nintendo Switch binary format parsers, Zstd dictionary codecs, and N-way mod mergers.
+
+Supports Longshot's ``ZsDic.pack.zs`` dictionaries, SARC/BLARC archives, BNTX
+texture containers, BARS/AMTA audio tables, Havok cloth stripping for swapped
+NPC actors, and RESTBL size-table merging.
+"""
 from __future__ import annotations
 
 import io
@@ -15,7 +21,7 @@ BARS_EXTS = (".bars.zs", ".bars")
 
 
 class CodecBundle:
-    """Loads Longshot's ZsDic dictionaries once and provides raw/zs/pack codecs."""
+    """Loads Longshot's ``ZsDic`` dictionaries once and provides raw, ``zs``, and ``pack`` Zstd codecs."""
 
     def __init__(self, romfs_dir: str) -> None:
         self.dctx_raw = zstd.ZstdDecompressor()
@@ -40,10 +46,12 @@ class CodecBundle:
         ]
 
     def decompress_bytes(self, raw: bytes) -> Tuple[bytes, zstd.ZstdCompressor]:
+        """Decompress a Zstd buffer by probing raw, ``zs.zsdic``, and ``pack.zsdic`` dictionaries."""
         for dec, comp in self.codecs:
             try:
                 return dec.decompress(raw), comp
             except zstd.ZstdError:
+                # Some Switch Zstd frames omit content size in the header; stream_reader handles those.
                 try:
                     with dec.stream_reader(io.BytesIO(raw)) as reader:
                         return reader.read(), comp
@@ -52,6 +60,7 @@ class CodecBundle:
         raise RuntimeError("Could not decompress Zstd buffer with raw, zs, or pack dictionary")
 
     def detect_zstd(self, path: str) -> Tuple[bytes, zstd.ZstdCompressor]:
+        """Read and decompress a ``.zs`` file, returning ``(plain_bytes, matching_compressor)``."""
         with open(path, "rb") as f:
             raw = f.read()
         try:
@@ -60,11 +69,38 @@ class CodecBundle:
             raise RuntimeError(f"Could not decompress {path}") from exc
 
 
+def read_maybe_zstd(path: str, codecs: CodecBundle) -> Tuple[bytes, Optional[zstd.ZstdCompressor]]:
+    """Read a file that may be Zstd-compressed (``.zs``) or plain binary."""
+    if path.lower().endswith(".zs"):
+        return codecs.detect_zstd(path)
+    with open(path, "rb") as f:
+        return f.read(), None
+
+
+def write_maybe_zstd(
+    path: str,
+    raw: bytes,
+    cctx: Optional[zstd.ZstdCompressor],
+    codecs: CodecBundle,
+) -> None:
+    """Write ``raw`` to ``path``, compressing with Zstd whenever ``path`` ends in ``.zs``."""
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "wb") as f_out:
+        if path.lower().endswith(".zs"):
+            compressor = cctx or codecs.cctx_raw
+            f_out.write(compressor.compress(raw))
+        else:
+            f_out.write(raw)
+
+
 def patch_npc_cloth(pack_path: str, codecs: CodecBundle) -> bool:
+    """Strip Havok cloth simulation entries from a swapped NPC actor pack to prevent skeleton crashes."""
     if not os.path.exists(pack_path):
         return False
-    with open(pack_path, "rb") as f:
-        m_sarc = oead.Sarc(codecs.dctx_pack.decompress(f.read()))
+    raw_sarc, cctx = read_maybe_zstd(pack_path, codecs)
+    m_sarc = oead.Sarc(raw_sarc)
     writer = oead.SarcWriter.from_sarc(m_sarc)
     modified = False
 
@@ -74,6 +110,7 @@ def patch_npc_cloth(pack_path: str, codecs: CodecBundle) -> bool:
             ver = int.from_bytes(csp_raw[2:4], "little")
             csp_doc = byml.Byml(csp_raw).parse()
             csp_changed = False
+            # Note: "ClothAdvandecOption" is Nintendo's literal spelling inside the BGYML schema.
             for cloth_key in ("Cloth", "ClothAdvandecOption", "ClothList", "ClothReaction"):
                 if cloth_key in csp_doc and len(csp_doc[cloth_key]) > 0:
                     csp_doc[cloth_key] = []
@@ -89,12 +126,12 @@ def patch_npc_cloth(pack_path: str, codecs: CodecBundle) -> bool:
 
     if modified:
         _, sarc_bytes = writer.write()
-        with open(pack_path, "wb") as f_npc:
-            f_npc.write(codecs.cctx_pack.compress(bytes(sarc_bytes)))
+        write_maybe_zstd(pack_path, bytes(sarc_bytes), cctx, codecs)
     return modified
 
 
 def splice_non_overlapping_diffs(base_b: bytes, ui_b: bytes, rando_b: bytes) -> Tuple[bytes, int]:
+    """Splice byte spans changed in ``ui_b`` onto ``rando_b`` where surrounding 8-byte context still matches ``base_b``."""
     out = bytearray(rando_b)
     if len(base_b) != len(ui_b):
         return bytes(out), 0
@@ -120,9 +157,10 @@ def splice_non_overlapping_diffs(base_b: bytes, ui_b: bytes, rando_b: bytes) -> 
 
 
 def merge_blarc(base_p: str, ui_p: str, rando_p: str, out_p: str, codecs: CodecBundle) -> Tuple[int, int, int]:
-    base_raw, cctx = codecs.detect_zstd(base_p)
-    ui_raw, _ = codecs.detect_zstd(ui_p)
-    rando_raw, _ = codecs.detect_zstd(rando_p)
+    """3-way merge a single UI ``.blarc``/``.blarc.zs`` layout archive with randomizer edits."""
+    base_raw, cctx = read_maybe_zstd(base_p, codecs)
+    ui_raw, _ = read_maybe_zstd(ui_p, codecs)
+    rando_raw, _ = read_maybe_zstd(rando_p, codecs)
 
     base_map = {f.name: bytes(f.data) for f in oead.Sarc(base_raw).get_files()}
     ui_sarc = oead.Sarc(ui_raw)
@@ -145,23 +183,35 @@ def merge_blarc(base_p: str, ui_p: str, rando_p: str, out_p: str, codecs: CodecB
 
     _, out_sarc = writer.write()
     out_bytes = bytes(out_sarc)
-    os.makedirs(os.path.dirname(out_p), exist_ok=True)
-    with open(out_p, "wb") as f_out:
-        f_out.write(cctx.compress(out_bytes))
+    write_maybe_zstd(out_p, out_bytes, cctx, codecs)
     return len(out_bytes), max(len(ui_raw), len(rando_raw)), spliced_bytes
 
 
 def parse_bntx(data: bytes) -> Dict[str, Tuple[int, int, bytes]]:
+    """Parse a Nintendo Switch BNTX binary container into ``{tex_name: (data_offset, size, brti_header)}``."""
+    if len(data) < 0x30 or data[:4] != b"BNTX":
+        raise ValueError("Not a valid BNTX texture archive")
     cnt, ptrs_off = struct.unpack_from("<IQ", data, 0x24)
+    if ptrs_off + cnt * 8 > len(data):
+        raise ValueError(f"BNTX texture pointer table out of bounds (count={cnt}, off=0x{ptrs_off:x})")
+
     out: Dict[str, Tuple[int, int, bytes]] = {}
     for i in range(cnt):
         p = struct.unpack_from("<Q", data, ptrs_off + i * 8)[0]
+        if p + 0x78 > len(data):
+            raise ValueError(f"BNTX BRTI entry {i} out of bounds at 0x{p:x}")
         sz = struct.unpack_from("<I", data, p + 0x50)[0]
         noff = struct.unpack_from("<Q", data, p + 0x60)[0]
         poff = struct.unpack_from("<Q", data, p + 0x70)[0]
+        if noff + 2 > len(data) or poff + 8 > len(data):
+            raise ValueError(f"BNTX metadata pointers out of bounds for entry {i}")
         nlen = struct.unpack_from("<H", data, noff)[0]
+        if noff + 2 + nlen > len(data):
+            raise ValueError(f"BNTX texture name out of bounds for entry {i}")
         name = data[noff + 2 : noff + 2 + nlen].decode("utf-8", "replace")
         doff = struct.unpack_from("<Q", data, poff)[0]
+        if doff + sz > len(data):
+            raise ValueError(f"BNTX pixel data out of bounds for texture {name!r}")
         out[name] = (doff, sz, data[p : p + 0x54])
     return out
 
@@ -174,9 +224,10 @@ def merge_bntx(
     codecs: CodecBundle,
     prefer_rando_logo: bool = False,
 ) -> Tuple[int, List[str]]:
-    base_raw, cctx = codecs.detect_zstd(base_p)
-    ui_raw, _ = codecs.detect_zstd(ui_p)
-    rando_raw, _ = codecs.detect_zstd(rando_p)
+    """3-way merge a single UI ``.bntx``/``.bntx.zs`` texture archive with randomizer textures."""
+    base_raw, cctx = read_maybe_zstd(base_p, codecs)
+    ui_raw, _ = read_maybe_zstd(ui_p, codecs)
+    rando_raw, _ = read_maybe_zstd(rando_p, codecs)
 
     b_tex, u_tex, r_tex = parse_bntx(base_raw), parse_bntx(ui_raw), parse_bntx(rando_raw)
     out = bytearray(ui_raw)
@@ -197,9 +248,7 @@ def merge_bntx(
             patched.append(name)
 
     out_bytes = bytes(out)
-    os.makedirs(os.path.dirname(out_p), exist_ok=True)
-    with open(out_p, "wb") as f_out:
-        f_out.write(cctx.compress(out_bytes))
+    write_maybe_zstd(out_p, out_bytes, cctx, codecs)
     return len(out_bytes), patched
 
 
@@ -207,6 +256,8 @@ def merge_bntx(
 
 @dataclass
 class BarsEntry:
+    """Single CRC-indexed audio entry pairing an AMTA metadata block with its optional audio asset."""
+
     crc: int
     amta: bytes
     asset: Optional[bytes]  # None when asset_off == 0xFFFFFFFF
@@ -214,13 +265,15 @@ class BarsEntry:
 
 @dataclass
 class BarsArchive:
+    """Parsed representation of a little-endian Nintendo BARS audio table."""
+
     version: int
     bom: int
     entries: Dict[int, BarsEntry]
 
 
 def extract_amta_name(amta: bytes, crc: int) -> str:
-    """Extracts the trailing track name from an AMTA v4/v5 block, falling back to hex CRC."""
+    """Extract the trailing track name from an AMTA v4/v5 block, falling back to hex CRC."""
     m = re.search(rb"([A-Za-z][A-Za-z0-9_.\-]{2,})\x00+$", amta)
     if m:
         return m.group(1).decode("ascii", "replace")
@@ -228,6 +281,7 @@ def extract_amta_name(amta: bytes, crc: int) -> str:
 
 
 def parse_bars(data: bytes) -> BarsArchive:
+    """Parse a little-endian BARS audio archive into CRC-indexed AMTA and asset slices."""
     if len(data) < 0x10 or data[:4] != b"BARS":
         raise ValueError("Not a valid BARS archive")
     _magic, _fsize, bom, ver, count = struct.unpack_from("<4sIHHI", data, 0)
@@ -235,11 +289,17 @@ def parse_bars(data: bytes) -> BarsArchive:
         raise ValueError(f"Unsupported BARS byte order: 0x{bom:04x}")
 
     crc_off = 0x10
-    crcs = struct.unpack_from(f"<{count}I", data, crc_off)
     tbl_off = crc_off + count * 4
+    if tbl_off + count * 8 > len(data):
+        raise ValueError(f"BARS offset table out of bounds (count={count})")
+
+    crcs = struct.unpack_from(f"<{count}I", data, crc_off)
     pairs = [struct.unpack_from("<II", data, tbl_off + i * 8) for i in range(count)]
 
     valid_asset_offs = sorted({so for _, so in pairs if so != 0xFFFFFFFF})
+    if valid_asset_offs and valid_asset_offs[-1] > len(data):
+        raise ValueError(f"BARS asset offset 0x{valid_asset_offs[-1]:x} exceeds archive length {len(data)}")
+
     asset_bounds: Dict[int, int] = {}
     for idx, so in enumerate(valid_asset_offs):
         asset_bounds[so] = valid_asset_offs[idx + 1] if idx + 1 < len(valid_asset_offs) else len(data)
@@ -249,6 +309,8 @@ def parse_bars(data: bytes) -> BarsArchive:
         if amta_off + 12 > len(data) or data[amta_off : amta_off + 4] != b"AMTA":
             raise ValueError(f"Invalid AMTA block at 0x{amta_off:x} for CRC 0x{crc:08x}")
         amta_sz = struct.unpack_from("<I", data, amta_off + 8)[0]
+        if amta_sz < 12 or amta_off + amta_sz > len(data):
+            raise ValueError(f"Truncated AMTA block (size={amta_sz}) at 0x{amta_off:x} for CRC 0x{crc:08x}")
         amta_bytes = data[amta_off : amta_off + amta_sz]
         asset_bytes = None if asset_off == 0xFFFFFFFF else data[asset_off : asset_bounds[asset_off]]
         entries[crc] = BarsEntry(crc=crc, amta=amta_bytes, asset=asset_bytes)
@@ -257,7 +319,7 @@ def parse_bars(data: bytes) -> BarsArchive:
 
 
 def build_bars(archive: BarsArchive) -> bytes:
-    """Rebuilds a little-endian BARS archive with sorted CRCs, 4B AMTA alignment, and 64B asset alignment."""
+    """Rebuild a little-endian BARS archive with sorted CRCs, 4B AMTA alignment, and 64B asset alignment."""
     sorted_crcs = sorted(archive.entries.keys())
     count = len(sorted_crcs)
     header_size = 0x10 + count * 4 + count * 8
@@ -282,6 +344,7 @@ def build_bars(archive: BarsArchive) -> bytes:
         if asset is None:
             asset_offsets.append(0xFFFFFFFF)
         elif asset in asset_offset_cache:
+            # Deduplicate identical audio blobs to keep rebuilt archives compact.
             asset_offsets.append(asset_offset_cache[asset])
         else:
             _pad(0x40)
@@ -302,14 +365,12 @@ def build_bars(archive: BarsArchive) -> bytes:
 
 
 def read_bars_raw(path: str, codecs: CodecBundle) -> Tuple[bytes, Optional[zstd.ZstdCompressor]]:
-    if path.endswith(".zs"):
-        return codecs.detect_zstd(path)
-    with open(path, "rb") as f:
-        return f.read(), None
+    """Read a ``.bars`` or ``.bars.zs`` file, returning plain BARS bytes and optional compressor."""
+    return read_maybe_zstd(path, codecs)
 
 
 def bars_changed_entries(van_arc: BarsArchive, mod_arc: BarsArchive) -> Dict[int, str]:
-    """Returns {crc: track_name} for every entry modified or added in mod_arc vs. van_arc."""
+    """Return ``{crc: track_name}`` for every entry modified or added in ``mod_arc`` vs. ``van_arc``."""
     changed: Dict[int, str] = {}
     for crc, ment in mod_arc.entries.items():
         vent = van_arc.entries.get(crc)
@@ -322,9 +383,9 @@ def analyze_bars_compatibility(
     base_raw: bytes,
     mod_blobs: List[Tuple[str, bytes]],
 ) -> Tuple[bool, List[str], List[str]]:
-    """
-    Compares 2+ BARS blobs against vanilla base_raw.
-    Returns (is_cleanly_mergeable, merged_track_labels, conflicting_track_labels).
+    """Compare 2+ BARS blobs against vanilla ``base_raw``.
+
+    Returns ``(is_cleanly_mergeable, merged_track_labels, conflicting_track_labels)``.
     """
     van_arc = parse_bars(base_raw)
     crc_owners: Dict[int, List[str]] = {}
@@ -345,7 +406,7 @@ def analyze_bars_compatibility(
     for crc, owners in crc_owners.items():
         tname = crc_names[crc]
         if len(owners) > 1:
-            # Identical edits by two mods don't actually conflict
+            # Identical edits by two mods do not actually conflict.
             unique_payloads = set(crc_payloads[crc])
             if len(unique_payloads) > 1:
                 conflict_labels.append(f"{tname} ({' vs '.join(owners)})")
@@ -361,9 +422,9 @@ def merge_bars_files(
     out_p: str,
     codecs: CodecBundle,
 ) -> Tuple[int, int, List[str], List[str]]:
-    """
-    3-way merges multiple mods' BARS files against vanilla base_p.
-    Returns (merged_size, vanilla_size, applied_tracks, overwritten_conflicts).
+    """3-way merge multiple mods' BARS files against vanilla ``base_p``.
+
+    Returns ``(merged_size, vanilla_size, applied_tracks, overwritten_conflicts)``.
     """
     base_raw, cctx = read_bars_raw(base_p, codecs)
     van_arc = parse_bars(base_raw)
@@ -388,28 +449,26 @@ def merge_bars_files(
             applied_tracks.append(f"{tname} [{mod_name}]")
 
     merged_raw = build_bars(BarsArchive(version=van_arc.version, bom=van_arc.bom, entries=merged_entries))
-    os.makedirs(os.path.dirname(out_p), exist_ok=True)
-    with open(out_p, "wb") as f_out:
-        if out_p.endswith(".zs") and cctx is not None:
-            f_out.write(cctx.compress(merged_raw))
-        else:
-            f_out.write(merged_raw)
+    write_maybe_zstd(out_p, merged_raw, cctx, codecs)
 
     return len(merged_raw), len(base_raw), applied_tracks, conflicts
 
 
 def merge_restbl_from_mod(mod_romfs: str, t_src, t_dst, codecs: CodecBundle) -> int:
+    """Copy higher RESTBL allocation entries from ``t_src`` into ``t_dst`` for every asset shipped in ``mod_romfs``."""
     count = 0
     for root, _, files in os.walk(mod_romfs):
         for filename in files:
             full_path = os.path.join(root, filename)
-            rel_path = os.path.relpath(full_path, mod_romfs)
+            # RESTBL canonical keys always use forward slashes even on Windows.
+            rel_path = os.path.relpath(full_path, mod_romfs).replace("\\", "/")
             if "ResourceSizeTable" in rel_path or rel_path.startswith("Mals/"):
                 continue
 
             canon_paths = [rel_path[:-3] if rel_path.endswith(".zs") else rel_path]
-            if rel_path.endswith((".pack.zs", ".sarc.zs", ".blarc.zs")):
-                sarc_data, _ = codecs.detect_zstd(full_path)
+            low = rel_path.lower()
+            if low.endswith((".pack.zs", ".sarc.zs", ".blarc.zs", ".pack", ".sarc", ".blarc")):
+                sarc_data, _ = read_maybe_zstd(full_path, codecs)
                 canon_paths.extend(
                     f.name[:-3] if f.name.endswith(".zs") else f.name
                     for f in oead.Sarc(sarc_data).get_files()
@@ -432,25 +491,23 @@ def merge_blarc_layers(
     out_p: str,
     codecs: CodecBundle,
 ) -> Tuple[int, int, int]:
-    """Stacks 1+ UI .blarc.zs mods in load order and splices Randomizer changes on top."""
-    base_raw, cctx = codecs.detect_zstd(base_p)
+    """Stack 1+ UI ``.blarc``/``.blarc.zs`` mods in load order and splice Randomizer edits on top."""
+    base_raw, cctx = read_maybe_zstd(base_p, codecs)
     base_map = {f.name: bytes(f.data) for f in oead.Sarc(base_raw).get_files()}
 
     all_layers = [p for p in ui_paths if p and os.path.isfile(p)]
     if rando_p and os.path.isfile(rando_p):
         all_layers.append(rando_p)
     if not all_layers:
-        os.makedirs(os.path.dirname(out_p), exist_ok=True)
-        with open(out_p, "wb") as f_out:
-            f_out.write(cctx.compress(base_raw))
+        write_maybe_zstd(out_p, base_raw, cctx, codecs)
         return len(base_raw), len(base_raw), 0
 
-    cur_raw, _ = codecs.detect_zstd(all_layers[0])
+    cur_raw, _ = read_maybe_zstd(all_layers[0], codecs)
     max_in = max(len(base_raw), len(cur_raw))
     spliced_bytes = 0
 
     for next_p in all_layers[1:]:
-        next_raw, _ = codecs.detect_zstd(next_p)
+        next_raw, _ = read_maybe_zstd(next_p, codecs)
         max_in = max(max_in, len(next_raw))
         cur_sarc = oead.Sarc(cur_raw)
         cur_map = {f.name: bytes(f.data) for f in cur_sarc.get_files()}
@@ -472,9 +529,7 @@ def merge_blarc_layers(
         _, out_sarc = writer.write()
         cur_raw = bytes(out_sarc)
 
-    os.makedirs(os.path.dirname(out_p), exist_ok=True)
-    with open(out_p, "wb") as f_out:
-        f_out.write(cctx.compress(cur_raw))
+    write_maybe_zstd(out_p, cur_raw, cctx, codecs)
     return len(cur_raw), max_in, spliced_bytes
 
 
@@ -486,19 +541,17 @@ def merge_bntx_layers(
     codecs: CodecBundle,
     prefer_rando_logo: bool = False,
 ) -> Tuple[int, List[str]]:
-    """Stacks 1+ UI .bntx.zs texture archives in load order and applies Randomizer textures."""
-    base_raw, cctx = codecs.detect_zstd(base_p)
+    """Stack 1+ UI ``.bntx``/``.bntx.zs`` texture archives in load order and apply Randomizer textures."""
+    base_raw, cctx = read_maybe_zstd(base_p, codecs)
     b_tex = parse_bntx(base_raw)
 
     valid_ui = [p for p in ui_paths if p and os.path.isfile(p)]
     if not valid_ui:
-        src_raw = codecs.detect_zstd(rando_p)[0] if (rando_p and os.path.isfile(rando_p)) else base_raw
-        os.makedirs(os.path.dirname(out_p), exist_ok=True)
-        with open(out_p, "wb") as f_out:
-            f_out.write(cctx.compress(src_raw))
+        src_raw = read_maybe_zstd(rando_p, codecs)[0] if (rando_p and os.path.isfile(rando_p)) else base_raw
+        write_maybe_zstd(out_p, src_raw, cctx, codecs)
         return len(src_raw), []
 
-    first_raw, _ = codecs.detect_zstd(valid_ui[0])
+    first_raw, _ = read_maybe_zstd(valid_ui[0], codecs)
     out = bytearray(first_raw)
     out_tex = parse_bntx(first_raw)
     ui_modified: set[str] = set()
@@ -509,7 +562,7 @@ def merge_bntx_layers(
             ui_modified.add(name)
 
     for next_p in valid_ui[1:]:
-        n_raw, _ = codecs.detect_zstd(next_p)
+        n_raw, _ = read_maybe_zstd(next_p, codecs)
         n_tex = parse_bntx(n_raw)
         for name, (n_off, n_sz, n_hdr) in n_tex.items():
             n_px = n_raw[n_off : n_off + n_sz]
@@ -523,7 +576,7 @@ def merge_bntx_layers(
 
     patched: List[str] = []
     if rando_p and os.path.isfile(rando_p):
-        r_raw, _ = codecs.detect_zstd(rando_p)
+        r_raw, _ = read_maybe_zstd(rando_p, codecs)
         r_tex = parse_bntx(r_raw)
         for name, (r_off, r_sz, r_hdr) in r_tex.items():
             r_px = r_raw[r_off : r_off + r_sz]
@@ -538,7 +591,5 @@ def merge_bntx_layers(
                 patched.append(name)
 
     out_bytes = bytes(out)
-    os.makedirs(os.path.dirname(out_p), exist_ok=True)
-    with open(out_p, "wb") as f_out:
-        f_out.write(cctx.compress(out_bytes))
+    write_maybe_zstd(out_p, out_bytes, cctx, codecs)
     return len(out_bytes), patched

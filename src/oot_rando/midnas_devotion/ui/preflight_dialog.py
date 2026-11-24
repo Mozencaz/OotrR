@@ -1,3 +1,4 @@
+"""Interactive preflight archive checker and installer dialog for ``.zip``, ``.7z``, and ``.rar`` mods."""
 from __future__ import annotations
 
 import os
@@ -22,7 +23,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from oot_rando.midnas_devotion.core.config import AppConfig, StandaloneMod
+from oot_rando.midnas_devotion.core.config import MANAGED_MOD_NAMES, AppConfig, StandaloneMod
+from oot_rando.native_dialogs import ask_open_file
 from oot_rando.midnas_devotion.core.preflight import (
     SUPPORTED_ARCHIVE_EXTS,
     ArchiveHandle,
@@ -46,6 +48,7 @@ TECH_COLS = (COL_MOD_SZ, COL_VAN_SZ, COL_RESTBL, COL_MARGIN)
 
 
 def _extract_archive_paths(mime_data) -> List[str]:
+    """Extract supported local mod archive paths from a Qt drag-and-drop payload."""
     if not mime_data or not mime_data.hasUrls():
         return []
     paths: List[str] = []
@@ -58,21 +61,26 @@ def _extract_archive_paths(mime_data) -> List[str]:
 
 
 def _classify_row(status: str, plain: bool = False) -> Tuple[str, str, QColor, QColor]:
-    """Returns (severity, friendly_label, fg_color, bg_color)."""
+    """Map a raw preflight status code into ``(severity, friendly_label, fg_color, bg_color)``."""
     st = status or ""
     if plain:
         c_danger = (QColor("#b71c1c"), QColor("#fbe9e9"))
+        c_unsupported = (QColor("#5c2778"), QColor("#f3eaf8"))
         c_warn = (QColor("#8a5308"), QColor("#fdf3e3"))
         c_auto = (QColor("#1b5e8a"), QColor("#e7f2fa"))
         c_ok = (QColor("#1f5439"), QColor("#eaf4ed"))
     else:
         c_danger = (QColor("#ef9a9a"), QColor("#381414"))
+        c_unsupported = (QColor("#e1bee7"), QColor("#2e1340"))
         c_warn = (QColor("#ffcc80"), QColor("#33220d"))
         c_auto = (QColor("#81d4fa"), QColor("#102938"))
         c_ok = (QColor("#a5d6a7"), QColor("#122616"))
 
-    if st == "ZSTD_ERROR":
-        return ("danger", "✕ Unreadable .zs File", *c_danger)
+    if st == "EXEFS":
+        return ("danger", "✕ Unsupported Code Mod (exefs)", *c_unsupported)
+    if "DECOMPRESS_ERR" in st or st == "ZSTD_ERROR":
+        lbl = "✕ Overlap + Unreadable .zs" if "OVERLAP" in st else "✕ Unreadable .zs File"
+        return ("danger", lbl, *c_danger)
     if st == "RESTBL_111":
         return ("danger", "✕ Clobbers v1.1.1 RESTBL", *c_danger)
     if "OVER_RESTBL" in st or "SUB_OVER" in st:
@@ -97,6 +105,7 @@ def _classify_row(status: str, plain: bool = False) -> Tuple[str, str, QColor, Q
 
 
 def _pill_style(kind: str, plain: bool = False) -> str:
+    """Return themed CSS for a preflight traffic-light status pill."""
     if plain:
         palettes = {
             "ok": ("#eaf4ed", "#8ec29e", "#1f5439"),
@@ -120,10 +129,8 @@ def _pill_style(kind: str, plain: bool = False) -> str:
     )
 
 
-from oot_rando.native_dialogs import ask_open_file
-
-
 class PreflightDialog(QDialog):
+    """Dialog that inspects mod archives for conflicts/RESTBL issues before staging them."""
     def __init__(
         self,
         cfg: AppConfig,
@@ -266,11 +273,16 @@ class PreflightDialog(QDialog):
         btn_row.addWidget(self.counts_lbl, 1)
         self.install_btn = QPushButton("Add to Extra Mods")
         self.install_btn.setEnabled(False)
+        disabled_ss = (
+            "QPushButton:disabled { background: #e8e2d3; color: #9aa39a; border: 1px solid #d8d0be; }"
+            if self._plain
+            else "QPushButton:disabled { background: #3a3a3a; color: #888888; }"
+        )
         self.install_btn.setStyleSheet(
             "QPushButton { background: #2e7d32; color: #ffffff; font-weight: bold; "
             "padding: 6px 14px; border-radius: 4px; }"
             "QPushButton:hover { background: #388e3c; }"
-            "QPushButton:disabled { background: #3a3a3a; color: #888888; }"
+            + disabled_ss
         )
         self.install_btn.clicked.connect(self._install_mod)
         close_btn = QPushButton("Close")
@@ -332,22 +344,30 @@ class PreflightDialog(QDialog):
         if path:
             self.load_archive(path)
 
+    def _reset_results_state(self) -> None:
+        """Clear stale inspection results and disable actions when opening a new archive fails."""
+        self.current_report = None
+        self.adv_btn.setEnabled(False)
+        self.install_btn.setEnabled(False)
+        self.table.setRowCount(0)
+        self.counts_lbl.setText("")
+
     def load_archive(self, path: str) -> None:
+        """Open a mod archive, enumerate ``romfs/`` variants, and run standard preflight inspection."""
         if not path or not os.path.isfile(path):
             return
         self._close_archive()
+        self._reset_results_state()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             self.archive = ArchiveHandle(path)
             variants, _ = list_archive_variants(self.archive)
         except Exception as exc:
-            QApplication.restoreOverrideCursor()
             self._close_archive()
+            QApplication.restoreOverrideCursor()
             QMessageBox.critical(self, "Archive Open Failed", str(exc))
             return
-        finally:
-            if QApplication.overrideCursor() is not None:
-                QApplication.restoreOverrideCursor()
+        QApplication.restoreOverrideCursor()
 
         self.arc_edit.setText(path)
         self.variant_combo.blockSignals(True)
@@ -378,14 +398,13 @@ class PreflightDialog(QDialog):
             QApplication.restoreOverrideCursor()
             QMessageBox.critical(self, "Inspection Failed", str(exc))
             return
-        finally:
-            if QApplication.overrideCursor() is not None:
-                QApplication.restoreOverrideCursor()
+        QApplication.restoreOverrideCursor()
 
         self.current_report = report
         self._render_report(report)
 
     def _run_advanced(self) -> None:
+        """Run the deeper margin and packed-SARC subfile preflight pass on the active report."""
         if not self.archive or not self.current_report:
             return
         variant = self.variant_combo.currentData() or ""
@@ -396,9 +415,7 @@ class PreflightDialog(QDialog):
             QApplication.restoreOverrideCursor()
             QMessageBox.critical(self, "Deep Check Failed", str(exc))
             return
-        finally:
-            if QApplication.overrideCursor() is not None:
-                QApplication.restoreOverrideCursor()
+        QApplication.restoreOverrideCursor()
 
         self._render_report(self.current_report)
 
@@ -469,7 +486,11 @@ class PreflightDialog(QDialog):
         # 2. Update plain-English summary card
         has_hard_danger = bool(rstb_111_n or over_n or dec_err_n)
         if report.verdict == "UNSUPPORTED":
-            self._set_card_theme("#2a1436", "#8e24aa", "#e1bee7")
+            self._set_card_theme(
+                "#f3eaf8" if self._plain else "#2a1436",
+                "#b992d1" if self._plain else "#8e24aa",
+                "#5c2778" if self._plain else "#e1bee7",
+            )
             self.verdict_title.setText("✕ NOT SUPPORTED ON LONGSHOT")
             self.verdict_desc.setText(
                 "This archive contains Switch code-mod files (exefs/) that stock Longshot cannot load yet. Skip this one for now."
@@ -590,6 +611,13 @@ class PreflightDialog(QDialog):
                 return
 
         mod_name = sanitize_mod_name(self.name_edit.text())
+        if mod_name in MANAGED_MOD_NAMES or mod_name.startswith("OoT_Randomizer_"):
+            QMessageBox.warning(
+                self,
+                "Reserved Mod Name",
+                f"'{mod_name}' is a reserved system mod name. Please enter a different Mod Name.",
+            )
+            return
         variant = self.variant_combo.currentData() or ""
         try:
             dst = install_archive_variant(self.archive, variant, mod_name, self.cfg)

@@ -13,6 +13,7 @@ FilterSpec = Tuple[str, List[str]]
 
 
 def _is_bundled_path(entry: str, appdir: str, meipass: str) -> bool:
+    """Return True when a search-path entry points inside an AppImage or PyInstaller bundle."""
     if not entry:
         return False
     norm = os.path.normpath(entry)
@@ -24,12 +25,20 @@ def _is_bundled_path(entry: str, appdir: str, meipass: str) -> bool:
 
 
 def _clean_native_env() -> dict[str, str]:
-    "Strip AppImage / PyInstaller / PySide6 env overrides before calling host pickers."
+    """Strip AppImage, PyInstaller, and embedded-Qt overrides before spawning host tools.
+
+    Embedded Qt-in-Tk forces ``QT_QPA_PLATFORM=xcb`` (Linux) and
+    ``QT_ENABLE_HIGHDPI_SCALING=0`` (Windows) in-process; stripping those here
+    keeps external host pickers (kdialog/zenity) and ``xdg-open`` on the desktop
+    session defaults instead of inheriting bundled libraries or X11 overrides.
+    """
     env = dict(os.environ)
     appdir = os.path.normpath(env.get("APPDIR", "")) if env.get("APPDIR") else ""
     meipass = os.path.normpath(getattr(sys, "_MEIPASS", "") or "") if getattr(sys, "_MEIPASS", None) else ""
 
     for key in (
+        "QT_QPA_PLATFORM",
+        "QT_ENABLE_HIGHDPI_SCALING",
         "QT_PLUGIN_PATH",
         "QT_QPA_PLATFORM_PLUGIN_PATH",
         "QT_QPA_PLATFORMTHEME",
@@ -65,6 +74,7 @@ def _clean_native_env() -> dict[str, str]:
 
 
 def _linux_backends() -> List[Tuple[str, str]]:
+    """Return available Linux native picker binaries ordered for the active desktop environment."""
     if not sys.platform.startswith("linux"):
         return []
     if os.environ.get("OOT_RANDO_NO_NATIVE_DIALOGS") == "1":
@@ -118,6 +128,7 @@ def normalize_filters(
 
 
 def _kdialog_filter_arg(filters: List[FilterSpec]) -> str:
+    """Format normalized filters into kdialog newline-delimited filter syntax."""
     if not filters:
         return ""
     lines = []
@@ -130,6 +141,7 @@ def _kdialog_filter_arg(filters: List[FilterSpec]) -> str:
 
 
 def _zenity_filter_args(filters: List[FilterSpec]) -> List[str]:
+    """Format normalized filters into ``--file-filter`` CLI flags for zenity-compatible pickers."""
     if not filters:
         return []
     args = []
@@ -142,6 +154,7 @@ def _zenity_filter_args(filters: List[FilterSpec]) -> List[str]:
 
 
 def _resolve_start_dir(initialdir: str) -> str:
+    """Resolve an initial directory (or file parent) to an existing directory, falling back to ``~``."""
     if initialdir:
         expanded = os.path.abspath(os.path.expanduser(initialdir))
         if os.path.isdir(expanded):
@@ -172,6 +185,7 @@ def _run_picker_cmd(cmd: List[str]) -> Optional[str]:
 
 
 def _apply_default_ext(path: str, defaultextension: str) -> str:
+    """Append ``defaultextension`` when the chosen save path has no extension."""
     if not path or not defaultextension:
         return path
     ext = defaultextension if defaultextension.startswith(".") else f".{defaultextension}"
@@ -181,6 +195,7 @@ def _apply_default_ext(path: str, defaultextension: str) -> str:
 
 
 def _filters_to_qt(filters: List[FilterSpec], qt_filter: str) -> str:
+    """Convert normalized filters into a ``QFileDialog`` filter string."""
     if qt_filter:
         return qt_filter
     if not filters:
@@ -196,6 +211,7 @@ def _filters_to_tk(
     filters: List[FilterSpec],
     filetypes: Optional[Sequence[Tuple[str, str]]],
 ) -> Optional[List[Tuple[str, str]]]:
+    """Convert normalized filters into ``tkinter.filedialog`` ``filetypes`` tuples."""
     if filetypes:
         return list(filetypes)
     if not filters:
@@ -210,6 +226,7 @@ def ask_directory(
     qt_parent=None,
     tk_parent=None,
 ) -> str:
+    """Prompt for an existing directory using a native Linux picker, Qt, or Tk fallback."""
     start_dir = _resolve_start_dir(initialdir)
     for backend, exe in _linux_backends():
         if backend == "kdialog":
@@ -248,6 +265,7 @@ def ask_open_file(
     qt_parent=None,
     tk_parent=None,
 ) -> str:
+    """Prompt to open an existing file using a native Linux picker, Qt, or Tk fallback."""
     start_dir = _resolve_start_dir(initialdir)
     filters = normalize_filters(filetypes=filetypes, qt_filter=qt_filter)
     for backend, exe in _linux_backends():
@@ -295,6 +313,7 @@ def ask_save_file(
     qt_parent=None,
     tk_parent=None,
 ) -> str:
+    """Prompt for a save file path using a native Linux picker, Qt, or Tk fallback."""
     start_dir = _resolve_start_dir(initialdir)
     target = os.path.join(start_dir, initialfile) if initialfile else (start_dir.rstrip(os.sep) + os.sep)
     filters = normalize_filters(filetypes=filetypes, qt_filter=qt_filter)
@@ -343,6 +362,7 @@ def askdirectory(
     parent=None,
     **_kwargs,
 ) -> str:
+    """Drop-in replacement for ``tkinter.filedialog.askdirectory``."""
     return ask_directory(title=title, initialdir=initialdir, tk_parent=parent)
 
 
@@ -353,6 +373,7 @@ def askopenfilename(
     parent=None,
     **_kwargs,
 ) -> str:
+    """Drop-in replacement for ``tkinter.filedialog.askopenfilename``."""
     return ask_open_file(title=title, initialdir=initialdir, filetypes=filetypes, tk_parent=parent)
 
 
@@ -365,6 +386,7 @@ def asksaveasfilename(
     parent=None,
     **_kwargs,
 ) -> str:
+    """Drop-in replacement for ``tkinter.filedialog.asksaveasfilename``."""
     return ask_save_file(
         title=title,
         initialdir=initialdir,

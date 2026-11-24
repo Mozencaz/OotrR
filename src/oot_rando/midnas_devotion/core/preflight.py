@@ -1,9 +1,18 @@
+"""Mod archive inspection, RESTBL headroom preflight checks, and safe archive extraction.
+
+Supports ``.zip``, ``.7z``, and ``.rar`` mod packages across Linux, Windows, and macOS,
+normalizing ``RomFS/`` casing and checking loose files plus internal SARC subfiles
+against both the active merged RESTBL and vanilla RESTBL headroom.
+"""
 from __future__ import annotations
 
+import json
+import logging
 import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
@@ -12,15 +21,67 @@ from typing import Dict, List, Optional, Tuple
 import oead
 import restbl
 
-from oot_rando.midnas_devotion.core.config import AppConfig, RSTB_REL, StandaloneMod, clean_subprocess_env
-from oot_rando.midnas_devotion.core.formats import BARS_EXTS, CodecBundle, analyze_bars_compatibility, read_bars_raw
+from oot_rando.midnas_devotion.core.config import (
+    AppConfig,
+    RSTB_REL,
+    StandaloneMod,
+    _is_within_dir,
+    clean_subprocess_env,
+)
+from oot_rando.midnas_devotion.core.formats import (
+    BARS_EXTS,
+    CodecBundle,
+    analyze_bars_compatibility,
+    read_bars_raw,
+    read_maybe_zstd,
+)
+
+_LOG = logging.getLogger(__name__)
 
 SUPPORTED_ARCHIVE_EXTS = (".zip", ".7z", ".rar")
 SARC_EXTS = (".pack.zs", ".sarc.zs", ".blarc.zs", ".pack", ".sarc", ".blarc")
 
 
+def _remove_path(path: str) -> None:
+    """Remove a file, symlink, or directory safely."""
+    if os.path.islink(path) or os.path.isfile(path):
+        os.unlink(path)
+    elif os.path.isdir(path):
+        shutil.rmtree(path)
+
+
+def _find_extractor_tool(name: str, clean_path: Optional[str]) -> Optional[str]:
+    """Locate an external archive extractor on ``PATH`` or common Windows install locations."""
+    found = shutil.which(name, path=clean_path)
+    if found:
+        return found
+    if sys.platform == "win32":
+        prog_files = [
+            os.environ.get("ProgramFiles", r"C:\Program Files"),
+            os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+        ]
+        win_candidates = {
+            "7z": [os.path.join(pf, "7-Zip", "7z.exe") for pf in prog_files if pf],
+            "7zz": [os.path.join(pf, "7-Zip", "7zz.exe") for pf in prog_files if pf],
+            "unrar": [os.path.join(pf, "WinRAR", "UnRAR.exe") for pf in prog_files if pf],
+        }
+        for cand in win_candidates.get(name, ()):
+            if os.path.isfile(cand):
+                return cand
+    return None
+
+
+def _missing_extractor_hint(ext: str) -> str:
+    """Return an OS-appropriate installation hint when no ``.7z``/``.rar`` CLI extractor is found."""
+    if sys.platform == "win32":
+        return "Install 7-Zip (https://www.7-zip.org/ or: winget install 7zip.7zip)"
+    if sys.platform == "darwin":
+        return "brew install p7zip" if ext == ".7z" else "brew install p7zip unrar"
+    return "Install 7zip/p7zip (e.g. sudo pacman -S 7zip  or  sudo apt install p7zip-full)"
+
+
 class ArchiveHandle:
-    """Unified read-only interface for .zip, .7z, and .rar mod archives."""
+    """Unified read-only interface for ``.zip``, ``.7z``, and ``.rar`` mod archives."""
 
     def __init__(self, archive_path: str) -> None:
         self.path = archive_path
@@ -43,7 +104,7 @@ class ArchiveHandle:
             return
 
         if self.ext in (".7z", ".rar"):
-            self._tmpdir = tempfile.mkdtemp(prefix="ootmodman_arc_")
+            self._tmpdir = tempfile.mkdtemp(prefix="midna_arc_")
             try:
                 self._extract_external(self._tmpdir)
             except Exception:
@@ -59,35 +120,39 @@ class ArchiveHandle:
         raise RuntimeError(f"Unsupported archive format: {self.ext} (supported: .zip, .7z, .rar)")
 
     def _extract_external(self, dst_dir: str) -> None:
+        clean_env = clean_subprocess_env()
+        clean_path = clean_env.get("PATH")
         candidates: List[Tuple[str, List[str]]] = []
+
         if self.ext == ".7z":
             for tool in ("7z", "7zz"):
-                if shutil.which(tool):
-                    candidates.append((tool, [tool, "x", "-y", f"-o{dst_dir}", self.path]))
-            if shutil.which("bsdtar"):
-                candidates.append(("bsdtar", ["bsdtar", "-xf", self.path, "-C", dst_dir]))
+                exe = _find_extractor_tool(tool, clean_path)
+                if exe:
+                    candidates.append((tool, [exe, "x", "-y", f"-o{dst_dir}", self.path]))
+            bsdtar = _find_extractor_tool("bsdtar", clean_path)
+            if bsdtar:
+                candidates.append(("bsdtar", [bsdtar, "-xf", self.path, "-C", dst_dir]))
         elif self.ext == ".rar":
-            if shutil.which("unrar"):
-                candidates.append(("unrar", ["unrar", "x", "-y", "-o+", self.path, dst_dir + os.sep]))
-            if shutil.which("bsdtar"):
-                candidates.append(("bsdtar", ["bsdtar", "-xf", self.path, "-C", dst_dir]))
+            unrar = _find_extractor_tool("unrar", clean_path)
+            if unrar:
+                candidates.append(("unrar", [unrar, "x", "-y", "-o+", self.path, dst_dir + os.sep]))
+            bsdtar = _find_extractor_tool("bsdtar", clean_path)
+            if bsdtar:
+                candidates.append(("bsdtar", [bsdtar, "-xf", self.path, "-C", dst_dir]))
             for tool in ("7z", "7zz"):
-                if shutil.which(tool):
-                    candidates.append((tool, [tool, "x", "-y", f"-o{dst_dir}", self.path]))
+                exe = _find_extractor_tool(tool, clean_path)
+                if exe:
+                    candidates.append((tool, [exe, "x", "-y", f"-o{dst_dir}", self.path]))
 
         if not candidates:
-            hint = "sudo pacman -S 7zip" if self.ext == ".7z" else "sudo pacman -S unrar 7zip"
-            raise RuntimeError(f"No extractor found for {self.ext} archives. Install one with:\n{hint}")
+            hint = _missing_extractor_hint(self.ext)
+            raise RuntimeError(f"No extractor found for {self.ext} archives.\n{hint}")
 
         errors: List[str] = []
         for tool_name, cmd in candidates:
             for entry in os.listdir(dst_dir):
-                p = os.path.join(dst_dir, entry)
-                if os.path.isdir(p):
-                    shutil.rmtree(p)
-                else:
-                    os.remove(p)
-            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=clean_subprocess_env())
+                _remove_path(os.path.join(dst_dir, entry))
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=clean_env)
             if proc.returncode == 0:
                 return
             err_msg = (proc.stderr or proc.stdout).strip().splitlines()[-1:] or ["unknown error"]
@@ -96,17 +161,20 @@ class ArchiveHandle:
         raise RuntimeError(f"Failed to extract {os.path.basename(self.path)}:\n" + "\n".join(errors))
 
     def list_files(self) -> List[str]:
+        """Return sorted POSIX ``/``-delimited file paths inside the archive."""
         if self._zf is not None:
             return sorted(self._zip_map.keys())
         return sorted(self._disk_map.keys())
 
     def read_bytes(self, norm_path: str) -> bytes:
+        """Read the raw bytes of a normalized entry path from the archive."""
         if self._zf is not None:
             return self._zf.read(self._zip_map[norm_path])
         with open(self._disk_map[norm_path], "rb") as f:
             return f.read()
 
     def close(self) -> None:
+        """Close any open archive handle and remove temporary extraction directories."""
         if self._zf is not None:
             try:
                 self._zf.close()
@@ -125,6 +193,8 @@ class ArchiveHandle:
 
 @dataclass
 class FileCheckRow:
+    """Per-file (or SARC subfile) preflight audit result."""
+
     status: str  # OK | OVERLAP | OVER_RESTBL | RESTBL_111 | RESTBL_OLD | DECOMPRESS_ERR | EXEFS | TIGHT_MARGIN | SUB_* | stacked
     rel_path: str
     mod_size: int
@@ -138,6 +208,8 @@ class FileCheckRow:
 
 @dataclass
 class PreflightReport:
+    """Aggregated compatibility verdict, warnings, and per-file rows for an inspected archive variant."""
+
     archive_path: str
     variant_prefix: str
     verdict: str  # "DROP_IN_SAFE" | "NEEDS_ATTENTION" | "UNSUPPORTED"
@@ -149,7 +221,7 @@ class PreflightReport:
 
 
 def list_archive_variants(archive: ArchiveHandle) -> Tuple[List[str], List[str]]:
-    """Returns (variant_prefixes, exefs_entries). Each variant prefix ends before 'romfs/'."""
+    """Return ``(variant_prefixes, exefs_entries)``. Each variant prefix ends before ``romfs/``."""
     variants = set()
     exefs_hits: List[str] = []
     for name in archive.list_files():
@@ -164,6 +236,7 @@ def list_archive_variants(archive: ArchiveHandle) -> Tuple[List[str], List[str]]
 
 
 def _load_active_restbl(cfg: AppConfig, codecs: CodecBundle):
+    """Load the highest-priority active ``ResourceSizeTable`` (Merged -> Live Merged -> Vanilla)."""
     candidates = []
     if cfg.target_mods_dir:
         candidates.append(os.path.join(cfg.target_mods_dir, "Merged_Zelda_Rando", RSTB_REL))
@@ -174,20 +247,21 @@ def _load_active_restbl(cfg: AppConfig, codecs: CodecBundle):
     rstb_path = next((p for p in candidates if os.path.exists(p)), None)
     if not rstb_path:
         return None
-    with open(rstb_path, "rb") as f:
-        return restbl.ResourceSizeTable.from_binary(codecs.dctx_raw.decompress(f.read()))
+    raw, _ = read_maybe_zstd(rstb_path, codecs)
+    return restbl.ResourceSizeTable.from_binary(raw)
 
 
 def _load_vanilla_restbl(cfg: AppConfig, codecs: CodecBundle):
+    """Load the base game's vanilla ``ResourceSizeTable`` for baseline margin comparisons."""
     van_rstb = os.path.join(cfg.romfs_dir, RSTB_REL[len("romfs") + 1 :])
     if not os.path.exists(van_rstb):
         return None
-    with open(van_rstb, "rb") as f:
-        return restbl.ResourceSizeTable.from_binary(codecs.dctx_raw.decompress(f.read()))
+    raw, _ = read_maybe_zstd(van_rstb, codecs)
+    return restbl.ResourceSizeTable.from_binary(raw)
 
 
 def _is_tight_margin(mod_sz: int, van_sz: int, margin_mod: Optional[int], margin_van: Optional[int]) -> bool:
-    """Flags headroom tighter than vanilla when a file grows, without false-positiving exact-size swaps."""
+    """Flag headroom tighter than vanilla when a file grows, without false-positiving exact-size swaps."""
     if margin_mod is None or margin_mod <= 0:
         return False
     if van_sz > 0 and mod_sz <= van_sz:
@@ -221,7 +295,7 @@ def inspect_archive(
 
     if not cfg.is_configured:
         raise RuntimeError("Base game romfs/ folder is not configured yet. Click 'Configure Folders' first.")
-    codecs = CodecBundle(cfg.romfs_dir)
+    codecs = cfg.get_codecs() or CodecBundle(cfg.romfs_dir)
     t_active = _load_active_restbl(cfg, codecs)
 
     existing_owners: Dict[str, List[str]] = {}
@@ -233,23 +307,30 @@ def inspect_archive(
         merged_cands.append(os.path.join(cfg.live_mods_dir, "Merged_Zelda_Rando"))
     merged_dir = next((d for d in merged_cands if os.path.isdir(os.path.join(d, "romfs"))), "")
     if merged_dir:
-        import json as _json
         auto_marker_p = os.path.join(merged_dir, ".ootmodman_merged_bars.json")
-        auto_marked = set()
+        auto_marked: set[str] = set()
         if os.path.isfile(auto_marker_p):
             try:
-                auto_marked = set(_json.load(open(auto_marker_p, "r", encoding="utf-8")))
+                with open(auto_marker_p, "r", encoding="utf-8") as mf:
+                    loaded = json.load(mf)
+                if isinstance(loaded, list):
+                    auto_marked = {str(p).replace("\\", "/") for p in loaded}
             except Exception:
+                _LOG.debug("Could not parse %s", auto_marker_p, exc_info=True)
                 auto_marked = set()
         for rel in cfg._walk_romfs_rel(merged_dir):
-            if rel in auto_marked:
+            rel_norm = rel.replace("\\", "/")
+            if rel_norm in auto_marked:
                 continue
-            existing_owners.setdefault(rel, []).append("Merged_Zelda_Rando")
-            existing_paths.setdefault(rel, []).append(("Merged_Zelda_Rando", os.path.join(merged_dir, "romfs", rel)))
+            existing_owners.setdefault(rel_norm, []).append("Merged_Zelda_Rando")
+            existing_paths.setdefault(rel_norm, []).append(
+                ("Merged_Zelda_Rando", os.path.join(merged_dir, "romfs", *rel_norm.split("/")))
+            )
     for mod in enabled_standalone:
         for rel in mod.rel_files:
-            existing_owners.setdefault(rel, []).append(mod.name)
-            existing_paths.setdefault(rel, []).append((mod.name, cfg.resolve_mod_file_path(mod, rel)))
+            rel_norm = rel.replace("\\", "/")
+            existing_owners.setdefault(rel_norm, []).append(mod.name)
+            existing_paths.setdefault(rel_norm, []).append((mod.name, cfg.resolve_mod_file_path(mod, rel_norm)))
 
     romfs_prefix = f"{variant_prefix}/romfs/" if variant_prefix else "romfs/"
     has_rstb_111 = False
@@ -267,6 +348,7 @@ def inspect_archive(
 
         raw_bytes = archive.read_bytes(norm)
         decompress_err = False
+        dec_bytes = raw_bytes
         if rel.endswith(".zs"):
             try:
                 dec_bytes, _ = codecs.decompress_bytes(raw_bytes)
@@ -279,7 +361,7 @@ def inspect_archive(
             msz = len(raw_bytes)
             canon_key = rel
 
-        van_p = os.path.join(cfg.romfs_dir, rel)
+        van_p = os.path.join(cfg.romfs_dir, *rel.split("/"))
         vsz = 0
         if os.path.isfile(van_p):
             if van_p.endswith(".zs"):
@@ -383,18 +465,13 @@ def run_advanced_checks(
     variant_prefix: str,
     report: PreflightReport,
 ) -> PreflightReport:
-    """
-    Separate deep preflight pass:
-      1. Compares mod vs. vanilla RESTBL headroom to catch tight margins (including overlapping files).
-      2. Cracks open .pack/.sarc/.blarc archives and checks internal subfiles against RESTBL.
-      3. Audits any bundled v1.1.1 ResourceSizeTable inside the archive for under-allocated entries.
-    """
+    """Deep preflight pass checking tight margins, internal SARC subfiles, and bundled v1.1.1 RESTBLs."""
     if report.advanced_ran:
         return report
 
     if not cfg.is_configured:
         raise RuntimeError("Base game romfs/ folder is not configured yet. Click 'Configure Folders' first.")
-    codecs = CodecBundle(cfg.romfs_dir)
+    codecs = cfg.get_codecs() or CodecBundle(cfg.romfs_dir)
     t_active = _load_active_restbl(cfg, codecs)
     t_van = _load_vanilla_restbl(cfg, codecs)
     romfs_prefix = f"{variant_prefix}/romfs/" if variant_prefix else "romfs/"
@@ -415,6 +492,7 @@ def run_advanced_checks(
                 codecs.decompress_bytes(archive.read_bytes(bundled_rstb_entry))[0]
             )
         except Exception:
+            _LOG.debug("Could not parse bundled RESTBL %s", bundled_rstb_entry, exc_info=True)
             t_bundled = None
 
     tight_loose = 0
@@ -432,7 +510,7 @@ def run_advanced_checks(
         row.margin_van = (van_rsz - row.van_size) if (van_rsz is not None and row.van_size > 0) else None
         row.margin_mod = (row.restbl_size - row.mod_size) if row.restbl_size is not None else None
 
-        # 1. Loose file tight-margin check (also stacks onto OVERLAP rows)
+        # 1. Loose file tight-margin check (also stacks onto OVERLAP rows).
         if "OVER_RESTBL" not in row.status and _is_tight_margin(row.mod_size, row.van_size, row.margin_mod, row.margin_van):
             row.status = "TIGHT_MARGIN" if row.status == "OK" else f"{row.status}+TIGHT"
             tight_loose += 1
@@ -444,7 +522,7 @@ def run_advanced_checks(
                 if b_margin <= 0 or _is_tight_margin(row.mod_size, row.van_size, b_margin, row.margin_van):
                     bundled_tight += 1
 
-        # 2. Deep SARC inspection for .pack / .sarc / .blarc containers
+        # 2. Deep SARC inspection for .pack / .sarc / .blarc containers.
         if row.rel_path.endswith(SARC_EXTS) and row.rel_path in archive_rel_map:
             try:
                 raw_arc = archive.read_bytes(archive_rel_map[row.rel_path])
@@ -454,27 +532,24 @@ def run_advanced_checks(
                     sarc_bytes = raw_arc
                 mod_sarc = oead.Sarc(sarc_bytes)
             except Exception:
+                _LOG.debug("Could not inspect SARC %s", row.rel_path, exc_info=True)
                 continue
 
             van_sub_sizes: Dict[str, int] = {}
-            van_arc_p = os.path.join(cfg.romfs_dir, row.rel_path)
+            van_arc_p = os.path.join(cfg.romfs_dir, *row.rel_path.split("/"))
             if os.path.isfile(van_arc_p):
                 try:
-                    if van_arc_p.endswith(".zs"):
-                        van_sarc_bytes, _ = codecs.detect_zstd(van_arc_p)
-                    else:
-                        with open(van_arc_p, "rb") as f:
-                            van_sarc_bytes = f.read()
+                    van_sarc_bytes, _ = read_maybe_zstd(van_arc_p, codecs)
                     for vf in oead.Sarc(van_sarc_bytes).get_files():
                         vdata = bytes(vf.data)
                         if vf.name.endswith(".zs"):
                             try:
                                 vdata, _ = codecs.decompress_bytes(vdata)
                             except Exception:
-                                pass
+                                _LOG.debug("Could not decompress vanilla subfile %s", vf.name, exc_info=True)
                         van_sub_sizes[vf.name] = len(vdata)
                 except Exception:
-                    pass
+                    _LOG.debug("Could not read vanilla SARC %s", van_arc_p, exc_info=True)
 
             for entry in mod_sarc.get_files():
                 report.subfiles_scanned += 1
@@ -483,7 +558,7 @@ def run_advanced_checks(
                     try:
                         mdata, _ = codecs.decompress_bytes(mdata)
                     except Exception:
-                        pass
+                        _LOG.debug("Could not decompress mod subfile %s", entry.name, exc_info=True)
                     sub_key = entry.name[:-3]
                 else:
                     sub_key = entry.name
@@ -546,37 +621,11 @@ def run_advanced_checks(
 
 
 def sanitize_mod_name(raw_name: str) -> str:
+    """Sanitize an archive-derived mod name into a safe folder name (defaulting to ``Imported_Mod``)."""
     s = re.sub(r"\s+[-–—]\s+", "_", raw_name.strip())
     s = re.sub(r"[^A-Za-z0-9._-]+", "_", s)
     s = re.sub(r"_+", "_", s).strip("_.-")
     return s or "Imported_Mod"
-
-
-def install_archive_variant(
-    archive: ArchiveHandle,
-    variant_prefix: str,
-    mod_name: str,
-    cfg: AppConfig,
-) -> str:
-    safe_name = sanitize_mod_name(mod_name)
-    dst_root = os.path.join(cfg.staged_mods_dir, safe_name)
-    if os.path.exists(dst_root):
-        shutil.rmtree(dst_root)
-    os.makedirs(os.path.join(dst_root, "romfs"), exist_ok=True)
-
-    prefix_with_slash = f"{variant_prefix}/" if variant_prefix else ""
-    for norm in archive.list_files():
-        if prefix_with_slash and not norm.startswith(prefix_with_slash):
-            continue
-        rel_inside = norm[len(prefix_with_slash) :]
-        if not rel_inside or ".." in rel_inside.split("/"):
-            continue
-        if rel_inside.lower().startswith("romfs/") or "/" not in rel_inside:
-            target = os.path.join(dst_root, rel_inside)
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            with open(target, "wb") as f_out:
-                f_out.write(archive.read_bytes(norm))
-    return dst_root
 
 
 def install_archive_to_dir(
@@ -585,23 +634,49 @@ def install_archive_to_dir(
     mod_name: str,
     parent_dir: str,
 ) -> str:
-    """Extracts the chosen archive variant cleanly into parent_dir/<safe_name>/."""
+    """Extract the chosen archive variant cleanly into ``parent_dir/<safe_name>/``.
+
+    Normalizes any ``RomFS/`` casing to lowercase ``romfs/`` (preventing split folders
+    on case-sensitive Linux filesystems) and rejects archive path-traversal entries.
+    """
     safe_name = sanitize_mod_name(mod_name)
-    dst_root = os.path.join(parent_dir, safe_name)
-    if os.path.exists(dst_root):
-        shutil.rmtree(dst_root)
+    dst_root = os.path.abspath(os.path.join(parent_dir, safe_name))
+    _remove_path(dst_root)
     os.makedirs(os.path.join(dst_root, "romfs"), exist_ok=True)
 
     prefix_with_slash = f"{variant_prefix}/" if variant_prefix else ""
+    prefix_low = prefix_with_slash.lower()
+
     for norm in archive.list_files():
-        if prefix_with_slash and not norm.startswith(prefix_with_slash):
+        if prefix_low and not norm.lower().startswith(prefix_low):
             continue
         rel_inside = norm[len(prefix_with_slash) :]
-        if not rel_inside or ".." in rel_inside.split("/"):
+        if not rel_inside:
             continue
-        if rel_inside.lower().startswith("romfs/") or "/" not in rel_inside:
-            target = os.path.join(dst_root, rel_inside)
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            with open(target, "wb") as f_out:
-                f_out.write(archive.read_bytes(norm))
+        parts = [p for p in rel_inside.split("/") if p]
+        if not parts or any(p in (".", "..") or ":" in p for p in parts):
+            continue
+
+        # Normalize RomFS/ROMFS top-level folder casing to lowercase romfs/ on Linux.
+        if parts[0].lower() == "romfs" and len(parts) > 1:
+            parts[0] = "romfs"
+        elif len(parts) > 1:
+            continue
+
+        target = os.path.abspath(os.path.join(dst_root, *parts))
+        if not _is_within_dir(dst_root, target):
+            continue
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "wb") as f_out:
+            f_out.write(archive.read_bytes(norm))
     return dst_root
+
+
+def install_archive_variant(
+    archive: ArchiveHandle,
+    variant_prefix: str,
+    mod_name: str,
+    cfg: AppConfig,
+) -> str:
+    """Extract the chosen archive variant into ``cfg.staged_mods_dir/<safe_name>/``."""
+    return install_archive_to_dir(archive, variant_prefix, mod_name, cfg.staged_mods_dir)

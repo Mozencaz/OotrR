@@ -1,3 +1,4 @@
+"""Folder and executable path configuration dialog and missing-folder helpers for Midna's Devotion."""
 from __future__ import annotations
 
 import os
@@ -32,7 +33,8 @@ def find_missing_creatable_folders(paths: Dict[str, str]) -> List[Tuple[str, str
     missing: List[Tuple[str, str, str, str]] = []
     for key, label, default_name in CREATABLE_MIDNA_FOLDERS:
         cur = str(paths.get(key, "") or "").strip()
-        if not cur or not os.path.isdir(cur):
+        cur_exp = os.path.expanduser(cur) if cur else ""
+        if not cur_exp or not os.path.isdir(cur_exp):
             missing.append((key, label, default_name, cur))
     return missing
 
@@ -62,6 +64,7 @@ def create_missing_folders_in_dir(
 
 
 def suggest_base_dir(paths: Dict[str, str]) -> str:
+    """Choose the best existing parent folder to pre-populate the missing-folder picker."""
     for key in ("live_mods_dir", "romfs_dir", "backup_dir", "workspace_dir"):
         raw = str(paths.get(key, "") or "").strip()
         if not raw:
@@ -373,13 +376,13 @@ class SettingsDialog(QDialog):
                 b.setStyleSheet("border: none; font-weight: bold; color: #b71c1c;" if self._plain else "border: none; font-weight: bold; color: #e57373;")
             b.setToolTip(tip)
 
-        romfs = self.edits["romfs_dir"].text().strip()
+        romfs = os.path.expanduser(self.edits["romfs_dir"].text().strip())
         if romfs and os.path.isfile(os.path.join(romfs, "Pack", "ZsDic.pack.zs")):
             set_b("romfs_dir", True, tip="Valid romfs/ folder (ZsDic.pack.zs found).")
         else:
             set_b("romfs_dir", False, tip="Required: must contain Pack/ZsDic.pack.zs.")
 
-        live_m = self.edits["live_mods_dir"].text().strip()
+        live_m = os.path.expanduser(self.edits["live_mods_dir"].text().strip())
         if live_m and os.path.isdir(live_m):
             set_b("live_mods_dir", True, tip="Folder exists.")
         elif live_m:
@@ -387,16 +390,16 @@ class SettingsDialog(QDialog):
         else:
             set_b("live_mods_dir", False, warn=True, tip="Optional in Test Mode, required for Live Mode.")
 
-        bkp = self.edits["backup_dir"].text().strip()
+        bkp = os.path.expanduser(self.edits["backup_dir"].text().strip())
         set_b("backup_dir", bool(bkp and os.path.isdir(bkp)), warn=not bool(bkp), tip="Optional mod library / backups folder.")
 
-        seeds = self.edits["uninstalled_seeds_dir"].text().strip()
+        seeds = os.path.expanduser(self.edits["uninstalled_seeds_dir"].text().strip())
         set_b("uninstalled_seeds_dir", bool(seeds and os.path.isdir(seeds)), warn=not bool(seeds), tip="Optional extra seeds folder.")
 
-        lbin = self.edits["longshot_binary"].text().strip()
+        lbin = os.path.expanduser(self.edits["longshot_binary"].text().strip())
         set_b("longshot_binary", bool(lbin and os.path.isfile(lbin)), warn=not bool(lbin), tip="Optional Longshot executable.")
 
-        ws = self.edits["workspace_dir"].text().strip()
+        ws = os.path.expanduser(self.edits["workspace_dir"].text().strip())
         set_b("workspace_dir", bool(ws and os.path.isdir(ws)), warn=bool(ws and not os.path.isdir(ws)), tip="Workspace folder for Test Mode & staged mods.")
         if hasattr(self, "create_missing_btn"):
             missing = find_missing_creatable_folders(self._current_paths_dict())
@@ -406,8 +409,11 @@ class SettingsDialog(QDialog):
             )
 
     def _save(self) -> None:
-        romfs = self.edits["romfs_dir"].text().strip()
-        ws = self.edits["workspace_dir"].text().strip() or default_workspace_dir()
+        """Validate edited paths, optionally create missing directories, and persist settings."""
+        romfs_raw = self.edits["romfs_dir"].text().strip()
+        romfs = os.path.abspath(os.path.expanduser(romfs_raw)) if romfs_raw else ""
+        ws_raw = self.edits["workspace_dir"].text().strip()
+        ws = os.path.abspath(os.path.expanduser(ws_raw)) if ws_raw else default_workspace_dir()
 
         if not romfs or not os.path.isfile(os.path.join(romfs, "Pack", "ZsDic.pack.zs")):
             ans = QMessageBox.warning(
@@ -437,13 +443,21 @@ class SettingsDialog(QDialog):
                         self.edits[key].setText(path)
                 ws = paths_now["workspace_dir"] or ws
 
+        def _norm_opt(val: str) -> str:
+            s = val.strip()
+            return os.path.abspath(os.path.expanduser(s)) if s else ""
+
         self.cfg.romfs_dir = romfs
-        self.cfg.live_mods_dir = paths_now["live_mods_dir"]
-        self.cfg.backup_dir = paths_now["backup_dir"]
-        self.cfg.uninstalled_seeds_dir = paths_now["uninstalled_seeds_dir"]
-        self.cfg.longshot_binary = self.edits["longshot_binary"].text().strip()
+        self.cfg.live_mods_dir = _norm_opt(paths_now["live_mods_dir"])
+        self.cfg.backup_dir = _norm_opt(paths_now["backup_dir"])
+        self.cfg.uninstalled_seeds_dir = _norm_opt(paths_now["uninstalled_seeds_dir"])
+        self.cfg.longshot_binary = _norm_opt(self.edits["longshot_binary"].text())
         self.cfg.workspace_dir = ws
-        self.cfg.save_settings()
-        # Re-apply main Randomizer Setup priority for any paths managed there
-        self.cfg.sync_from_randomizer(persist=True)
+        try:
+            self.cfg.save_settings()
+            # Re-apply main Randomizer Setup priority for any paths managed there.
+            self.cfg.sync_from_randomizer(persist=True)
+        except OSError as exc:
+            QMessageBox.critical(self, "Could Not Save Settings", str(exc))
+            return
         self.accept()

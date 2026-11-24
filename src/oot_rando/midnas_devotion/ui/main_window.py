@@ -1,3 +1,9 @@
+"""Main PySide6 window for Midna's Devotion (standalone and embedded inside the OoT Randomizer).
+
+Provides the 4-step mod management workflow, dual-theme rendering (Mozencaz Light
+and Dark Araragi Midna), drag-and-drop archive preflighting, load-order management,
+and asynchronous mod-merge execution via ``BuildWorker``.
+"""
 from __future__ import annotations
 
 import os
@@ -5,11 +11,8 @@ import subprocess
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import QPoint, QThread, QTimer, Qt, Signal
+from PySide6.QtCore import QPoint, QSize, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import (
-    QColor,
-    QPainter,
-    QPixmap,
     QBrush,
     QColor,
     QDragEnterEvent,
@@ -18,19 +21,19 @@ from PySide6.QtGui import (
     QDropEvent,
     QFont,
     QIcon,
+    QPainter,
+    QPixmap,
 )
 from PySide6.QtWidgets import (
     QApplication,
-    QToolTip,
     QCheckBox,
     QComboBox,
     QDialog,
-    QFileDialog,
     QFrame,
-    QLineEdit,
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -43,18 +46,22 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QStackedWidget,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
 
 from oot_rando.midnas_devotion.core.config import (
+    MANAGED_MOD_NAMES,
     AppConfig,
     CoreModEntry,
     SeedInfo,
     StandaloneMod,
+    _norm_path_key,
     clean_subprocess_env,
     pretty_mod_name,
 )
+from oot_rando.paths import open_in_file_manager
 from oot_rando.midnas_devotion.core.merger import BuildOptions, run_build
 from oot_rando.midnas_devotion.core.preflight import (
     SUPPORTED_ARCHIVE_EXTS,
@@ -85,24 +92,29 @@ from oot_rando.midnas_devotion.ui.ui_theme import (
 
 
 def _find_asset(filename: str) -> Optional[str]:
+    """Resolve a bundled Midna UI asset file path, returning None if absent."""
     from oot_rando.midnas_devotion.launcher import resolve_asset
     resolved = resolve_asset(filename)
     return resolved if (resolved and os.path.isfile(resolved)) else None
 
 
 def _find_app_icon() -> Optional[str]:
+    """Locate the bundled application window icon (``icon.png``)."""
     return _find_asset("icon.png")
 
 
 class BackdropWidget(QWidget):
-    '''Central widget painting either plain parchment or a dimmed Midna backdrop.'''
+    """Central widget painting either plain parchment or a cached, dimmed Midna artwork backdrop."""
 
     def __init__(self, image_path: Optional[str], parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._pixmap = QPixmap(image_path) if image_path and os.path.isfile(image_path) else QPixmap()
+        self._scaled_cache: Optional[QPixmap] = None
+        self._scaled_size: QSize = QSize()
         self._plain_mode: bool = False
 
     def set_plain_mode(self, plain: bool) -> None:
+        """Switch between plain Mozencaz parchment and dimmed dark Midna artwork."""
         self._plain_mode = plain
         self.update()
 
@@ -114,12 +126,16 @@ class BackdropWidget(QWidget):
             super().paintEvent(event)
             return
         painter.fillRect(rect, QColor(16, 20, 26))
-        if not self._pixmap.isNull():
-            scaled = self._pixmap.scaled(
-                rect.size(),
-                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+        if not self._pixmap.isNull() and rect.width() > 0 and rect.height() > 0:
+            # Cache the smooth-scaled backdrop per viewport size to avoid rescaling on every hover repaint.
+            if self._scaled_cache is None or self._scaled_size != rect.size():
+                self._scaled_size = QSize(rect.size())
+                self._scaled_cache = self._pixmap.scaled(
+                    self._scaled_size,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            scaled = self._scaled_cache
             x = (rect.width() - scaled.width()) // 2
             y = (rect.height() - scaled.height()) // 2
             painter.drawPixmap(x, y, scaled)
@@ -128,6 +144,7 @@ class BackdropWidget(QWidget):
 
 
 def _extract_archive_paths(mime_data) -> List[str]:
+    """Extract supported local mod archive paths from a Qt drag-and-drop payload."""
     if not mime_data or not mime_data.hasUrls():
         return []
     paths: List[str] = []
@@ -247,6 +264,8 @@ class DropZoneFrame(QFrame):
 
 
 class BuildWorker(QThread):
+    """Background worker thread running ``core.merger.run_build`` without blocking the UI."""
+
     log_line = Signal(str)
     progress_val = Signal(int)
     finished_ok = Signal()
@@ -271,6 +290,7 @@ class BuildWorker(QThread):
 
 
 def _friendly_step_from_log(line: str) -> Optional[str]:
+    """Translate numbered ``run_build`` log lines into user-facing progress captions."""
     s = line.strip()
     if s.startswith("1."):
         return "Setting up playable character…"
@@ -294,6 +314,7 @@ def _friendly_step_from_log(line: str) -> Optional[str]:
 
 
 def _friendly_seed_label(seed: SeedInfo, is_newest: bool) -> str:
+    """Format a ``SeedInfo`` entry for the Step 1 dropdown with timestamp and newest badge."""
     ts = datetime.fromtimestamp(seed.mtime).strftime("%b %d, %H:%M")
     short_id = seed.name.replace("OoT_Randomizer_", "Seed ")
     prefix = "★ Newest · " if is_newest else ""
@@ -301,6 +322,7 @@ def _friendly_seed_label(seed: SeedInfo, is_newest: bool) -> str:
 
 
 def _make_step_card(step_num: int, title: str, subtitle: str) -> Tuple[QFrame, QVBoxLayout]:
+    """Create a numbered step card container with themeable badge, heading, divider, and body layout."""
     card = QFrame()
     card.setObjectName(f"stepCard{step_num}")
     card.setStyleSheet(
@@ -360,6 +382,8 @@ def _make_step_card(step_num: int, title: str, subtitle: str) -> Tuple[QFrame, Q
 
 
 class MainWindow(QMainWindow):
+    """Primary Midna's Devotion interface supporting both Mozencaz Light and Dark Araragi themes."""
+
     def __init__(self, cfg: AppConfig) -> None:
         super().__init__()
         self.cfg = cfg
@@ -368,6 +392,7 @@ class MainWindow(QMainWindow):
         self.char_mods: List[CoreModEntry] = []
         self.library_visual_mods: List[CoreModEntry] = []
         self.worker: Optional[BuildWorker] = None
+        self._pending_refresh: bool = False
         self._ui_ready: bool = False
         self._initial_restored: bool = False
         self._status_tone: str = "neutral"
@@ -892,9 +917,34 @@ class MainWindow(QMainWindow):
         self.midna_dancer.stop()
         self._view_stack.setCurrentWidget(self._main_page)
 
+    def _style_build_mode_pill(self, plain: bool) -> None:
+        """Style the build-progress mode pill for Sandbox or Live mode in the active theme."""
+        if not hasattr(self, "_build_mode_pill"):
+            return
+        if self.cfg.sandbox_mode:
+            self._build_mode_pill.setText("TEST MODE · Safe Preview")
+            self._build_mode_pill.setStyleSheet(
+                "font-weight: bold; font-size: 11px; padding: 3px 10px; border-radius: 10px; "
+                "background: #f8eecf; border: 1px solid #d5a62b; color: #7a520b;"
+                if plain
+                else "font-weight: bold; font-size: 11px; padding: 3px 10px; border-radius: 10px; "
+                "background: rgba(58, 36, 9, 185); border: 1px solid #ef6c00; color: #ffcc80;"
+            )
+        else:
+            self._build_mode_pill.setText("LIVE MODE · Applying to Game")
+            self._build_mode_pill.setStyleSheet(
+                "font-weight: bold; font-size: 11px; padding: 3px 10px; border-radius: 10px; "
+                "background: #e4efe7; border: 1px solid #2f7a55; color: #1f5c3e;"
+                if plain
+                else "font-weight: bold; font-size: 11px; padding: 3px 10px; border-radius: 10px; "
+                "background: rgba(20, 62, 38, 185); border: 1px solid #43a047; color: #a5d6a7;"
+            )
+
     def _style_build_page(self, plain: bool, compact: bool) -> None:
+        """Apply light or dark styling to the full-page build progress overlay."""
         if not hasattr(self, "_build_card"):
             return
+        self._style_build_mode_pill(plain)
         title_fs = "16px" if compact else "20px"
         step_fs = "11px" if compact else "13px"
         if plain:
@@ -1070,10 +1120,14 @@ class MainWindow(QMainWindow):
                     lay.setSpacing(0)
 
     def apply_ui_theme(self, theme_id: str, persist: bool = True, notify: bool = True) -> None:
+        """Apply Mozencaz Light or Dark Araragi Midna styling across the window, popups, and host callback."""
         chosen = THEME_MOZENCAZ if theme_id == THEME_MOZENCAZ else THEME_ARARAGI
         if persist:
             self.cfg.ui_theme = chosen
-            self.cfg.save_settings()
+            try:
+                self.cfg.save_settings()
+            except OSError:
+                pass
         plain = chosen == THEME_MOZENCAZ
         self._plain_ui = plain
         compact = getattr(self, "_compact_mode", False)
@@ -1235,9 +1289,8 @@ class MainWindow(QMainWindow):
 
         self._set_status_style(getattr(self, "_status_tone", "neutral"))
         if getattr(self, "_ui_ready", False):
+            # _update_mode_ui already refreshes action buttons and responsive labels.
             self._update_mode_ui()
-            self._update_mod_action_buttons()
-            self._refresh_responsive_labels()
             if getattr(self, "_initial_restored", False):
                 self._recolor_visual_library_items()
                 self._sync_character_list_row()
@@ -1303,7 +1356,8 @@ class MainWindow(QMainWindow):
         return "", False
 
     def _open_instructions(self) -> None:
-        MidnaInstructionsDialog(None).exec()
+        """Display the workflow instructions dialog using the currently active UI theme."""
+        MidnaInstructionsDialog(None, plain=self._is_plain_ui()).exec()
 
     def _open_ui_style_picker(self) -> None:
         dlg = UiExperienceDialog(
@@ -1350,8 +1404,12 @@ class MainWindow(QMainWindow):
             return
         for key, folder_path in created.items():
             setattr(self.cfg, key, folder_path)
-        self.cfg.save_settings()
-        self.cfg.sync_from_randomizer(persist=True)
+        try:
+            self.cfg.save_settings()
+            self.cfg.sync_from_randomizer(persist=True)
+        except OSError as exc:
+            QMessageBox.warning(self, "Could Not Save Settings", str(exc))
+            return
         self.refresh_all()
         self._set_status_style("ok")
         self.status_lbl.setText(f"✓  Created {len(created)} missing folder(s) for Midna's Devotion.")
@@ -1363,10 +1421,12 @@ class MainWindow(QMainWindow):
 
     # --- Step 1 Character & Seed Helpers ---
     def _selected_char_entry(self) -> Optional[CoreModEntry]:
+        """Return the ``CoreModEntry`` matching the active Step 1 character selection, or None."""
         path = self.char_combo.currentData()
         if not path:
             return None
-        return next((e for e in self.char_mods if e.path == path), None)
+        target_key = _norm_path_key(str(path))
+        return next((e for e in self.char_mods if _norm_path_key(e.path) == target_key), None)
 
     def _show_add_char_menu(self) -> None:
         if self.worker and self.worker.isRunning():
@@ -1406,7 +1466,11 @@ class MainWindow(QMainWindow):
         )
         if ans != QMessageBox.StandardButton.Yes:
             return
-        self.cfg.remove_core_mod(entry)
+        try:
+            self.cfg.remove_core_mod(entry)
+        except Exception as exc:
+            QMessageBox.warning(self, "Remove Failed", str(exc))
+            return
         self.char_combo.setCurrentIndex(0)
         self.refresh_all()
 
@@ -1480,8 +1544,9 @@ class MainWindow(QMainWindow):
 
     # --- Step 2 Browse & Add Mods Helpers ---
     def _refresh_visual_library_picker(self) -> None:
+        """Populate the Step 2 library picker with non-character mods from ``UserModLibrary``."""
         self.library_visual_mods = self.cfg.find_library_visual_mods()
-        in_list_paths = {os.path.abspath(m.source_path) for m in self.standalone_mods}
+        in_list_paths = {_norm_path_key(m.source_path) for m in self.standalone_mods}
 
         self.visual_lib_list.clear()
         if not self.library_visual_mods:
@@ -1493,7 +1558,7 @@ class MainWindow(QMainWindow):
             return
 
         for entry in self.library_visual_mods:
-            already = os.path.abspath(entry.path) in in_list_paths
+            already = _norm_path_key(entry.path) in in_list_paths
             label = f"✓  {pretty_mod_name(entry.name)}   (In Mod List)" if already else f"+  {pretty_mod_name(entry.name)}"
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, entry.path)
@@ -1506,28 +1571,30 @@ class MainWindow(QMainWindow):
         self._update_visual_picker_buttons()
 
     def _recolor_visual_library_items(self) -> None:
+        """Update foreground colors on Step 2 library items after switching themes."""
         plain = self._is_plain_ui()
-        in_list_paths = {os.path.abspath(m.source_path) for m in self.standalone_mods}
+        in_list_paths = {_norm_path_key(m.source_path) for m in self.standalone_mods}
         for i in range(self.visual_lib_list.count()):
             item = self.visual_lib_list.item(i)
             path = item.data(Qt.ItemDataRole.UserRole)
             if not path:
                 item.setForeground(QBrush(QColor("#6c766d" if plain else "#888888")))
                 continue
-            already = os.path.abspath(str(path)) in in_list_paths
+            already = _norm_path_key(str(path)) in in_list_paths
             if plain:
                 item.setForeground(QBrush(QColor("#2f7a55" if already else "#1f2a24")))
             else:
                 item.setForeground(QBrush(QColor("#81c784" if already else "#e3f2fd")))
 
     def _update_visual_picker_buttons(self) -> None:
+        """Enable or disable Step 2 action buttons based on selection and worker state."""
         if not self._ui_ready:
             return
         busy = bool(self.worker and self.worker.isRunning())
-        in_list_paths = {os.path.abspath(m.source_path) for m in self.standalone_mods}
+        in_list_paths = {_norm_path_key(m.source_path) for m in self.standalone_mods}
         can_add = any(
             it.data(Qt.ItemDataRole.UserRole)
-            and os.path.abspath(str(it.data(Qt.ItemDataRole.UserRole))) not in in_list_paths
+            and _norm_path_key(str(it.data(Qt.ItemDataRole.UserRole))) not in in_list_paths
             for it in self.visual_lib_list.selectedItems()
         )
         self.btn_add_lib_vis.setEnabled((not busy) and can_add)
@@ -1637,9 +1704,17 @@ class MainWindow(QMainWindow):
                 )
                 if not ok or not mod_name.strip():
                     return
+                safe_name = sanitize_mod_name(mod_name)
+                if safe_name in MANAGED_MOD_NAMES or safe_name.startswith("OoT_Randomizer_"):
+                    QMessageBox.warning(
+                        self,
+                        "Reserved Mod Name",
+                        f"'{safe_name}' is a reserved system mod name. Please pick a different name.",
+                    )
+                    return
 
                 QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-                dst = install_archive_to_dir(arc, chosen_variant, mod_name, target_parent_dir)
+                dst = install_archive_to_dir(arc, chosen_variant, safe_name, target_parent_dir)
         except Exception as exc:
             QMessageBox.critical(self, "Import Failed", str(exc))
             return
@@ -1670,13 +1745,14 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _select_combo_by_path(combo: QComboBox, target_path: Optional[str]) -> bool:
+        """Select the combo entry whose ``UserRole`` path matches ``target_path`` (case-safe on Windows)."""
         if target_path is None:
             combo.setCurrentIndex(0)
             return True
-        abs_t = os.path.abspath(target_path)
+        target_key = _norm_path_key(target_path)
         for i in range(combo.count()):
             d = combo.itemData(i)
-            if d and os.path.abspath(str(d)) == abs_t:
+            if d and _norm_path_key(str(d)) == target_key:
                 combo.setCurrentIndex(i)
                 return True
         return False
@@ -1787,11 +1863,15 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _open_selected_mod_folder(self) -> None:
+        """Open the selected mod's folder on disk using the OS file manager."""
         mod = self._selected_standalone_mod()
         if not mod:
             return
         if os.path.isdir(mod.source_path):
-            from oot_rando.paths import open_in_file_manager; open_in_file_manager(mod.source_path, env=clean_subprocess_env())
+            try:
+                open_in_file_manager(mod.source_path, env=clean_subprocess_env())
+            except OSError as exc:
+                QMessageBox.warning(self, "Could Not Open Folder", str(exc))
         else:
             QMessageBox.warning(self, "Folder Not Found", f"Folder no longer exists:\n{mod.source_path}")
             self.refresh_all()
@@ -1854,7 +1934,11 @@ class MainWindow(QMainWindow):
             )
             if ans != QMessageBox.StandardButton.Yes:
                 return
-            self.cfg.delete_standalone_mod(mod)
+            try:
+                self.cfg.delete_standalone_mod(mod)
+            except Exception as exc:
+                QMessageBox.critical(self, "Remove Failed", str(exc))
+                return
             self.refresh_all()
             self._set_status_style("warn")
             self.status_lbl.setText(f"Removed '{pretty_mod_name(mod.name)}' from the Mod List (files kept intact).")
@@ -2052,6 +2136,11 @@ class MainWindow(QMainWindow):
         self._update_overlap_panel()
 
     def refresh_all(self) -> None:
+        """Reload characters, seeds, library mods, and active list from disk (deferred if a build is running)."""
+        if self.worker and self.worker.isRunning():
+            self._pending_refresh = True
+            return
+        self._pending_refresh = False
         # 1. Refresh Playable Character dropdown
         prev_char = self.char_combo.currentData()
         self.char_mods = self.cfg.find_core_mods("character")
@@ -2117,7 +2206,7 @@ class MainWindow(QMainWindow):
             self.mod_list.blockSignals(False)
 
         self._refresh_visual_library_picker()
-        self._sync_character_list_row()
+        # _on_step1_changed syncs the pinned character row, action buttons, overlap panel, and summary.
         self._on_step1_changed()
         self._update_mode_ui()
         self.launch_btn.setEnabled(bool(self.cfg.longshot_binary and os.path.isfile(self.cfg.longshot_binary)))
@@ -2310,14 +2399,19 @@ class MainWindow(QMainWindow):
                 self._check_and_select_mods_in_list([dlg.installed_mod_name])
 
     def _open_target_dir(self) -> None:
+        """Create (if needed) and open the active Sandbox or Live mods directory in the file manager."""
         target = self.cfg.target_mods_dir
         if not target:
             QMessageBox.warning(self, "Folder Not Set", "Configure your folders first.")
             return
-        os.makedirs(target, exist_ok=True)
-        from oot_rando.paths import open_in_file_manager; open_in_file_manager(target, env=clean_subprocess_env())
+        try:
+            os.makedirs(target, exist_ok=True)
+            open_in_file_manager(target, env=clean_subprocess_env())
+        except OSError as exc:
+            QMessageBox.warning(self, "Could Not Open Folder", str(exc))
 
     def _launch_longshot(self) -> None:
+        """Spawn the configured Longshot executable with a sanitized subprocess environment."""
         binary = self.cfg.longshot_binary
         if not binary or not os.path.isfile(binary):
             QMessageBox.warning(self, "Longshot Not Set", "Set your Longshot executable in 'Configure Folders…'.")
@@ -2333,7 +2427,16 @@ class MainWindow(QMainWindow):
             )
             if res != QMessageBox.StandardButton.Yes:
                 return
-        subprocess.Popen([binary], cwd=self.cfg.launch_cwd, env=clean_subprocess_env())
+        try:
+            subprocess.Popen([binary], cwd=self.cfg.launch_cwd, env=clean_subprocess_env(), close_fds=True)
+        except OSError as exc:
+            QMessageBox.critical(
+                self,
+                "Launch Failed",
+                f"Could not start Longshot:\n{binary}\n\n{exc}",
+            )
+            return
+        self._set_status_style("ok")
         self.status_lbl.setText("▶  Launched Longshot!")
         self.log_view.appendPlainText(f"Launched: {binary}")
 
@@ -2358,14 +2461,17 @@ class MainWindow(QMainWindow):
             prefer_rando_logo=self.cb_prefer_rando_logo.isChecked(),
             enabled_standalone_names=enabled_names,
         )
-        self.cfg.save_settings(
-            {
-                "selected_char_path": opts.char_path,
-                "prefer_rando_logo": opts.prefer_rando_logo,
-                "enabled_standalone": enabled_names,
-                "mod_order": all_order,
-            }
-        )
+        try:
+            self.cfg.save_settings(
+                {
+                    "selected_char_path": opts.char_path,
+                    "prefer_rando_logo": opts.prefer_rando_logo,
+                    "enabled_standalone": enabled_names,
+                    "mod_order": all_order,
+                }
+            )
+        except OSError as exc:
+            QMessageBox.warning(self, "Could Not Save Settings", str(exc))
 
         self.log_view.clear()
         self._build_log_view.clear()
@@ -2375,24 +2481,6 @@ class MainWindow(QMainWindow):
         self._set_status_style("info")
         self.status_lbl.setText("Building your mod setup…")
         plain = self._is_plain_ui()
-        if self.cfg.sandbox_mode:
-            self._build_mode_pill.setText("TEST MODE · Safe Preview")
-            self._build_mode_pill.setStyleSheet(
-                "font-weight: bold; font-size: 11px; padding: 3px 10px; border-radius: 10px; "
-                "background: #f8eecf; border: 1px solid #d5a62b; color: #7a520b;"
-                if plain
-                else "font-weight: bold; font-size: 11px; padding: 3px 10px; border-radius: 10px; "
-                "background: rgba(58, 36, 9, 185); border: 1px solid #ef6c00; color: #ffcc80;"
-            )
-        else:
-            self._build_mode_pill.setText("LIVE MODE · Applying to Game")
-            self._build_mode_pill.setStyleSheet(
-                "font-weight: bold; font-size: 11px; padding: 3px 10px; border-radius: 10px; "
-                "background: #e4efe7; border: 1px solid #2f7a55; color: #1f5c3e;"
-                if plain
-                else "font-weight: bold; font-size: 11px; padding: 3px 10px; border-radius: 10px; "
-                "background: rgba(20, 62, 38, 185); border: 1px solid #43a047; color: #a5d6a7;"
-            )
         self._style_build_page(plain, getattr(self, "_compact_mode", False))
         self._build_title_lbl.setText("Weaving Your Mods Together…")
         self._build_step_lbl.setText("Preparing build…")
@@ -2400,18 +2488,21 @@ class MainWindow(QMainWindow):
         self.mode_btn.setEnabled(False)
         self.drop_zone.setEnabled(False)
 
-        self.worker = BuildWorker(self.cfg, opts)
-        self.worker.log_line.connect(self._on_log_line)
-        self.worker.progress_val.connect(self.progress.setValue)
-        self.worker.finished_ok.connect(self._on_build_ok)
-        self.worker.failed.connect(self._on_build_failed)
+        worker = BuildWorker(self.cfg, opts)
+        self.worker = worker
+        worker.log_line.connect(self._on_log_line)
+        worker.progress_val.connect(self.progress.setValue)
+        worker.finished_ok.connect(self._on_build_ok)
+        worker.failed.connect(self._on_build_failed)
+        worker.finished.connect(worker.deleteLater)
         self._view_stack.setCurrentWidget(self._build_page)
         self.midna_dancer.start()
-        self.worker.start()
+        worker.start()
         self._update_mod_action_buttons()
         self._update_visual_picker_buttons()
 
     def _on_log_line(self, line: str) -> None:
+        """Append a worker log line to both log views and update the friendly step caption."""
         self.log_view.appendPlainText(line)
         self._build_log_view.appendPlainText(line)
         friendly = _friendly_step_from_log(line)
@@ -2420,6 +2511,8 @@ class MainWindow(QMainWindow):
             self._build_step_lbl.setText(friendly)
 
     def _on_build_ok(self) -> None:
+        """Finalize UI state after ``BuildWorker`` succeeds and refresh discovered mods."""
+        self.worker = None
         self.midna_dancer.stop()
         self._view_stack.setCurrentWidget(self._main_page)
         self.build_btn.setEnabled(True)
@@ -2433,6 +2526,8 @@ class MainWindow(QMainWindow):
         self.refresh_all()
 
     def _on_build_failed(self, err: str) -> None:
+        """Surface build failure details on the build page with theme-accessible error contrast."""
+        self.worker = None
         self.midna_dancer.stop()
         self.build_btn.setEnabled(True)
         self.mode_btn.setEnabled(True)
@@ -2442,11 +2537,29 @@ class MainWindow(QMainWindow):
         self.log_view.appendPlainText(f"\nERROR: {err}")
         self._build_log_view.appendPlainText(f"\nERROR: {err}")
         self._build_title_lbl.setText("✕  Build Failed")
+        err_fg = "#b71c1c" if self._is_plain_ui() else "#ef9a9a"
         self._build_title_lbl.setStyleSheet(
-            "border: none; background: transparent; color: #e57373; font-size: 19px; font-weight: bold;"
+            f"border: none; background: transparent; color: {err_fg}; font-size: 19px; font-weight: bold;"
         )
         self._build_step_lbl.setText(err)
         self._build_log_toggle.setChecked(True)
         self._build_back_btn.setVisible(True)
-        self._update_mod_action_buttons()
-        self._update_visual_picker_buttons()
+        if self._pending_refresh:
+            self.refresh_all()
+        else:
+            self._update_mod_action_buttons()
+            self._update_visual_picker_buttons()
+
+    def closeEvent(self, event) -> None:
+        """Prevent closing mid-build (avoiding Qt QThread abort) and stop animations on clean exit."""
+        if self.worker is not None and self.worker.isRunning():
+            QMessageBox.information(
+                self,
+                "Build In Progress",
+                "Wait for Midna's Devotion to finish applying mods before closing.",
+            )
+            event.ignore()
+            return
+        if hasattr(self, "midna_dancer"):
+            self.midna_dancer.stop()
+        super().closeEvent(event)

@@ -452,10 +452,12 @@ class Sidebar(tk.Frame):
         mark.pack(side='left')
         names = tk.Frame(brand, background=c['sidebar'])
         names.pack(side='left', padx=(12, 0))
-        tk.Label(names, text='OoT Randomizer', font=fonts.brand, foreground='#f4eedc',
-                 background=c['sidebar']).pack(anchor='w')
-        tk.Label(names, text='Remake edition', font=fonts.small, foreground=c['sidebar_muted'],
-                 background=c['sidebar']).pack(anchor='w')
+        self._brand_title_lbl = tk.Label(names, text='OoT Randomizer', font=fonts.brand, foreground='#f4eedc',
+                                         background=c['sidebar'])
+        self._brand_title_lbl.pack(anchor='w')
+        self._brand_sub_lbl = tk.Label(names, text='Remake edition', font=fonts.small, foreground=c['sidebar_muted'],
+                                       background=c['sidebar'])
+        self._brand_sub_lbl.pack(anchor='w')
         self._menu_lbl = tk.Label(self, text='MENU', font=(fonts.label[0], 8), foreground=c['sidebar_muted'],
                                   background=c['sidebar'])
         self._menu_lbl.pack(anchor='w', padx=26, pady=(0, 6))
@@ -463,9 +465,9 @@ class Sidebar(tk.Frame):
         self._brand_frame = brand
         self._mark_canvas = mark
         self._names_frame = names
-        self._brand_title_lbl = names.winfo_children()[0]
-        self._brand_sub_lbl = names.winfo_children()[1]
         self._gaps = []
+        # Track highlighted sidebar action entries (e.g. Midna's Devotion) without hardcoding keys.
+        self._action_keys = set()
         self.footer = tk.Label(self, text=footer, font=fonts.small, foreground=c['sidebar_muted'],
                                background=c['sidebar'], justify='left', wraplength=170)
         self.footer.pack(side='bottom', anchor='w', padx=26, pady=20)
@@ -497,6 +499,7 @@ class Sidebar(tk.Frame):
         self._gaps.append(spacer)
 
     def add_action(self, key, text, command, icon_image=None):
+        """Add a prominent accented sidebar action button with an optional icon image."""
         p = self._palette()
         row = tk.Frame(self, background=p["action_bg"], cursor="hand2")
         row.pack(fill="x", padx=12, pady=(6, 4))
@@ -512,6 +515,7 @@ class Sidebar(tk.Frame):
         label.pack(side="left", fill="x", expand=True, pady=9)
         parts = (row, icon, label)
         self.items[key] = (row, bar, icon, label)
+        self._action_keys.add(key)
         for widget in parts:
             widget.bind("<Button-1>", lambda _e, fn=command: fn())
             widget.bind("<Enter>", lambda _e, k=key: self.paint(k, hover=True))
@@ -519,6 +523,7 @@ class Sidebar(tk.Frame):
 
 
     def _palette(self):
+        """Return active sidebar colors for either the dark Midna or default Mozencaz palette."""
         c = COLORS
         if getattr(self, "_midna_active", False):
             return {
@@ -545,6 +550,7 @@ class Sidebar(tk.Frame):
         }
 
     def set_midna_style(self, active: bool) -> None:
+        """Toggle the sidebar between dark Araragi Midna styling and default Mozencaz styling."""
         active = bool(active)
         if self._midna_active == active:
             return
@@ -584,7 +590,7 @@ class Sidebar(tk.Frame):
         row, bar, icon, label = self.items[key]
         p = self._palette()
         selected = key == self.current
-        if key == "midnas_devotion":
+        if key in getattr(self, "_action_keys", ()):
             bg = p["active_bg"] if selected else (p["hover_bg"] if hover else p["action_bg"])
             fg = "#ffffff" if (selected or hover) else p["action_fg"]
             row.configure(background=bg)

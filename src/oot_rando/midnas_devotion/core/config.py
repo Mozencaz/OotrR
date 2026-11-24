@@ -1,16 +1,21 @@
+"""Configuration, path discovery, migration, and mod-overlap classification for Midna's Devotion."""
 from __future__ import annotations
 
 import glob
 import json
+import logging
 import os
 import re
 import shutil
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 from oot_rando.midnas_devotion.core.formats import BARS_EXTS, CodecBundle, analyze_bars_compatibility, read_bars_raw
+
+_LOG = logging.getLogger(__name__)
 
 RSTB_REL = os.path.join(
     "romfs", "System", "Resource",
@@ -24,7 +29,30 @@ MANAGED_MOD_NAMES = {
 UI_MERGE_EXTS = (".blarc.zs", ".blarc", ".bntx.zs", ".bntx")
 
 
+def _norm_path_key(path: str) -> str:
+    """Normalize a filesystem path for cross-platform equality checks (case-insensitive on Windows)."""
+    return os.path.normcase(os.path.abspath(os.path.expanduser(path)))
+
+
+def _is_within_dir(parent_dir: str, child_path: str) -> bool:
+    """Return True when ``child_path`` resides inside ``parent_dir`` (safe across Windows drive letters)."""
+    parent_key = _norm_path_key(parent_dir)
+    child_key = _norm_path_key(child_path)
+    try:
+        return os.path.commonpath([parent_key, child_key]) == parent_key
+    except ValueError:
+        return False
+
+
+def _version_sort_key(path: str) -> Tuple[Tuple[int, ...], str]:
+    """Natural numeric sort key for ``vX.Y.Z`` release folders so ``v0.10`` sorts after ``v0.9``."""
+    base = os.path.basename(path)
+    nums = tuple(int(tok) for tok in re.findall(r"\d+", base))
+    return (nums, base.lower())
+
+
 def sanitize_folder_name(raw_name: str) -> str:
+    """Convert an arbitrary mod name into a safe single-segment directory name."""
     s = re.sub(r"\s+[-–—]\s+", "_", raw_name.strip())
     s = re.sub(r"[^A-Za-z0-9._-]+", "_", s)
     s = re.sub(r"_+", "_", s).strip("_.-")
@@ -32,20 +60,34 @@ def sanitize_folder_name(raw_name: str) -> str:
 
 
 def clean_subprocess_env() -> Dict[str, str]:
+    """Return a sanitized environment safe for spawning external system executables.
+
+    Delegates to ``oot_rando.native_dialogs._clean_native_env()`` so PyInstaller,
+    AppImage, and embedded-Qt overrides (``LD_LIBRARY_PATH``, ``QT_QPA_PLATFORM``,
+    ``QT_ENABLE_HIGHDPI_SCALING``, etc.) never leak into ``longshot``, ``xdg-open``,
+    ``7z``, ``unrar``, or ``bsdtar``.
     """
-    Returns an environment safe for spawning external system executables
-    (longshot, xdg-open, 7z, unrar, bsdtar) from inside a PyInstaller AppImage.
-    """
-    env = os.environ.copy()
-    if getattr(sys, "frozen", False):
+    try:
+        from oot_rando.native_dialogs import _clean_native_env
+        return _clean_native_env()
+    except Exception:
+        env = os.environ.copy()
         orig_ld = env.get("LD_LIBRARY_PATH_ORIG")
         if orig_ld is not None:
             env["LD_LIBRARY_PATH"] = orig_ld
-        else:
+        elif getattr(sys, "frozen", False):
             env.pop("LD_LIBRARY_PATH", None)
-        for var in ("QT_PLUGIN_PATH", "QML2_IMPORT_PATH", "QML_IMPORT_PATH", "PYTHONHOME", "PYTHONPATH"):
+        for var in (
+            "QT_QPA_PLATFORM",
+            "QT_ENABLE_HIGHDPI_SCALING",
+            "QT_PLUGIN_PATH",
+            "QML2_IMPORT_PATH",
+            "QML_IMPORT_PATH",
+            "PYTHONHOME",
+            "PYTHONPATH",
+        ):
             env.pop(var, None)
-    return env
+        return env
 
 
 _STARTUP_MIGRATION_NOTICES: List[str] = []
@@ -73,6 +115,7 @@ def _try_migrate_dir(old_path: str, new_path: str, label: str) -> str:
 
 
 def default_config_dir() -> str:
+    """Return the OS-appropriate config directory, migrating legacy ``ootmodman`` folders if found."""
     if sys.platform == "win32":
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
         new_dir = os.path.join(base, "midnas_devotion")
@@ -90,6 +133,7 @@ def default_config_dir() -> str:
 
 
 def default_workspace_dir() -> str:
+    """Return the OS-appropriate workspace directory for sandbox/staged/disabled mod folders."""
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or os.path.expanduser("~")
         new_dir = os.path.join(base, "midnas_devotion")
@@ -116,11 +160,12 @@ def read_randomizer_state() -> Dict:
             if isinstance(data, dict):
                 return data
     except Exception:
-        pass
+        _LOG.debug("Could not read randomizer gui_state.json", exc_info=True)
     return {}
 
 
 def auto_detect_from_folder(folder: str) -> Dict[str, str]:
+    """Infer romfs, live mods, library, archived seeds, and port executable from any port subfolder."""
     folder = os.path.abspath(os.path.expanduser(folder))
     root_dir = folder
     ver_dir = folder
@@ -138,7 +183,7 @@ def auto_detect_from_folder(folder: str) -> Dict[str, str]:
 
     stable_dir = os.path.join(ver_dir, "stable")
     if os.path.isdir(stable_dir):
-        ver_dirs = sorted(glob.glob(os.path.join(stable_dir, "v*")))
+        ver_dirs = sorted(glob.glob(os.path.join(stable_dir, "v*")), key=_version_sort_key)
         valid_vers = [d for d in ver_dirs if os.path.isdir(d)]
         if valid_vers:
             ver_dir = valid_vers[-1]
@@ -191,12 +236,13 @@ def auto_detect_from_folder(folder: str) -> Dict[str, str]:
                 result["longshot_binary"] = str(exe)
                 break
     except Exception:
-        pass
+        _LOG.debug("Failed to detect port executable under %s", folder, exc_info=True)
 
     return result
 
 
 def pretty_mod_name(raw_name: str) -> str:
+    """Format a raw mod folder name into a readable title by splitting underscores, dashes, and CamelCase."""
     cleaned = raw_name.replace("_", " ").replace("-", " ").strip()
     cleaned = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", cleaned)
     cleaned = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", cleaned)
@@ -238,6 +284,7 @@ class StandaloneMod:
 
 
 def _is_character_mod_dir(mod_dir: str) -> bool:
+    """Heuristic check for playable character replacement mods (player actor/model files)."""
     romfs = os.path.join(mod_dir, "romfs")
     for root, _, files in os.walk(romfs):
         for fn in files:
@@ -248,7 +295,10 @@ def _is_character_mod_dir(mod_dir: str) -> bool:
 
 
 class AppConfig:
+    """Persistent settings, folder discovery, library management, and overlap engine for Midna's Devotion."""
+
     def __init__(self, settings_path: Optional[str] = None) -> None:
+        """Load saved settings, run legacy folder migrations, and sync active paths from the randomizer."""
         self.config_dir = default_config_dir()
         self.settings_path = settings_path or os.path.join(self.config_dir, "settings.json")
 
@@ -367,14 +417,17 @@ class AppConfig:
 
     @staticmethod
     def _rewrite_path_prefix(value, old_prefix: str, new_prefix: str):
-        old_norm = os.path.normcase(os.path.abspath(old_prefix))
+        """Recursively rewrite saved path strings that begin with ``old_prefix`` to ``new_prefix``."""
+        old_abs = os.path.abspath(os.path.expanduser(old_prefix))
+        new_abs = os.path.abspath(os.path.expanduser(new_prefix))
+        old_norm = os.path.normcase(old_abs)
         if isinstance(value, str) and value:
             cand = os.path.abspath(os.path.expanduser(value))
             cand_norm = os.path.normcase(cand)
             if cand_norm == old_norm:
-                return new_prefix
+                return new_abs
             if cand_norm.startswith(old_norm + os.sep):
-                return new_prefix + cand[len(os.path.abspath(old_prefix)):]
+                return new_abs + cand[len(old_abs):]
             return value
         if isinstance(value, list):
             return [AppConfig._rewrite_path_prefix(v, old_prefix, new_prefix) for v in value]
@@ -396,7 +449,7 @@ class AppConfig:
                         migrated_pairs.append(("Midna's Devotion Workspace", ws_abs, new_ws))
                         self.workspace_dir = new_ws
                     except Exception:
-                        pass
+                        _LOG.debug("Could not migrate legacy workspace %s -> %s", ws_abs, new_ws, exc_info=True)
                 elif os.path.isdir(new_ws) and not os.path.isdir(ws_abs):
                     self.workspace_dir = new_ws
                     migrated_pairs.append(("Midna's Devotion Workspace", ws_abs, new_ws))
@@ -411,7 +464,7 @@ class AppConfig:
                         migrated_pairs.append(("User Mod Library", bk_abs, new_bk))
                         self.backup_dir = new_bk
                     except Exception:
-                        pass
+                        _LOG.debug("Could not migrate legacy library %s -> %s", bk_abs, new_bk, exc_info=True)
                 elif os.path.isdir(new_bk) and not os.path.isdir(bk_abs):
                     self.backup_dir = new_bk
                     migrated_pairs.append(("User Mod Library", bk_abs, new_bk))
@@ -429,7 +482,7 @@ class AppConfig:
         try:
             self.save_settings()
         except Exception:
-            pass
+            _LOG.debug("Could not persist migrated settings to %s", self.settings_path, exc_info=True)
 
     def sync_from_randomizer(self, mods_dir: Optional[str] = None, *, persist: bool = False) -> bool:
         """Prioritize the main randomizer's Setup mods/port paths over Midna's local settings."""
@@ -483,6 +536,7 @@ class AppConfig:
         return changed
 
     def save_settings(self, state_updates: Optional[Dict] = None) -> None:
+        """Atomically persist configuration and UI state to ``settings.json``."""
         if state_updates:
             self.saved_state.update(state_updates)
         self.saved_state["romfs_dir"] = self.romfs_dir
@@ -493,9 +547,22 @@ class AppConfig:
         self.saved_state["workspace_dir"] = self.workspace_dir
         if self.ui_theme in ("mozencaz", "araragi"):
             self.saved_state["ui_theme"] = self.ui_theme
-        os.makedirs(os.path.dirname(self.settings_path), exist_ok=True)
-        with open(self.settings_path, "w", encoding="utf-8") as f:
-            json.dump(self.saved_state, f, indent=2)
+        settings_dir = os.path.dirname(os.path.abspath(self.settings_path))
+        os.makedirs(settings_dir, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(prefix=".settings_", suffix=".tmp", dir=settings_dir)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(self.saved_state, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, self.settings_path)
+        except Exception:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
+            raise
 
     # --- Character Slot Discovery & Management ---
     def _custom_core_map(self) -> Dict[str, List[str]]:
@@ -512,9 +579,10 @@ class AppConfig:
 
         def add_entry(path: str, source_label: str) -> None:
             abs_p = os.path.abspath(path)
-            if abs_p in seen_paths or not os.path.isdir(os.path.join(abs_p, "romfs")):
+            norm_k = os.path.normcase(abs_p)
+            if norm_k in seen_paths or not os.path.isdir(os.path.join(abs_p, "romfs")):
                 return
-            seen_paths.add(abs_p)
+            seen_paths.add(norm_k)
             entries.append(
                 CoreModEntry(name=os.path.basename(abs_p), path=abs_p, slot=slot, source_label=source_label)
             )
@@ -551,30 +619,34 @@ class AppConfig:
                 "Choose the mod's main folder (the one right above romfs/)."
             )
         cmap = self._custom_core_map()
-        if p not in cmap[slot]:
+        existing_keys = {_norm_path_key(x) for x in cmap[slot]}
+        if _norm_path_key(p) not in existing_keys:
             cmap[slot].append(p)
             self.save_settings({"custom_core_paths": cmap})
         return CoreModEntry(name=os.path.basename(p), path=p, slot=slot, source_label="Custom")
 
     def remove_core_mod(self, entry: CoreModEntry) -> None:
+        """Unlink a custom character mod or delete an imported workspace character mod."""
         if entry.source_label == "Library":
             raise RuntimeError(
                 f"'{entry.name}' comes from your User Mod Library (UserModLibrary/) and is protected from deletion here."
             )
         if entry.source_label == "Custom":
             cmap = self._custom_core_map()
-            cmap[entry.slot] = [p for p in cmap[entry.slot] if os.path.abspath(p) != os.path.abspath(entry.path)]
+            target_key = _norm_path_key(entry.path)
+            cmap[entry.slot] = [p for p in cmap[entry.slot] if _norm_path_key(p) != target_key]
             self.save_settings({"custom_core_paths": cmap})
             return
         if entry.source_label == "Imported":
             slot_root = os.path.abspath(self.core_slot_dir(entry.slot))
             target = os.path.abspath(entry.path)
-            if os.path.commonpath([slot_root, target]) == slot_root and os.path.isdir(target):
+            # Guard against cross-drive ValueError on Windows and prevent deleting outside core_slot_dir.
+            if _is_within_dir(slot_root, target) and _norm_path_key(target) != _norm_path_key(slot_root) and os.path.isdir(target):
                 shutil.rmtree(target)
 
     # --- Step 2 Visual Mod Library Picker + Linked Mods for the Right-Hand List ---
     def find_library_visual_mods(self) -> List[CoreModEntry]:
-        """Lists visual/UI/model mods available in mods_backup/ that can be added to the right-hand list."""
+        """List non-character visual/UI/model mods available in ``UserModLibrary``."""
         entries: List[CoreModEntry] = []
         if not self.backup_dir or not os.path.isdir(self.backup_dir):
             return entries
@@ -645,7 +717,7 @@ class AppConfig:
         return migrated
 
     def add_mod_folder_to_list(self, folder_path: str) -> str:
-        """Links any visual/UI/model mod folder (from mods_backup/ or anywhere) into the right-hand list."""
+        """Link any visual/UI/model mod folder (from ``UserModLibrary`` or elsewhere) into the right-hand list."""
         p = os.path.abspath(os.path.expanduser(folder_path))
         if os.path.basename(p).lower() == "romfs":
             p = os.path.dirname(p)
@@ -655,15 +727,17 @@ class AppConfig:
                 "Choose the mod's main folder (the one right above romfs/)."
             )
         paths = self._migrate_legacy_visual_mods()
-        if p not in [os.path.abspath(x) for x in paths]:
+        if _norm_path_key(p) not in {_norm_path_key(x) for x in paths}:
             paths.append(p)
             self.save_settings({"added_list_mod_paths": paths})
         return os.path.basename(p)
 
     def set_mod_order(self, ordered_names: List[str]) -> None:
+        """Persist the user-defined priority order for the right-hand mod list."""
         self.save_settings({"mod_order": list(ordered_names)})
 
     def add_custom_seed_folder(self, folder_path: str) -> str:
+        """Register an external randomizer seed folder containing ``romfs/``."""
         p = os.path.abspath(os.path.expanduser(folder_path))
         if os.path.basename(p).lower() == "romfs":
             p = os.path.dirname(p)
@@ -671,7 +745,7 @@ class AppConfig:
             raise RuntimeError(f"Selected seed folder does not contain a 'romfs' subfolder:\n{p}")
         raw = self.saved_state.get("custom_seed_paths")
         seeds = [str(x) for x in raw if isinstance(x, str)] if isinstance(raw, list) else []
-        if p not in seeds:
+        if _norm_path_key(p) not in {_norm_path_key(x) for x in seeds}:
             seeds.append(p)
             self.save_settings({"custom_seed_paths": seeds})
         return p
@@ -738,7 +812,7 @@ class AppConfig:
             rando_seeds_dir = str(_rando_seeds_dir())
             rando_archive_dir = str(_rando_data_dir() / 'seeds-uninstalled')
         except Exception:
-            pass
+            _LOG.debug("Could not query randomizer seed/archive paths", exc_info=True)
         sources = (
             (self.live_mods_dir, 'mods'),
             (rando_seeds_dir, 'randomizer seeds'),
@@ -752,10 +826,11 @@ class AppConfig:
                 continue
             for cand in glob.glob(os.path.join(root_dir, 'OoT_Randomizer_*')):
                 abs_c = os.path.abspath(cand)
-                if abs_c in seen_paths:
+                norm_k = os.path.normcase(abs_c)
+                if norm_k in seen_paths:
                     continue
                 if os.path.isdir(os.path.join(cand, 'romfs')):
-                    seen_paths.add(abs_c)
+                    seen_paths.add(norm_k)
                     seeds.append(
                         SeedInfo(
                             name=os.path.basename(cand),
@@ -771,8 +846,9 @@ class AppConfig:
                 if not isinstance(cand, str):
                     continue
                 abs_c = os.path.abspath(cand)
-                if abs_c not in seen_paths and os.path.isdir(os.path.join(abs_c, 'romfs')):
-                    seen_paths.add(abs_c)
+                norm_k = os.path.normcase(abs_c)
+                if norm_k not in seen_paths and os.path.isdir(os.path.join(abs_c, 'romfs')):
+                    seen_paths.add(norm_k)
                     seeds.append(
                         SeedInfo(
                             name=os.path.basename(cand),
@@ -786,31 +862,36 @@ class AppConfig:
 
     @staticmethod
     def _walk_romfs_rel(mod_dir: str) -> List[str]:
+        """Return sorted POSIX ``/``-delimited paths of all files under ``mod_dir/romfs``."""
         romfs = os.path.join(mod_dir, "romfs")
         rels: List[str] = []
         if not os.path.isdir(romfs):
             return rels
         for root, _, files in os.walk(romfs):
             for fn in files:
-                rels.append(os.path.relpath(os.path.join(root, fn), romfs))
+                # Always normalize to forward slashes so RESTBL keys and archive overlap checks match on Windows.
+                rels.append(os.path.relpath(os.path.join(root, fn), romfs).replace("\\", "/"))
         rels.sort()
         return rels
 
     def _walk_bars_backup_rel(self, mod_name: str) -> List[str]:
+        """Return POSIX ``/``-delimited paths of stashed original ``.bars`` files for ``mod_name``."""
         bdir = os.path.join(self.bars_originals_dir, mod_name)
         if not os.path.isdir(bdir):
             return []
         rels: List[str] = []
         for root, _, files in os.walk(bdir):
             for fn in files:
-                rels.append(os.path.relpath(os.path.join(root, fn), bdir))
+                rels.append(os.path.relpath(os.path.join(root, fn), bdir).replace("\\", "/"))
         return rels
 
     def resolve_mod_file_path(self, mod: StandaloneMod, rel_path: str) -> str:
-        bkp = os.path.join(self.bars_originals_dir, mod.name, rel_path)
+        """Resolve a mod's canonical relative path to disk, preferring stashed original ``.bars`` copies."""
+        parts = rel_path.replace("\\", "/").split("/")
+        bkp = os.path.join(self.bars_originals_dir, mod.name, *parts)
         if os.path.isfile(bkp):
             return bkp
-        return os.path.join(mod.source_path, "romfs", rel_path)
+        return os.path.join(mod.source_path, "romfs", *parts)
 
     def restore_bars_originals(self, log=None) -> int:
         if not os.path.isdir(self.bars_originals_dir):
@@ -972,7 +1053,7 @@ class AppConfig:
                             auto_merged[rel] = ([n for n, _ in blobs], merged_tracks or ["Audio table"])
                             continue
                     except Exception:
-                        pass
+                        _LOG.debug("BARS compatibility analysis failed for %s", rel, exc_info=True)
 
             real_conflicts[rel] = owners
 
@@ -1071,15 +1152,19 @@ class AppConfig:
         return new_name
 
     def delete_standalone_mod(self, mod: StandaloneMod) -> List[str]:
+        """Unlink a library/external mod or delete a workspace/live standalone mod folder."""
         if mod.origin == "linked":
-            # Only unlink from the right-hand list; never delete files in mods_backup/ or user folders
+            # Only unlink from the right-hand list; never delete files in UserModLibrary/ or user folders.
             paths = self._migrate_legacy_visual_mods()
-            target_abs = os.path.abspath(mod.source_path)
-            new_paths = [p for p in paths if os.path.abspath(p) != target_abs]
+            target_key = _norm_path_key(mod.source_path)
+            new_paths = [p for p in paths if _norm_path_key(p) != target_key]
             updates: Dict = {"added_list_mod_paths": new_paths}
             saved_enabled = self.saved_state.get("enabled_standalone")
             if isinstance(saved_enabled, list) and mod.name in saved_enabled:
                 updates["enabled_standalone"] = [n for n in saved_enabled if n != mod.name]
+            saved_order = self.saved_state.get("mod_order")
+            if isinstance(saved_order, list) and mod.name in saved_order:
+                updates["mod_order"] = [n for n in saved_order if n != mod.name]
             self.save_settings(updates)
             return []
 
@@ -1100,10 +1185,11 @@ class AppConfig:
             if not root_dir:
                 continue
             cand = os.path.abspath(os.path.join(root_dir, mod.name))
-            if cand in seen_paths:
+            norm_k = os.path.normcase(cand)
+            if norm_k in seen_paths:
                 continue
             if os.path.isdir(cand):
-                seen_paths.add(cand)
+                seen_paths.add(norm_k)
                 shutil.rmtree(cand)
                 removed.append(cand)
 

@@ -1,9 +1,12 @@
 "UI Experience themes and first-launch chooser for Midna's Devotion."
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Optional
+
+_LOG = logging.getLogger(__name__)
 
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
@@ -23,6 +26,7 @@ VALID_UI_THEMES = (THEME_MOZENCAZ, THEME_ARARAGI)
 
 
 def _find_backdrop_path() -> Optional[str]:
+    """Locate ``backdrop.png`` via frozen/source asset resolution, or return None."""
     try:
         from oot_rando.midnas_devotion.launcher import resolve_asset
 
@@ -30,16 +34,18 @@ def _find_backdrop_path() -> Optional[str]:
         if resolved and os.path.isfile(resolved):
             return resolved
     except Exception:
-        pass
+        _LOG.debug("resolve_asset failed for backdrop.png", exc_info=True)
     local = Path(__file__).resolve().parent.parent / "assets" / "backdrop.png"
     return str(local) if local.is_file() else None
 
 
 def container_bg_for_theme(theme_id: str) -> str:
+    """Return the matching Tk host container background hex for a Midna theme ID."""
     return "#f2eee3" if theme_id == THEME_MOZENCAZ else "#161a21"
 
 
 def central_stylesheet(plain: bool, compact: bool = False) -> str:
+    """Build the ``QWidget#backdropCentral`` stylesheet for Mozencaz Light or Dark Araragi Midna."""
     font_rule = "font-size: 11px; " if compact else ""
     btn_pad = "3px 7px" if compact else "5px 10px"
     combo_pad = "2px 6px" if compact else "4px 8px"
@@ -50,7 +56,6 @@ def central_stylesheet(plain: bool, compact: bool = False) -> str:
             f"QWidget#backdropCentral QCheckBox {{ color: #1f2a24; background-color: transparent; spacing: 6px; {font_rule}}} "
             "QWidget#backdropCentral .QFrame { background-color: #fffdf8; color: #1f2a24; } "
             "QWidget#backdropCentral QSplitter { background-color: transparent; } "
-            f"QWidget#backdropCentral .QLabel {{ color: #1f2a24; background-color: transparent; {font_rule}}} "
             "QWidget#backdropCentral QPushButton { "
             f"  background-color: #f7f3ea; color: #1f2a24; border: 1px solid #cfc5ad; "
             f"  border-radius: 5px; padding: {btn_pad}; {font_rule}"
@@ -106,7 +111,6 @@ def central_stylesheet(plain: bool, compact: bool = False) -> str:
         f"QWidget#backdropCentral QCheckBox {{ color: #FFFFFF; background-color: transparent; spacing: 6px; {font_rule}}} "
         "QWidget#backdropCentral .QFrame { background-color: rgba(22, 26, 33, 145); color: #FFFFFF; } "
         "QWidget#backdropCentral QSplitter { background-color: transparent; } "
-        f"QWidget#backdropCentral .QLabel {{ color: #FFFFFF; background-color: transparent; {font_rule}}} "
         "QWidget#backdropCentral QPushButton { "
         f"  background-color: rgba(34, 42, 54, 185); color: #f0f4f8; border: 1px solid #485b70; "
         f"  border-radius: 5px; padding: {btn_pad}; {font_rule}"
@@ -147,6 +151,22 @@ def central_stylesheet(plain: bool, compact: bool = False) -> str:
         "  selection-background-color: #2b6cb0; "
         "  selection-color: #FFFFFF; "
         "} "
+        "QWidget#backdropCentral QToolTip { "
+        "  background-color: #1b222c; color: #f0f4f8; "
+        "  border: 1px solid #485b70; border-radius: 4px; padding: 4px 8px; "
+        "} "
+        "QWidget#backdropCentral QProgressBar { "
+        f"  background-color: rgba(16, 20, 26, 175); color: #f0f4f8; border: 1px solid #3c4856; "
+        f"  border-radius: 4px; text-align: center; {font_rule}"
+        "} "
+        "QWidget#backdropCentral QProgressBar::chunk { background-color: #1976d2; border-radius: 3px; } "
+        "QWidget#backdropCentral QSplitter::handle { background-color: #2c3746; } "
+        "QWidget#backdropCentral QScrollBar:vertical { background: rgba(14, 18, 24, 120); width: 10px; margin: 0px; } "
+        "QWidget#backdropCentral QScrollBar::handle:vertical { "
+        "  background: #44566c; border-radius: 5px; min-height: 24px; "
+        "} "
+        "QWidget#backdropCentral QScrollBar::add-line:vertical, "
+        "QWidget#backdropCentral QScrollBar::sub-line:vertical { height: 0px; } "
     )
 
 
@@ -290,6 +310,7 @@ def app_stylesheet(plain: bool) -> str:
 
 
 def status_color(plain: bool, tone: str) -> str:
+    """Return an accessible status text hex color for the requested semantic tone and theme."""
     if plain:
         return {
             "neutral": "#1f2a24",
@@ -662,17 +683,46 @@ MIDNA_INSTRUCTIONS_STEPS = [
 
 
 class MidnaInstructionsDialog(QDialog):
-    "Workflow instructions for using Midna's Devotion with the Randomizer."
+    """Workflow instructions dialog matching either Mozencaz Light or Dark Araragi Midna styling."""
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: Optional[QWidget] = None, plain: Optional[bool] = None) -> None:
         super().__init__(parent)
+        # Inherit the parent window's active theme unless explicitly overridden.
+        if plain is None:
+            plain = bool(getattr(parent, "_plain_ui", True))
+        self._plain = bool(plain)
+
         self.setWindowTitle("Midna's Devotion — How to Use")
         self.setModal(True)
         self.setMinimumWidth(560)
-        self.setStyleSheet(
-            "QDialog { background-color: #f2eee3; color: #1f2a24; } "
-            "QLabel { background-color: transparent; color: #1f2a24; }"
-        )
+        if self._plain:
+            self.setStyleSheet(
+                "QDialog { background-color: #f2eee3; color: #1f2a24; } "
+                "QLabel { background-color: transparent; color: #1f2a24; }"
+            )
+            sub_fg = "#5c665d"
+            card_ss = "QFrame { background-color: #fffdf8; border: 1px solid #e3dccb; border-radius: 7px; }"
+            head_fg = "#1f2a24"
+            desc_fg = "#5c665d"
+            btn_ss = (
+                "QPushButton { background-color: #2f7a55; color: #ffffff; font-weight: bold; "
+                "border: 1px solid #246042; border-radius: 5px; padding: 5px 16px; } "
+                "QPushButton:hover { background-color: #266948; }"
+            )
+        else:
+            self.setStyleSheet(
+                "QDialog { background-color: #161a21; color: #f0f4f8; } "
+                "QLabel { background-color: transparent; color: #f0f4f8; }"
+            )
+            sub_fg = "#b0bec5"
+            card_ss = "QFrame { background-color: #1f2630; border: 1px solid #354659; border-radius: 7px; }"
+            head_fg = "#e3f2fd"
+            desc_fg = "#b8c7d4"
+            btn_ss = (
+                "QPushButton { background-color: #1976d2; color: #ffffff; font-weight: bold; "
+                "border: 1px solid #42a5f5; border-radius: 5px; padding: 5px 16px; } "
+                "QPushButton:hover { background-color: #1e88e5; }"
+            )
 
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 16)
@@ -689,14 +739,12 @@ class MidnaInstructionsDialog(QDialog):
             "Follow this order so your seed, merged mods, and save file stay in sync:"
         )
         sub.setWordWrap(True)
-        sub.setStyleSheet("color: #5c665d; font-size: 11px;")
+        sub.setStyleSheet(f"color: {sub_fg}; font-size: 11px;")
         root.addWidget(sub)
 
         for heading, desc in MIDNA_INSTRUCTIONS_STEPS:
             card = QFrame()
-            card.setStyleSheet(
-                "QFrame { background-color: #fffdf8; border: 1px solid #e3dccb; border-radius: 7px; }"
-            )
+            card.setStyleSheet(card_ss)
             cl = QVBoxLayout(card)
             cl.setContentsMargins(12, 10, 12, 10)
             cl.setSpacing(3)
@@ -705,11 +753,11 @@ class MidnaInstructionsDialog(QDialog):
             hf = QFont()
             hf.setBold(True)
             hl.setFont(hf)
-            hl.setStyleSheet("color: #1f2a24;")
+            hl.setStyleSheet(f"border: none; color: {head_fg};")
 
             dl = QLabel(desc)
             dl.setWordWrap(True)
-            dl.setStyleSheet("color: #5c665d; font-size: 11px;")
+            dl.setStyleSheet(f"border: none; color: {desc_fg}; font-size: 11px;")
 
             cl.addWidget(hl)
             cl.addWidget(dl)
@@ -719,11 +767,7 @@ class MidnaInstructionsDialog(QDialog):
         btn_row.addStretch(1)
         close_btn = QPushButton("Got It")
         close_btn.setMinimumHeight(32)
-        close_btn.setStyleSheet(
-            "QPushButton { background-color: #2f7a55; color: #ffffff; font-weight: bold; "
-            "border: 1px solid #246042; border-radius: 5px; padding: 5px 16px; } "
-            "QPushButton:hover { background-color: #266948; }"
-        )
+        close_btn.setStyleSheet(btn_ss)
         close_btn.clicked.connect(self.accept)
         btn_row.addWidget(close_btn)
         root.addLayout(btn_row)

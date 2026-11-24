@@ -3,10 +3,9 @@ import json
 from datetime import datetime
 import os
 from pathlib import Path
+import logging
 import secrets
 import shutil
-import subprocess
-import sys
 import tempfile
 import uuid
 import tkinter as tk
@@ -17,7 +16,9 @@ from oot_rando import native_dialogs as filedialog
 from oot_rando.parties import PartyLibrary, validate_save_root
 from oot_rando.randomizer.randomizer_services import is_randomizer_seed, validate_mod_directory, read_artifact
 from oot_rando.gui.generation_worker import generate_isolated
-from oot_rando.paths import data_dir
+from oot_rando.paths import data_dir, open_in_file_manager
+
+_LOG = logging.getLogger(__name__)
 from oot_rando.patching.randomize_kokiri import TITLE
 
 
@@ -212,6 +213,7 @@ class PartiesPage:
         self.tracker = None
 
     def _midna_stage_root(self):
+        """Resolve where conflicting live mods are parked during party switches for Midna re-merging."""
         midna_host = getattr(self, "_midna_host", None)
         win = getattr(midna_host, "_window", None) if midna_host is not None else None
         cfg = getattr(win, "cfg", None) if win is not None else None
@@ -221,6 +223,7 @@ class PartiesPage:
         return data_dir() / "staged_for_generation"
 
     def _party_seed_dir(self, party):
+        """Return the live seed directory, or its party snapshot when Midna merged it into ``Merged_Zelda_Rando``."""
         live_seed = Path(party["mods"]) / party["mod_name"]
         if live_seed.is_dir():
             return live_seed
@@ -284,7 +287,7 @@ class PartiesPage:
                         if src_mod.is_dir():
                             dst_mod = stage_root / mod_name
                             prev_backup = None
-                            if dst_mod.exists():
+                            if dst_mod.exists() or dst_mod.is_symlink():
                                 prev_backup = stage_root / (".midna-stage-prev-" + uuid.uuid4().hex)
                                 shutil.move(str(dst_mod), str(prev_backup))
                             shutil.move(str(src_mod), str(dst_mod))
@@ -292,16 +295,26 @@ class PartiesPage:
 
             result = action()
         except Exception:
+            # Isolate each rollback step so one filesystem error cannot strand Merged_Zelda_Rando or staged mods.
             for src_mod, dst_mod, prev_backup in reversed(staged_moves):
-                if dst_mod.exists() and not src_mod.exists():
-                    shutil.move(str(dst_mod), str(src_mod))
-                if prev_backup is not None and prev_backup.exists() and not dst_mod.exists():
-                    shutil.move(str(prev_backup), str(dst_mod))
+                try:
+                    if (dst_mod.exists() or dst_mod.is_symlink()) and not (src_mod.exists() or src_mod.is_symlink()):
+                        shutil.move(str(dst_mod), str(src_mod))
+                except Exception:
+                    _LOG.debug("Rollback failed restoring staged mod %s", src_mod, exc_info=True)
+                try:
+                    if prev_backup is not None and (prev_backup.exists() or prev_backup.is_symlink()) and not (dst_mod.exists() or dst_mod.is_symlink()):
+                        shutil.move(str(prev_backup), str(dst_mod))
+                except Exception:
+                    _LOG.debug("Rollback failed restoring previous staged copy %s", dst_mod, exc_info=True)
             if restored_outgoing is not None and restored_outgoing.exists():
                 shutil.rmtree(restored_outgoing, ignore_errors=True)
             for orig_merged, parked in reversed(parked_merged):
-                if parked.exists() and not orig_merged.exists():
-                    shutil.move(str(parked), str(orig_merged))
+                try:
+                    if parked.exists() and not orig_merged.exists():
+                        shutil.move(str(parked), str(orig_merged))
+                except Exception:
+                    _LOG.debug("Rollback failed restoring parked merged mod %s", orig_merged, exc_info=True)
             raise
 
         # Commit cleanup: stale Merged_Zelda_Rando belonged to the previous seed.
@@ -309,8 +322,11 @@ class PartiesPage:
             if parked.exists():
                 shutil.rmtree(parked, ignore_errors=True)
         for _, _, prev_backup in staged_moves:
-            if prev_backup is not None and prev_backup.exists():
-                shutil.rmtree(prev_backup, ignore_errors=True)
+            if prev_backup is not None:
+                if prev_backup.is_symlink() or prev_backup.is_file():
+                    prev_backup.unlink(missing_ok=True)
+                elif prev_backup.exists():
+                    shutil.rmtree(prev_backup, ignore_errors=True)
 
         notes = []
         if parked_merged:
@@ -419,14 +435,9 @@ class PartiesPage:
             self.error(error)
 
     def party_folder(self, ident):
+        """Open the selected party's storage folder in the OS file manager."""
         try:
-            target = str(self.party_library.folder(ident))
-            if sys.platform == "win32":
-                os.startfile(target)
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", target])
-            else:
-                subprocess.Popen(["xdg-open", target], env=filedialog._clean_native_env())
+            open_in_file_manager(self.party_library.folder(ident))
         except Exception as error:
             self.error(error)
 

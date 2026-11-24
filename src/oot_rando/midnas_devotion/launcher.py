@@ -1,4 +1,4 @@
-"""Entry point for Midna's Devotion mod manager inside oot_rando."""
+"""Standalone / CLI entry point for Midna's Devotion mod manager inside ``oot_rando``."""
 from __future__ import annotations
 
 import sys
@@ -6,9 +6,11 @@ from pathlib import Path
 
 
 def resolve_asset(rel_name: str) -> str:
+    """Locate a bundled UI asset across PyInstaller ``_MEIPASS`` layouts and source trees."""
     meipass = getattr(sys, "_MEIPASS", None)
     candidates = []
     if meipass:
+        # Support both package-prefixed and top-level frozen asset bundles.
         candidates.append(Path(meipass) / "oot_rando" / "midnas_devotion" / "assets" / rel_name)
         candidates.append(Path(meipass) / "midnas_devotion" / "assets" / rel_name)
     candidates.append(Path(__file__).resolve().parent / "assets" / rel_name)
@@ -19,6 +21,7 @@ def resolve_asset(rel_name: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Launch Midna's Devotion as a top-level PySide6 window and return its exit code."""
     try:
         from PySide6.QtWidgets import QApplication
     except ImportError as exc:

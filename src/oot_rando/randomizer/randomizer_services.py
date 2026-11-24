@@ -251,9 +251,12 @@ def generate_in_mods(nup, title_directory, settings, progress=None, archive=None
     always generated anew: the same settings give the same folder name, but a copy
     already there may come from an older version of the application, so it is moved
     to ``archive`` first (never deleted). Earlier seeds of this application are then
-    archived too. A seed sharing resources with another mod is moved to the archive
-    and installation stops. An Archipelago seed keeps the saves of the seed of the same
-    slot it replaces (:func:`continued_save`). Returns the seed folder.
+    archived too. If another mod in ``title_directory`` shares resources with the
+    seed, that conflicting mod is moved aside into ``staged_for_generation`` so
+    Midna's Devotion can merge it later, and the seed is regenerated cleanly; if
+    any conflict still remains, the seed is moved to ``archive`` and installation
+    stops. An Archipelago seed keeps the saves of the seed of the same slot it
+    replaces (:func:`continued_save`). Returns the seed folder.
     """
     if generate is None:
         from oot_rando.randomizer.randomizer_core import generate
@@ -285,13 +288,19 @@ def generate_in_mods(nup, title_directory, settings, progress=None, archive=None
             src_mod = title_directory / mod_name
             if src_mod.is_dir():
                 dst_mod = stage_root / mod_name
-                if dst_mod.exists():
+                # Handle symlinks and broken symlinks safely before moving the directory into staging.
+                if dst_mod.is_symlink() or dst_mod.is_file():
+                    dst_mod.unlink()
+                elif dst_mod.exists():
                     shutil.rmtree(dst_mod)
                 shutil.move(str(src_mod), str(dst_mod))
                 moved_names.append(mod_name)
         if moved_names:
             report('Moved conflicting mods out of mods folder to staging: ' + ', '.join(moved_names))
-            if destination.exists():
+            # Regenerate cleanly now that conflicting sibling mods have been staged aside.
+            if destination.is_symlink() or destination.is_file():
+                destination.unlink()
+            elif destination.exists():
                 shutil.rmtree(destination)
             title_directory.mkdir(parents=True, exist_ok=True)
             generate(nup, destination, settings, report, **options)

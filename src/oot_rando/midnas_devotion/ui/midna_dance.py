@@ -1,3 +1,9 @@
+"""Animated Imp Midna dancing sprite widget displayed during mod-build operations.
+
+Loads an optional bundled GIF or 2x2 green-screen sprite sheet (performing BFS
+chroma-key removal and frame centering), falling back to a procedural 24x24
+pixel-art animation if assets are absent.
+"""
 from __future__ import annotations
 
 import os
@@ -30,6 +36,7 @@ _PALETTE = {
 
 
 def _render_fallback_frame(step: int) -> QImage:
+    """Render one frame of the procedural 8-step 24x24 pixel-art Midna fallback animation."""
     w, h = 24, 24
     grid = [[None for _ in range(w)] for _ in range(h)]
 
@@ -98,12 +105,16 @@ def _render_fallback_frame(step: int) -> QImage:
 
 
 def _is_chroma_green(r: int, g: int, b: int) -> bool:
+    """Return True for chroma-key green background pixels."""
     return g >= 115 and (g - r) >= 38 and (g - b) >= 48
 
 
 def _strip_green_cell(cell: QImage, strip_br_watermark: bool = False) -> Tuple[QImage, Tuple[int, int, int, int]]:
+    """Flood-fill strip chroma green from one sprite-sheet cell and return ``(cleaned_image, tight_bbox)``."""
     img = cell.convertToFormat(QImage.Format.Format_RGBA8888)
     w, h = img.width(), img.height()
+    if w <= 0 or h <= 0:
+        return img, (0, 0, max(1, w), max(1, h))
     bpl = img.bytesPerLine()
     raw = bytearray(img.constBits())
 
@@ -201,6 +212,7 @@ def _strip_green_cell(cell: QImage, strip_br_watermark: bool = False) -> Tuple[Q
 
 
 def _load_2x2_sprite_sheet(path: str) -> List[QImage]:
+    """Split a 2x2 green-screen sprite sheet into 4 chroma-keyed, bottom-aligned square frames."""
     src = QImage(path)
     if src.isNull() or src.width() < 64 or src.height() < 64:
         return []
@@ -310,6 +322,8 @@ class MidnaDanceWidget(QLabel):
             self.setPixmap(self._frames[self._frame_idx % len(self._frames)])
 
     def set_display_size(self, size: int) -> None:
+        """Resize the animation widget and rescale cached frames cleanly."""
+        size = max(16, int(size))
         if size == self._display_size:
             return
         self._display_size = size
@@ -320,6 +334,7 @@ class MidnaDanceWidget(QLabel):
             self._rebuild_frames()
 
     def start(self) -> None:
+        """Begin animating (or mark running so animation starts once visible)."""
         self._running = True
         self._frame_idx = 0
         self.setVisible(True)
@@ -331,13 +346,32 @@ class MidnaDanceWidget(QLabel):
             self._timer.start()
 
     def stop(self) -> None:
+        """Stop frame playback and timer ticks."""
         self._running = False
         if self._movie is not None:
             self._movie.stop()
         self._timer.stop()
 
+    def hideEvent(self, event) -> None:
+        """Pause timer/movie playback while hidden (e.g. when another randomizer tab is active)."""
+        if self._movie is not None:
+            self._movie.setPaused(True)
+        if self._timer.isActive():
+            self._timer.stop()
+        super().hideEvent(event)
+
+    def showEvent(self, event) -> None:
+        """Resume playback when returning to the tab if a build animation is still running."""
+        super().showEvent(event)
+        if self._running:
+            if self._movie is not None:
+                self._movie.setPaused(False)
+            elif not self._timer.isActive():
+                self._timer.start()
+
     def _advance(self) -> None:
-        if not self._frames:
+        """Step to the next cached sprite frame."""
+        if not self._frames or not self.isVisible():
             return
         self._frame_idx = (self._frame_idx + 1) % len(self._frames)
         self.setPixmap(self._frames[self._frame_idx])

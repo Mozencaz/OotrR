@@ -1,8 +1,8 @@
+"""Per-file mod contents and conflict inspector dialog for Midna's Devotion."""
 from __future__ import annotations
 
 import os
-import subprocess
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor, QFont
@@ -14,16 +14,20 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
 )
 
-from oot_rando.midnas_devotion.core.config import StandaloneMod, clean_subprocess_env
+from oot_rando.midnas_devotion.core.config import StandaloneMod, UI_MERGE_EXTS, clean_subprocess_env
+from oot_rando.midnas_devotion.core.formats import BARS_EXTS
+from oot_rando.paths import open_in_file_manager
 
 
 def _human_size(num_bytes: int) -> str:
+    """Format a byte count into B / KB / MB for display in the inspector table."""
     if num_bytes < 1024:
         return f"{num_bytes} B"
     if num_bytes < 1024 * 1024:
@@ -31,31 +35,52 @@ def _human_size(num_bytes: int) -> str:
     return f"{num_bytes / (1024 * 1024):.2f} MB"
 
 
+def _auto_merge_label(rel_path: str) -> str:
+    """Return an accurate auto-merge category label for a relative romfs path."""
+    low = rel_path.replace("\\", "/").lower()
+    if low.endswith(BARS_EXTS):
+        return "⇄ Auto-Merged Audio"
+    if "resourcesizetable" in low:
+        return "⇄ Auto-Merged Table"
+    if low.startswith("mals/"):
+        return "⇄ Auto-Merged Dialogue"
+    if low.endswith(UI_MERGE_EXTS):
+        return "⇄ Auto-Merged UI"
+    return "⇄ Auto-Merged"
+
+
 class ModFilesDialog(QDialog):
-    """Plain-English file inspector for an installed/staged standalone extra mod."""
+    """Plain-English file inspector for an installed, staged, or linked mod."""
 
     def __init__(
         self,
         mod: StandaloneMod,
         conflicts: Dict[str, List[str]],
-        auto_merged: Dict[str, List[str]] | None = None,
+        auto_merged: Optional[Dict[str, List[str]]] = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self.mod = mod
         self.conflicts = conflicts
         self.auto_merged = auto_merged or {}
+        self._cfg = getattr(parent, "cfg", None)
         self._plain = bool(getattr(parent, "_plain_ui", False))
         self.setWindowTitle(f"Inspect Mod Files — {mod.name}")
         self.resize(960, 580)
         self._build_ui()
         self._populate_table()
 
+    def _resolve_file(self, rel: str) -> str:
+        """Locate a mod file on disk, falling back to stashed ``bars_originals`` when available."""
+        if self._cfg is not None:
+            return self._cfg.resolve_mod_file_path(self.mod, rel)
+        return os.path.join(self.mod.source_path, "romfs", *rel.replace("\\", "/").split("/"))
+
     def _build_ui(self) -> None:
+        """Construct summary banner, filter controls, file table, and footer actions."""
         root = QVBoxLayout(self)
         root.setSpacing(10)
 
-        # Header summary card
         card = QFrame()
         card.setObjectName("modInfoCard")
         has_conflicts = bool(self.conflicts)
@@ -94,13 +119,13 @@ class ModFilesDialog(QDialog):
             "live": "Live Game Folder",
             "staged": "Added Extra Mod (Workspace)",
             "disabled": "Disabled Mod (Workspace)",
+            "linked": "Mod Library / Linked Folder",
         }
         origin_txt = origin_labels.get(self.mod.origin, self.mod.origin)
 
         total_bytes = 0
-        romfs_root = os.path.join(self.mod.source_path, "romfs")
         for rel in self.mod.rel_files:
-            p = os.path.join(romfs_root, rel)
+            p = self._resolve_file(rel)
             if os.path.isfile(p):
                 total_bytes += os.path.getsize(p)
 
@@ -128,7 +153,11 @@ class ModFilesDialog(QDialog):
         sub.setStyleSheet(f"border: none; color: {sub_color};")
 
         path_lbl = QLabel(f"Folder: {self.mod.source_path}")
-        path_lbl.setStyleSheet("border: none; color: #5c665d; font-size: 11px;" if self._plain else "border: none; color: #b0bec5; font-size: 11px;")
+        path_lbl.setStyleSheet(
+            "border: none; color: #5c665d; font-size: 11px;"
+            if self._plain
+            else "border: none; color: #b0bec5; font-size: 11px;"
+        )
         path_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 
         card_lay.addWidget(title)
@@ -136,7 +165,6 @@ class ModFilesDialog(QDialog):
         card_lay.addWidget(path_lbl)
         root.addWidget(card)
 
-        # Filter bar
         filt_row = QHBoxLayout()
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Filter files by name or path…")
@@ -150,7 +178,6 @@ class ModFilesDialog(QDialog):
         filt_row.addWidget(self.only_conflicts_cb)
         root.addLayout(filt_row)
 
-        # File table
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Status", "Conflicts With", "File Size", "RomFS File Path"])
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -162,7 +189,6 @@ class ModFilesDialog(QDialog):
         hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         root.addWidget(self.table, 1)
 
-        # Footer buttons
         foot = QHBoxLayout()
         open_btn = QPushButton("Open Mod Folder")
         open_btn.clicked.connect(self._open_folder)
@@ -174,10 +200,10 @@ class ModFilesDialog(QDialog):
         root.addLayout(foot)
 
     def _populate_table(self) -> None:
+        """Populate the file table according to the search filter and conflict-only toggle."""
         self.table.setRowCount(0)
         q = self.search_edit.text().strip().lower()
         only_conf = self.only_conflicts_cb.isChecked()
-        romfs_root = os.path.join(self.mod.source_path, "romfs")
 
         bold_font = QFont()
         bold_font.setBold(True)
@@ -187,10 +213,10 @@ class ModFilesDialog(QDialog):
             auto_owners = self.auto_merged.get(rel, [])
             if only_conf and not owners:
                 continue
-            if q and q not in rel.lower() and not any(q in o.lower() for o in owners):
+            if q and q not in rel.lower() and not any(q in o.lower() for o in owners + auto_owners):
                 continue
 
-            full_p = os.path.join(romfs_root, rel)
+            full_p = self._resolve_file(rel)
             sz_txt = _human_size(os.path.getsize(full_p)) if os.path.isfile(full_p) else "-"
 
             r = self.table.rowCount()
@@ -202,7 +228,7 @@ class ModFilesDialog(QDialog):
                 bg = QBrush(QColor("#fdf3e3" if self._plain else "#33220d"))
                 col_txt = ", ".join(owners)
             elif auto_owners:
-                st_item = QTableWidgetItem("⇄ Auto-Merged Audio")
+                st_item = QTableWidgetItem(_auto_merge_label(rel))
                 st_item.setForeground(QBrush(QColor("#1b5e8a" if self._plain else "#81d4fa")))
                 bg = QBrush(QColor("#e7f2fa" if self._plain else "#102938"))
                 col_txt = "Auto-merges with " + ", ".join(auto_owners)
@@ -227,5 +253,9 @@ class ModFilesDialog(QDialog):
                 self.table.setItem(r, c, item)
 
     def _open_folder(self) -> None:
+        """Open the inspected mod's directory in the OS file manager."""
         if os.path.isdir(self.mod.source_path):
-            from oot_rando.paths import open_in_file_manager; open_in_file_manager(self.mod.source_path, env=clean_subprocess_env())
+            try:
+                open_in_file_manager(self.mod.source_path, env=clean_subprocess_env())
+            except OSError as exc:
+                QMessageBox.warning(self, "Could Not Open Folder", str(exc))
