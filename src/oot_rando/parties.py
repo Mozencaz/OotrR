@@ -148,9 +148,14 @@ class PartyLibrary:
         return value
 
     def list(self):
-        return sorted((self.get(p.name) for p in self.root.iterdir()
-                       if p.is_dir() and (p / 'party.json').is_file()),
-                      key=lambda p: (p['id'] != self.active_id, p['name'].casefold()))
+        entries = []
+        for child in self.root.iterdir():
+            if child.is_dir() and (child / 'party.json').is_file():
+                try:
+                    entries.append(self.get(child.name))
+                except Exception as exc:
+                    _LOG.debug("Skipping invalid party folder %s: %s", child.name, exc, exc_info=True)
+        return sorted(entries, key=lambda p: (p['id'] != self.active_id, p['name'].casefold()))
 
     def bundle(self, party):
         revision = party['revision']

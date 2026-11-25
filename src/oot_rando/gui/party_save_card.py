@@ -471,8 +471,9 @@ def render_party_save_card(parent, summary, colors, icon_dir=None):
         mx = cx + ring_r * math.cos(angle)
         my = cy + ring_r * math.sin(angle)
         owned = bool(med.get("owned"))
-        m_name = med.get("name") or med.get("label") or med.get("abbr") or ""
-        m_icon = get_icon(med.get("icon") or m_name.replace(" ", "_"), owned)
+        m_item = med.get("item") or ""
+        m_name = med.get("name") or med.get("label") or m_item or med.get("abbr") or ""
+        m_icon = get_icon(med.get("icon"), owned) or get_icon(m_item.replace(" ", "_"), owned) or get_icon("Item_" + m_item.replace(" ", "_"), owned)
         if m_icon is not None:
             canvas.create_image(mx, my, image=m_icon)
         else:
@@ -485,8 +486,9 @@ def render_party_save_card(parent, summary, colors, icon_dir=None):
     sy = cy
     for sx, st in zip(stone_xs, summary.get("stones") or []):
         owned = bool(st.get("owned"))
-        s_name = st.get("name") or st.get("label") or st.get("abbr") or ""
-        s_icon = get_icon(st.get("icon") or s_name.replace(" ", "_"), owned)
+        s_item = st.get("item") or ""
+        s_name = st.get("name") or st.get("label") or s_item or st.get("abbr") or ""
+        s_icon = get_icon(st.get("icon"), owned) or get_icon(s_item.replace(" ", "_"), owned) or get_icon("Item_" + s_item.replace(" ", "_"), owned)
         if s_icon is not None:
             canvas.create_image(sx, sy, image=s_icon)
         else:
