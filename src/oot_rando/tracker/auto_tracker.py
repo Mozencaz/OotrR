@@ -66,14 +66,7 @@ def save_roots(hookshot_root=None, mods=None):
         if data:
             names = dict.fromkeys(name.lower() for name in port_appdata_names(root))
             roots.extend(data / name / 'save' for name in names)
-    else:
-        default_names = port_appdata_names(Path("."))
-        if appdata:
-            roots.extend(Path(appdata) / name / 'save' for name in default_names)
-        data = linux_data_home()
-        if data:
-            for name in dict.fromkeys(n.lower() for n in default_names):
-                roots.append(data / name / 'save')
+
     portable = emulator_save_root(mods) if mods else None
     if portable:
         roots.append(portable)
@@ -116,6 +109,19 @@ def newest_save(hookshot_root=None, title=None, mods=None):
     return best
 
 
+def default_port_save_roots():
+    """Standard OS save folders for known PC ports when no port root is specified."""
+    roots = []
+    appdata = os.environ.get('APPDATA')
+    names = port_appdata_names(Path("."))
+    if appdata:
+        roots.extend(Path(appdata) / name / 'save' for name in names)
+    data = linux_data_home()
+    if data:
+        for name in dict.fromkeys(n.lower() for n in names):
+            roots.append(data / name / 'save')
+    return roots
+
 def resolve_party_save_root(recorded_saves, mods=None, fallback_saves=None):
     """Resolve a party save folder across PCs, usernames, and moved/extracted builds."""
     candidates = []
@@ -128,7 +134,11 @@ def resolve_party_save_root(recorded_saves, mods=None, fallback_saves=None):
                     account_cand = root / rec.name
                     if account_cand.is_dir() and any(account_cand.glob("slot_*/progress.sav")):
                         candidates.append(account_cand)
-    for root in save_roots(mods, mods):
+    search_roots = list(save_roots(mods, mods))
+    for r in default_port_save_roots():
+        if r not in search_roots:
+            search_roots.append(r)
+    for root in search_roots:
         if not root.is_dir():
             continue
         if any(root.glob("slot_*/progress.sav")):

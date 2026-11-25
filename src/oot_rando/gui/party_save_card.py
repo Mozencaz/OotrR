@@ -198,6 +198,8 @@ def _build_grid_and_badges(counts, known, tracked):
     for row in game_overlay.GRID[:3]:
         line = []
         for item, abbr, label, levels, colour in row:
+            if item == "Bottle":
+                continue
             level = int(counts.get(item, 0))
             state = "owned" if level else ("missing" if (item in tracked and item in known) else "unknown")
             line.append({
