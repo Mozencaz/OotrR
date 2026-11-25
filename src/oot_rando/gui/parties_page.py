@@ -142,11 +142,12 @@ class PartiesPage:
                 bundle = self.party_library.bundle(party)
                 manifest = json.loads((bundle / 'seed' / 'manifest.json').read_text(encoding='utf-8'))
                 mode = 'Archipelago' if manifest['settings'].get('archipelago') else 'Solo'
-                live_saves = Path(party['saves'])
+                from oot_rando.tracker.auto_tracker import resolve_party_save_root
+                live_saves = resolve_party_save_root(party.get('saves'), party.get('mods'), bundle / 'save')
                 snap_saves = bundle / 'save'
-                if active and any(live_saves.glob('slot_*/progress.sav')):
+                if active and any(live_saves.rglob('progress.sav')):
                     saves = live_saves
-                elif snap_saves.is_dir() and any(snap_saves.glob('slot_*/progress.sav')):
+                elif snap_saves.is_dir() and any(snap_saves.rglob('progress.sav')):
                     saves = snap_saves
                 else:
                     saves = live_saves if active else snap_saves

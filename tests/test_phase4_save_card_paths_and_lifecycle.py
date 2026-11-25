@@ -159,3 +159,33 @@ class Phase4SaveCardPathsAndLifecycleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+    def test_resolve_party_save_root_falls_back_when_recorded_path_missing(self):
+        from oot_rando.tracker import auto_tracker
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            account_dir = root / "longshot" / "save" / "5a3c9e1f0b7d24680000000000000001"
+            slot_dir = account_dir / "slot_00"
+            slot_dir.mkdir(parents=True)
+            (slot_dir / "progress.sav").write_bytes(b"sav")
+            fake_home = root / "home_user"
+            fake_home.mkdir()
+            old_home = os.environ.get("HOME")
+            old_xdg = os.environ.get("XDG_DATA_HOME")
+            try:
+                os.environ["HOME"] = str(fake_home)
+                os.environ["XDG_DATA_HOME"] = str(root)
+                resolved = auto_tracker.resolve_party_save_root(
+                    "/nonexistent/other_pc/save/5a3c9e1f0b7d24680000000000000001"
+                )
+                self.assertEqual(resolved, account_dir)
+            finally:
+                if old_home is None:
+                    os.environ.pop("HOME", None)
+                else:
+                    os.environ["HOME"] = old_home
+                if old_xdg is None:
+                    os.environ.pop("XDG_DATA_HOME", None)
+                else:
+                    os.environ["XDG_DATA_HOME"] = old_xdg

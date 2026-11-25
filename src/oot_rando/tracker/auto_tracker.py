@@ -66,6 +66,14 @@ def save_roots(hookshot_root=None, mods=None):
         if data:
             names = dict.fromkeys(name.lower() for name in port_appdata_names(root))
             roots.extend(data / name / 'save' for name in names)
+    else:
+        default_names = port_appdata_names(Path("."))
+        if appdata:
+            roots.extend(Path(appdata) / name / 'save' for name in default_names)
+        data = linux_data_home()
+        if data:
+            for name in dict.fromkeys(n.lower() for n in default_names):
+                roots.append(data / name / 'save')
     portable = emulator_save_root(mods) if mods else None
     if portable:
         roots.append(portable)
@@ -106,6 +114,40 @@ def newest_save(hookshot_root=None, title=None, mods=None):
         if best_time is None or written > best_time:
             best, best_time = path, written
     return best
+
+
+def resolve_party_save_root(recorded_saves, mods=None, fallback_saves=None):
+    """Resolve a party save folder across PCs, usernames, and moved/extracted builds."""
+    candidates = []
+    if recorded_saves:
+        rec = Path(recorded_saves)
+        candidates.append(rec)
+        if rec.name and not rec.name.startswith("slot_"):
+            for root in save_roots(mods, mods):
+                if root.is_dir():
+                    account_cand = root / rec.name
+                    if account_cand.is_dir() and any(account_cand.glob("slot_*/progress.sav")):
+                        candidates.append(account_cand)
+    for root in save_roots(mods, mods):
+        if not root.is_dir():
+            continue
+        if any(root.glob("slot_*/progress.sav")):
+            candidates.append(root)
+        try:
+            for child in sorted(root.iterdir()):
+                if child.is_dir() and any(child.glob("slot_*/progress.sav")):
+                    candidates.append(child)
+        except OSError:
+            pass
+    if fallback_saves:
+        candidates.append(Path(fallback_saves))
+    for cand in candidates:
+        if cand.is_dir() and any(cand.rglob("progress.sav")):
+            return cand
+    for cand in candidates:
+        if cand.is_dir():
+            return cand
+    return Path(recorded_saves) if recorded_saves else Path(fallback_saves or ".")
 
 
 def soul_zones(metadata, counts):
