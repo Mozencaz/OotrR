@@ -377,8 +377,8 @@ def render_party_save_card(parent, summary, colors, icon_dir=None):
 
     canvas = tk.Canvas(
         parent,
-        width=656,
-        height=196,
+        width=860,
+        height=204,
         background=bg,
         highlightthickness=1,
         highlightbackground=line,
@@ -462,10 +462,10 @@ def render_party_save_card(parent, summary, colors, icon_dir=None):
     canvas.create_text(14, 108, text="✓ " + chk_txt, anchor="w", fill=ink, font=("TkDefaultFont", 10, "bold"))
     canvas.create_text(14, 140, text=summary.get("slot", "New File"), anchor="w", fill=muted, font=("TkDefaultFont", 9, "bold"))
 
-    canvas.create_line(496, 12, 496, 184, fill=line)
+    canvas.create_line(94, 14, 94, 190, fill=line)
 
     # Medallion ring (clockwise from 12 o'clock) + 3 Spiritual Stones across center
-    cx, cy, ring_r = 136, 94, 42
+    cx, cy, ring_r = 150, 92, 46
     for idx, med in enumerate(summary.get("medallions") or []):
         angle = math.radians(-90 + idx * 60)
         mx = cx + ring_r * math.cos(angle)
@@ -481,7 +481,7 @@ def render_party_save_card(parent, summary, colors, icon_dir=None):
             canvas.create_oval(mx - 12, my - 12, mx + 12, my + 12, fill=fill, outline=outline, width=1.5)
             canvas.create_text(mx, my, text=med["abbr"], fill="#ffffff" if owned else grey_ink, font=("TkDefaultFont", 8, "bold"))
 
-    stone_xs = [110, 136, 162]
+    stone_xs = [122, 150, 178]
     sy = cy
     for sx, st in zip(stone_xs, summary.get("stones") or []):
         owned = bool(st.get("owned"))
@@ -496,11 +496,11 @@ def render_party_save_card(parent, summary, colors, icon_dir=None):
             canvas.create_polygon(pts, fill=fill, outline=outline, width=1.5)
             canvas.create_text(sx, sy, text=st["abbr"], fill="#ffffff" if owned else grey_ink, font=("TkDefaultFont", 7, "bold"))
 
-    canvas.create_line(86, 12, 86, 184, fill=line)
+    canvas.create_line(238, 14, 238, 190, fill=line)
 
     # Center: 3x9 Item & Equipment grid
-    grid_x0, grid_y0 = 198, 12
-    cell_w, cell_h = 31, 32
+    grid_x0, grid_y0 = 254, 14
+    cell_w, cell_h = 35, 35
     for r_idx, row in enumerate(summary.get("items") or []):
         for c_idx, cell in enumerate(row):
             x = grid_x0 + c_idx * cell_w
@@ -531,11 +531,11 @@ def render_party_save_card(parent, summary, colors, icon_dir=None):
                 )
 
     # Bottom center: 2 rows of 6 Song PNG icons only + 13th Scarecrow's Song badge
-    song_x0 = 198
+    song_x0 = 254
     for s_row_idx, s_row in enumerate((summary.get("songs_top") or [], summary.get("songs_warp") or [])):
         sy_row = 132 + s_row_idx * 30
         for idx, song in enumerate(s_row):
-            sx = song_x0 + idx * 44
+            sx = song_x0 + idx * 55
             owned = bool(song.get("owned"))
             col = song["colour"] if owned else muted
             song_name = song.get("item", "")
@@ -548,14 +548,14 @@ def render_party_save_card(parent, summary, colors, icon_dir=None):
 
     extra_songs = summary.get("songs_extra") or []
     for idx, song in enumerate(extra_songs):
-        sx = song_x0 + 6 * 44 + 10 + idx * 22
+        sx = song_x0 + 6 * 55 + 6 + idx * 24
         col = song["colour"] if song["owned"] else muted
         canvas.create_oval(sx - 9, 138, sx + 9, 156, fill=card_bg, outline=col if song["owned"] else line, width=1.5 if song["owned"] else 1)
         canvas.create_text(sx, 147, text=song["abbr"], fill=col, font=("TkDefaultFont", 7, "bold" if song["owned"] else "normal"))
-    canvas.create_line(188, 12, 188, 184, fill=line)
+    canvas.create_line(618, 14, 618, 190, fill=line)
 
     # Right column: 5 Bottle slots (B1..B5) + Quest upgrades
-    bx0, by0 = 458, 12
+    bx0, by0 = 630, 14
     canvas.create_text(bx0, by0 + 8, text="Bottles (5)", anchor="w", fill=muted, font=("TkDefaultFont", 8, "bold"))
     for b_idx, b in enumerate(summary.get("bottles") or []):
         bx = bx0 + (b_idx % 3) * 66
@@ -570,7 +570,7 @@ def render_party_save_card(parent, summary, colors, icon_dir=None):
         else:
             canvas.create_text(bx + 29, by + 12, text=b["slot"], fill="#a9814a" if owned else muted, font=("TkDefaultFont", 8, "bold" if owned else "normal"))
 
-    qx0, qy0 = 504, 94
+    qx0, qy0 = 630, 96
     canvas.create_text(qx0, qy0 + 7, text="Quest", anchor="w", fill=muted, font=("TkDefaultFont", 8, "bold"))
     for q_idx, q in enumerate(summary.get("quest_items") or []):
         qx = qx0 + (q_idx % 2) * 102

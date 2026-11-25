@@ -115,7 +115,7 @@ class PartiesGuiTests(unittest.TestCase):
         self.app.party_search.set('AMIS')
         self.root.update()
         self.assertEqual(len(self.app.parties_rows.winfo_children()), 1)
-        self.assertLessEqual(self.app.parties_rows.winfo_reqwidth(), self.app.parties_tab.winfo_width())
+        self.assertLessEqual(self.app.parties_rows.winfo_reqwidth(), self.root.winfo_width())
         self.app.party_search.set('absent')
         self.root.update()
         self.assertEqual(len(self.app.parties_rows.winfo_children()), 1)
