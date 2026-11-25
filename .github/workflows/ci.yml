@@ -38,9 +38,9 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             packaging/constraints.txt
-      - name: Install Tk runtime (Linux)
+      - name: Install Tk and EGL/GL runtime (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libtk8.6
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libtk8.6 libegl1 libgl1
       - name: Install dependencies
         run: python -m pip install --disable-pip-version-check -c packaging/constraints.txt -r requirements.txt PyYAML
       - name: Unit tests
