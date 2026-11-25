@@ -1725,6 +1725,7 @@ def scene_module_fixes():
     from oot_rando.patching import lost_dog, shop_hours
     return (*shop_hours.module_fixes(),
             (lost_dog.MODULE, 'lost_dog_map', lost_dog.map_from_start),
+            (lost_dog.POOL_MODULE, 'lost_dog_pool', lost_dog.pool_from_start),
             (link_goron.MODULE, 'link_goron_spawn', link_goron.spawn_from_first_entry),
             (WATER_GATE_MODULE, 'water_gate', water_gate_for_adult),
             (KAKARIKO_CLOSED_MODULE, 'kakariko_gate_closed',

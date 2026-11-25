@@ -1,0 +1,659 @@
+"""Interactive preflight archive checker and installer dialog for ``.zip``, ``.7z``, and ``.rar`` mods."""
+from __future__ import annotations
+
+import os
+from typing import List, Optional, Tuple
+
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QBrush, QColor, QDragEnterEvent, QDragMoveEvent, QDropEvent, QFont
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QFrame,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+)
+
+from oot_rando.midnas_devotion.core.config import MANAGED_MOD_NAMES, AppConfig, StandaloneMod
+from oot_rando.native_dialogs import ask_open_file
+from oot_rando.midnas_devotion.core.preflight import (
+    SUPPORTED_ARCHIVE_EXTS,
+    ArchiveHandle,
+    PreflightReport,
+    inspect_archive,
+    install_archive_to_dir,
+    install_archive_variant,
+    list_archive_variants,
+    run_advanced_checks,
+    sanitize_mod_name,
+)
+
+# Column indices
+COL_STATUS = 0
+COL_OVERLAP = 1
+COL_PATH = 2
+COL_MOD_SZ = 3
+COL_VAN_SZ = 4
+COL_RESTBL = 5
+COL_MARGIN = 6
+TECH_COLS = (COL_MOD_SZ, COL_VAN_SZ, COL_RESTBL, COL_MARGIN)
+
+
+def _extract_archive_paths(mime_data) -> List[str]:
+    """Extract supported local mod archive paths from a Qt drag-and-drop payload."""
+    if not mime_data or not mime_data.hasUrls():
+        return []
+    paths: List[str] = []
+    for url in mime_data.urls():
+        if url.isLocalFile():
+            p = url.toLocalFile()
+            if os.path.isfile(p) and os.path.splitext(p)[1].lower() in SUPPORTED_ARCHIVE_EXTS:
+                paths.append(p)
+    return paths
+
+
+def _classify_row(status: str, plain: bool = False) -> Tuple[str, str, QColor, QColor]:
+    """Map a raw preflight status code into ``(severity, friendly_label, fg_color, bg_color)``."""
+    st = status or ""
+    if plain:
+        c_danger = (QColor("#b71c1c"), QColor("#fbe9e9"))
+        c_unsupported = (QColor("#5c2778"), QColor("#f3eaf8"))
+        c_warn = (QColor("#8a5308"), QColor("#fdf3e3"))
+        c_auto = (QColor("#1b5e8a"), QColor("#e7f2fa"))
+        c_ok = (QColor("#1f5439"), QColor("#eaf4ed"))
+    else:
+        c_danger = (QColor("#ef9a9a"), QColor("#381414"))
+        c_unsupported = (QColor("#e1bee7"), QColor("#2e1340"))
+        c_warn = (QColor("#ffcc80"), QColor("#33220d"))
+        c_auto = (QColor("#81d4fa"), QColor("#102938"))
+        c_ok = (QColor("#a5d6a7"), QColor("#122616"))
+
+    if st == "EXEFS":
+        return ("danger", "✕ Unsupported Code Mod (exefs)", *c_unsupported)
+    if "DECOMPRESS_ERR" in st or st == "ZSTD_ERROR":
+        lbl = "✕ Overlap + Unreadable .zs" if "OVERLAP" in st else "✕ Unreadable .zs File"
+        return ("danger", lbl, *c_danger)
+    if st == "RESTBL_111":
+        return ("danger", "✕ Clobbers v1.1.1 RESTBL", *c_danger)
+    if "OVER_RESTBL" in st or "SUB_OVER" in st:
+        lbl = "✕ Overlap + Over Memory" if "OVERLAP" in st else (
+            "✕ Subfile Over Memory" if "SUB_OVER" in st else "✕ Over Memory Limit"
+        )
+        return ("danger", lbl, *c_danger)
+    if st == "RESTBL_OLD":
+        return ("warn", "⚠ Old v1.0.0 Table (Ignored)", *c_warn)
+    if "TIGHT" in st and "OVERLAP" in st:
+        return ("warn", "⚠ Overlap + Tight Memory", *c_warn)
+    if "TIGHT" in st:
+        lbl = "⚠ Subfile Tight Memory" if "SUB_" in st else "⚠ Tight Memory Margin"
+        return ("warn", lbl, *c_warn)
+    if "OVERLAP" in st:
+        return ("warn", "⚠ File Conflict", *c_warn)
+    if "AUTO_MERGE_BARS" in st:
+        return ("ok", "⇄ Auto-Merged Audio", *c_auto)
+    if st == "SUB_OK":
+        return ("ok", "✓ Safe (Subfile)", *c_ok)
+    return ("ok", "✓ Safe", *c_ok)
+
+
+def _pill_style(kind: str, plain: bool = False) -> str:
+    """Return themed CSS for a preflight traffic-light status pill."""
+    if plain:
+        palettes = {
+            "ok": ("#eaf4ed", "#8ec29e", "#1f5439"),
+            "warn": ("#fdf3e3", "#dfaa5c", "#7a4d0e"),
+            "danger": ("#fbe9e9", "#dc8c8c", "#9e1c1c"),
+            "unsupported": ("#f3eaf8", "#b992d1", "#5c2778"),
+            "neutral": ("#f7f3ea", "#cfc5ad", "#5c665d"),
+        }
+    else:
+        palettes = {
+            "ok": ("#16331b", "#2e7d32", "#a5d6a7"),
+            "warn": ("#3a2409", "#ef6c00", "#ffcc80"),
+            "danger": ("#3d1313", "#c62828", "#ef9a9a"),
+            "unsupported": ("#2e1340", "#8e24aa", "#e1bee7"),
+            "neutral": ("#252525", "#444444", "#bdbdbd"),
+        }
+    bg, border, fg = palettes.get(kind, palettes["neutral"])
+    return (
+        f"background: {bg}; border: 1px solid {border}; color: {fg}; "
+        "border-radius: 5px; padding: 6px 10px; font-weight: bold;"
+    )
+
+
+class PreflightDialog(QDialog):
+    """Dialog that inspects mod archives for conflicts/RESTBL issues before staging them."""
+    def __init__(
+        self,
+        cfg: AppConfig,
+        enabled_standalone: List[StandaloneMod],
+        parent=None,
+        initial_archive: Optional[str] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.cfg = cfg
+        self._plain = (self.cfg.effective_ui_theme == "mozencaz")
+        self.enabled_standalone = enabled_standalone
+        self.archive: Optional[ArchiveHandle] = None
+        self.current_report: Optional[PreflightReport] = None
+        self.installed_mod_name: Optional[str] = None
+
+        self.setWindowTitle("Check & Add Mod Archive (.zip / .7z / .rar)")
+        self.resize(1120, 700)
+        self.setAcceptDrops(True)
+        self._build_ui()
+
+        if initial_archive:
+            QTimer.singleShot(0, lambda p=initial_archive: self.load_archive(p))
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        # File selector row
+        file_row = QHBoxLayout()
+        self.arc_edit = QLineEdit()
+        self.arc_edit.setReadOnly(True)
+        self.arc_edit.setPlaceholderText("Drop a .zip, .7z, or .rar here — or click Browse Archive...")
+        browse_btn = QPushButton("Browse Archive...")
+        browse_btn.clicked.connect(self._browse_archive)
+        file_row.addWidget(QLabel("Archive:"))
+        file_row.addWidget(self.arc_edit, 1)
+        file_row.addWidget(browse_btn)
+        layout.addLayout(file_row)
+
+        # Variant & mod name row
+        meta_row = QHBoxLayout()
+        self.variant_combo = QComboBox()
+        self.variant_combo.currentIndexChanged.connect(self._run_standard_inspection)
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("Folder name for Extra Mods list")
+        meta_row.addWidget(QLabel("Variant:"))
+        meta_row.addWidget(self.variant_combo, 1)
+        meta_row.addWidget(QLabel("Mod Name:"))
+        meta_row.addWidget(self.name_edit, 1)
+        layout.addLayout(meta_row)
+
+        # Summary Card (plain-English verdict + 4 traffic-light pills)
+        self.summary_card = QFrame()
+        self.summary_card.setFrameShape(QFrame.Shape.StyledPanel)
+        self.summary_card.setStyleSheet(
+            "QFrame { background: #fffdf8; border: 1px solid #dfd8c6; border-radius: 6px; }" if self._plain else "QFrame { background: #232323; border: 1px solid #3c3c3c; border-radius: 6px; }"
+        )
+        card_lay = QVBoxLayout(self.summary_card)
+        card_lay.setContentsMargins(12, 10, 12, 10)
+        card_lay.setSpacing(8)
+
+        self.verdict_title = QLabel("Drop or select a mod archive to check compatibility")
+        title_font = QFont()
+        title_font.setPointSize(12)
+        title_font.setBold(True)
+        self.verdict_title.setFont(title_font)
+        self.verdict_title.setWordWrap(True)
+
+        self.verdict_desc = QLabel(
+            "Checks whether a mod can safely sit standalone next to your main game setup without conflicts or crashes."
+        )
+        self.verdict_desc.setWordWrap(True)
+        self.verdict_desc.setStyleSheet("border: none; color: #3a463f;" if self._plain else "border: none; color: #cccccc;")
+
+        card_lay.addWidget(self.verdict_title)
+        card_lay.addWidget(self.verdict_desc)
+
+        pills_row = QHBoxLayout()
+        pills_row.setSpacing(8)
+        self.pill_exefs = QLabel("Code Mod: —")
+        self.pill_overlap = QLabel("Conflicts: —")
+        self.pill_restbl = QLabel("Memory Table: —")
+        self.pill_sizes = QLabel("Crash / Size Risk: —")
+        for pill in (self.pill_exefs, self.pill_overlap, self.pill_restbl, self.pill_sizes):
+            pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            pill.setStyleSheet(_pill_style("neutral", self._plain))
+            pills_row.addWidget(pill, 1)
+        card_lay.addLayout(pills_row)
+        layout.addWidget(self.summary_card)
+
+        # Controls row: Advanced check + view filters
+        ctrl_row = QHBoxLayout()
+        self.adv_btn = QPushButton("Run Deep Check (Memory Margins + Packed Subfiles)")
+        self.adv_btn.setEnabled(False)
+        self.adv_btn.clicked.connect(self._run_advanced)
+
+        self.auto_adv_cb = QCheckBox("Auto-run Deep Check")
+        self.only_issues_cb = QCheckBox("Show only issues")
+        self.only_issues_cb.toggled.connect(self._refresh_table_visibility)
+        self.tech_details_cb = QCheckBox("Show technical byte details")
+        self.tech_details_cb.setChecked(False)
+        self.tech_details_cb.toggled.connect(self._apply_column_visibility)
+
+        ctrl_row.addWidget(self.adv_btn)
+        ctrl_row.addWidget(self.auto_adv_cb)
+        ctrl_row.addStretch(1)
+        ctrl_row.addWidget(self.only_issues_cb)
+        ctrl_row.addWidget(self.tech_details_cb)
+        layout.addLayout(ctrl_row)
+
+        # Results table
+        self.table = QTableWidget(0, 7)
+        self.table.setHorizontalHeaderLabels(
+            [
+                "Result",
+                "Conflicts With",
+                "File Path",
+                "Mod Size",
+                "Vanilla Size",
+                "RESTBL Limit",
+                "Margin (Mod / Van)",
+            ]
+        )
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setAlternatingRowColors(False)
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(COL_STATUS, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(COL_OVERLAP, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(COL_PATH, QHeaderView.ResizeMode.Stretch)
+        for col in TECH_COLS:
+            hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        layout.addWidget(self.table, 1)
+        self._apply_column_visibility()
+
+        # Action row
+        btn_row = QHBoxLayout()
+        self.counts_lbl = QLabel("")
+        self.counts_lbl.setStyleSheet("color: #5c665d;" if self._plain else "color: #aaaaaa;")
+        btn_row.addWidget(self.counts_lbl, 1)
+        self.install_btn = QPushButton("Add to Extra Mods")
+        self.install_btn.setEnabled(False)
+        disabled_ss = (
+            "QPushButton:disabled { background: #e8e2d3; color: #9aa39a; border: 1px solid #d8d0be; }"
+            if self._plain
+            else "QPushButton:disabled { background: #3a3a3a; color: #888888; }"
+        )
+        self.install_btn.setStyleSheet(
+            "QPushButton { background: #2e7d32; color: #ffffff; font-weight: bold; "
+            "padding: 6px 14px; border-radius: 4px; }"
+            "QPushButton:hover { background: #388e3c; }"
+            + disabled_ss
+        )
+        self.install_btn.clicked.connect(self._install_mod)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.reject)
+        btn_row.addWidget(self.install_btn)
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if _extract_archive_paths(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        if _extract_archive_paths(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        paths = _extract_archive_paths(event.mimeData())
+        if paths:
+            event.acceptProposedAction()
+            self.load_archive(paths[0])
+
+    def _apply_column_visibility(self) -> None:
+        show_tech = self.tech_details_cb.isChecked()
+        for col in TECH_COLS:
+            self.table.setColumnHidden(col, not show_tech)
+
+    def _refresh_table_visibility(self) -> None:
+        if self.current_report is not None:
+            self._render_table(self.current_report)
+
+    def _close_archive(self) -> None:
+        if self.archive is not None:
+            self.archive.close()
+            self.archive = None
+
+    def done(self, result: int) -> None:
+        self._close_archive()
+        super().done(result)
+
+    def closeEvent(self, event) -> None:
+        self._close_archive()
+        super().closeEvent(event)
+
+    def _browse_archive(self) -> None:
+        start_dir = os.path.expanduser("~/Downloads")
+        if not os.path.isdir(start_dir):
+            start_dir = os.path.expanduser("~")
+        path = ask_open_file(
+            "Select Mod Archive",
+            start_dir,
+            qt_filter="Mod Archives (*.zip *.7z *.rar);;ZIP (*.zip);;7-Zip (*.7z);;RAR (*.rar)",
+            qt_parent=self,
+        )
+        if path:
+            self.load_archive(path)
+
+    def _reset_results_state(self) -> None:
+        """Clear stale inspection results and disable actions when opening a new archive fails."""
+        self.current_report = None
+        self.adv_btn.setEnabled(False)
+        self.install_btn.setEnabled(False)
+        self.table.setRowCount(0)
+        self.counts_lbl.setText("")
+
+    def load_archive(self, path: str) -> None:
+        """Open a mod archive, enumerate ``romfs/`` variants, and run standard preflight inspection."""
+        if not path or not os.path.isfile(path):
+            return
+        self._close_archive()
+        self._reset_results_state()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self.archive = ArchiveHandle(path)
+            variants, _ = list_archive_variants(self.archive)
+        except Exception as exc:
+            self._close_archive()
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, "Archive Open Failed", str(exc))
+            return
+        QApplication.restoreOverrideCursor()
+
+        self.arc_edit.setText(path)
+        self.variant_combo.blockSignals(True)
+        self.variant_combo.clear()
+        if variants:
+            for v in variants:
+                label = v if v else "(Archive Root)"
+                self.variant_combo.addItem(label, v)
+        else:
+            self.variant_combo.addItem("(No romfs/ folder found)", "")
+        self.variant_combo.blockSignals(False)
+
+        self._run_standard_inspection()
+
+    def _run_standard_inspection(self) -> None:
+        if not self.archive:
+            return
+        variant = self.variant_combo.currentData() or ""
+        suggested = os.path.basename(variant) if variant else os.path.splitext(os.path.basename(self.archive.path))[0]
+        self.name_edit.setText(sanitize_mod_name(suggested))
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            report = inspect_archive(self.archive, self.cfg, variant, self.enabled_standalone)
+            if self.auto_adv_cb.isChecked():
+                run_advanced_checks(self.archive, self.cfg, variant, report)
+        except Exception as exc:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, "Inspection Failed", str(exc))
+            return
+        QApplication.restoreOverrideCursor()
+
+        self.current_report = report
+        self._render_report(report)
+
+    def _run_advanced(self) -> None:
+        """Run the deeper margin and packed-SARC subfile preflight pass on the active report."""
+        if not self.archive or not self.current_report:
+            return
+        variant = self.variant_combo.currentData() or ""
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            run_advanced_checks(self.archive, self.cfg, variant, self.current_report)
+        except Exception as exc:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, "Deep Check Failed", str(exc))
+            return
+        QApplication.restoreOverrideCursor()
+
+        self._render_report(self.current_report)
+
+    @staticmethod
+    def _fmt_margin(m_mod: Optional[int], m_van: Optional[int]) -> str:
+        if m_mod is None:
+            return "-"
+        s_mod = f"{m_mod:+,}"
+        if m_van is None:
+            return s_mod
+        return f"{s_mod} / {m_van:+,}"
+
+    def _render_report(self, report: PreflightReport) -> None:
+        exefs_n = sum(1 for r in report.rows if r.status == "EXEFS")
+        overlap_rows = [r for r in report.rows if "OVERLAP" in r.status]
+        rstb_111_n = sum(1 for r in report.rows if r.status == "RESTBL_111")
+        rstb_old_n = sum(1 for r in report.rows if r.status == "RESTBL_OLD")
+        over_n = sum(1 for r in report.rows if "OVER_RESTBL" in r.status or "SUB_OVER" in r.status)
+        tight_n = sum(1 for r in report.rows if "TIGHT" in r.status)
+        dec_err_n = sum(1 for r in report.rows if "DECOMPRESS_ERR" in r.status)
+        safe_n = sum(1 for r in report.rows if r.status in ("OK", "SUB_OK", "AUTO_MERGE_BARS"))
+        issue_n = len(report.rows) - safe_n
+
+        # 1. Update 4 traffic-light pills
+        if exefs_n:
+            self.pill_exefs.setText(f"✕ Code Mod ({exefs_n} file(s))")
+            self.pill_exefs.setStyleSheet(_pill_style("unsupported", self._plain))
+        else:
+            self.pill_exefs.setText("✓ No Code Mods")
+            self.pill_exefs.setStyleSheet(_pill_style("ok", self._plain))
+
+        auto_bars_rows = [r for r in report.rows if "AUTO_MERGE_BARS" in r.status]
+        if overlap_rows:
+            owners = sorted({o for r in overlap_rows for o in r.overlap_with})
+            self.pill_overlap.setText(f"⚠ {len(overlap_rows)} Conflict(s)")
+            self.pill_overlap.setToolTip("Collides with: " + ", ".join(owners))
+            self.pill_overlap.setStyleSheet(_pill_style("warn", self._plain))
+        elif auto_bars_rows:
+            self.pill_overlap.setText(f"⇄ {len(auto_bars_rows)} Auto-Merged Audio")
+            self.pill_overlap.setToolTip("Shared .bars audio table(s) touch different tracks and merge automatically on build.")
+            self.pill_overlap.setStyleSheet(_pill_style("ok", self._plain))
+        else:
+            self.pill_overlap.setText("✓ No File Conflicts")
+            self.pill_overlap.setToolTip("")
+            self.pill_overlap.setStyleSheet(_pill_style("ok", self._plain))
+
+        if rstb_111_n:
+            self.pill_restbl.setText("✕ Clobbers v1.1.1 Table")
+            self.pill_restbl.setStyleSheet(_pill_style("danger", self._plain))
+        elif rstb_old_n:
+            self.pill_restbl.setText("⚠ Ignored v1.0.0 Table")
+            self.pill_restbl.setStyleSheet(_pill_style("warn", self._plain))
+        else:
+            self.pill_restbl.setText("✓ No Table Conflict")
+            self.pill_restbl.setStyleSheet(_pill_style("ok", self._plain))
+
+        if over_n or dec_err_n:
+            self.pill_sizes.setText(f"✕ {over_n + dec_err_n} Size/Read Risk")
+            self.pill_sizes.setStyleSheet(_pill_style("danger", self._plain))
+        elif tight_n:
+            self.pill_sizes.setText(f"⚠ {tight_n} Tight Margin(s)")
+            self.pill_sizes.setStyleSheet(_pill_style("warn", self._plain))
+        else:
+            suffix = "" if report.advanced_ran else " (Basic)"
+            self.pill_sizes.setText(f"✓ Sizes Safe{suffix}")
+            self.pill_sizes.setStyleSheet(_pill_style("ok", self._plain))
+
+        # 2. Update plain-English summary card
+        has_hard_danger = bool(rstb_111_n or over_n or dec_err_n)
+        if report.verdict == "UNSUPPORTED":
+            self._set_card_theme(
+                "#f3eaf8" if self._plain else "#2a1436",
+                "#b992d1" if self._plain else "#8e24aa",
+                "#5c2778" if self._plain else "#e1bee7",
+            )
+            self.verdict_title.setText("✕ NOT SUPPORTED ON LONGSHOT")
+            self.verdict_desc.setText(
+                "This archive contains Switch code-mod files (exefs/) that stock Longshot cannot load yet. Skip this one for now."
+            )
+            self.install_btn.setEnabled(False)
+        elif not report.rows:
+            self._set_card_theme("#fdf3e3" if self._plain else "#33220d", "#dfaa5c" if self._plain else "#ef6c00", "#7a4d0e" if self._plain else "#ffcc80")
+            self.verdict_title.setText("⚠ NO MOD FILES FOUND")
+            self.verdict_desc.setText(
+                "No romfs/ folder was found under this variant. Try choosing a different variant above or check the archive manually."
+            )
+            self.install_btn.setEnabled(False)
+        elif has_hard_danger:
+            self._set_card_theme("#fbe9e9" if self._plain else "#381414", "#dc8c8c" if self._plain else "#c62828", "#9e1c1c" if self._plain else "#ef9a9a")
+            self.verdict_title.setText("✕ NOT SAFE AS A DROP-IN MOD")
+            reasons = []
+            if rstb_111_n:
+                reasons.append("it ships a v1.1.1 ResourceSizeTable that will overwrite Merged_Zelda_Rando's table")
+            if over_n:
+                reasons.append(f"{over_n} file(s) exceed memory table limits and can crash the game")
+            if dec_err_n:
+                reasons.append(f"{dec_err_n} file(s) could not be decompressed cleanly")
+            self.verdict_desc.setText(
+                "Do not drop this straight into mods/: " + "; ".join(reasons) + ". Needs a merge or RESTBL bump first."
+            )
+            self.install_btn.setEnabled(True)
+        elif report.verdict == "NEEDS_ATTENTION":
+            self._set_card_theme("#fdf3e3" if self._plain else "#33220d", "#dfaa5c" if self._plain else "#ef6c00", "#7a4d0e" if self._plain else "#ffcc80")
+            self.verdict_title.setText("⚠ CAUTION — REVIEW BEFORE INSTALLING")
+            notes = []
+            if overlap_rows:
+                owners = sorted({o for r in overlap_rows for o in r.overlap_with})
+                notes.append(f"replaces {len(overlap_rows)} file(s) already used by {', '.join(owners)}")
+            if rstb_old_n:
+                notes.append("includes an old v1.0.0 memory table that Longshot 1.1.1 ignores")
+            if tight_n:
+                notes.append(f"{tight_n} file(s) have tighter memory headroom than vanilla")
+            self.verdict_desc.setText("Worth checking first: " + "; ".join(notes) + ".")
+            self.install_btn.setEnabled(True)
+        else:
+            self._set_card_theme("#eaf4ed" if self._plain else "#122b16", "#8ec29e" if self._plain else "#2e7d32", "#1f5439" if self._plain else "#a5d6a7")
+            self.verdict_title.setText("✓ SAFE TO DROP IN STANDALONE")
+            extra = (
+                f" Deep check also verified memory margins and {report.subfiles_scanned} packed subfile(s)."
+                if report.advanced_ran
+                else " Click 'Run Deep Check' if this mod contains models or packed actor files."
+            )
+            self.verdict_desc.setText(
+                f"All {len(report.rows)} file(s) passed with zero conflicts and safe memory sizes. Click 'Add to Extra Mods' to stage it."
+                + extra
+            )
+            self.install_btn.setEnabled(True)
+
+        self.adv_btn.setEnabled(not report.advanced_ran)
+        self.counts_lbl.setText(
+            f"Summary: {safe_n} safe  ·  {issue_n} issue(s)  ·  {len(report.rows)} total item(s)"
+            + (f"  ({report.subfiles_scanned} subfiles scanned)" if report.advanced_ran else "")
+        )
+        self._render_table(report)
+
+    def _set_card_theme(self, bg: str, border: str, title_fg: str) -> None:
+        self.summary_card.setStyleSheet(
+            f"QFrame {{ background: {bg}; border: 2px solid {border}; border-radius: 6px; }}"
+        )
+        self.verdict_title.setStyleSheet(f"border: none; color: {title_fg};")
+
+    def _render_table(self, report: PreflightReport) -> None:
+        self.table.setRowCount(0)
+        only_issues = self.only_issues_cb.isChecked()
+
+        for row in report.rows:
+            sev, friendly_label, fg_color, bg_color = _classify_row(row.status, plain=self._plain)
+            if only_issues and sev == "ok":
+                continue
+
+            r = self.table.rowCount()
+            self.table.insertRow(r)
+
+            items = [
+                QTableWidgetItem(friendly_label),
+                QTableWidgetItem(", ".join(row.overlap_with) if row.overlap_with else "None"),
+                QTableWidgetItem(row.rel_path),
+                QTableWidgetItem(f"{row.mod_size:,}" if row.mod_size else "-"),
+                QTableWidgetItem(f"{row.van_size:,}" if row.van_size else "-"),
+                QTableWidgetItem(f"{row.restbl_size:,}" if row.restbl_size is not None else "None"),
+                QTableWidgetItem(self._fmt_margin(row.margin_mod, row.margin_van)),
+            ]
+
+            bold_font = QFont()
+            bold_font.setBold(True)
+            items[COL_STATUS].setFont(bold_font)
+            items[COL_STATUS].setForeground(QBrush(fg_color))
+            items[COL_STATUS].setToolTip(f"Raw code: {row.status}")
+
+            bg_brush = QBrush(bg_color)
+            row_fg_brush = QBrush(QColor("#1f2a24" if self._plain else "#f1f5f9"))
+            for col_idx, item in enumerate(items):
+                item.setBackground(bg_brush)
+                if col_idx != COL_STATUS:
+                    item.setForeground(row_fg_brush)
+                self.table.setItem(r, col_idx, item)
+
+    def _install_mod(self) -> None:
+        if not self.archive or not self.current_report:
+            return
+        all_warnings = self.current_report.warnings + self.current_report.advanced_warnings
+        if self.current_report.verdict == "NEEDS_ATTENTION":
+            res = QMessageBox.warning(
+                self,
+                "Preflight Warnings",
+                "This archive flagged issues:\n\n• "
+                + "\n• ".join(all_warnings)
+                + "\n\nAdd it to Extra Mods anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if res != QMessageBox.StandardButton.Yes:
+                return
+
+        mod_name = sanitize_mod_name(self.name_edit.text())
+        if mod_name in MANAGED_MOD_NAMES or mod_name.startswith("OoT_Randomizer_"):
+            QMessageBox.warning(
+                self,
+                "Reserved Mod Name",
+                f"'{mod_name}' is a reserved system mod name. Please enter a different Mod Name.",
+            )
+            return
+        variant = self.variant_combo.currentData() or ""
+        install_parent = self.cfg.staged_mods_dir
+        try:
+            from oot_rando.midnas_devotion.core.dedupe import (
+                check_mod_duplicates,
+                collect_existing_mod_targets,
+                fingerprint_archive_variant,
+            )
+            from oot_rando.midnas_devotion.ui.dedupe_dialog import prompt_duplicate_resolution
+            cand_fp = fingerprint_archive_variant(self.archive, variant, display_name=mod_name)
+            matches = check_mod_duplicates(cand_fp, collect_existing_mod_targets(self.cfg))
+            if matches:
+                action, target_match = prompt_duplicate_resolution(
+                    self,
+                    mod_name,
+                    matches,
+                    allow_replace=True,
+                    allow_keep_both=True,
+                    sandbox_mode=self.cfg.sandbox_mode,
+                )
+                if action == "cancel":
+                    return
+                if action == "replace" and target_match is not None:
+                    mod_name = target_match.existing_name
+                    install_parent = os.path.dirname(target_match.existing_path)
+            dst = install_archive_to_dir(self.archive, variant, mod_name, install_parent)
+        except Exception as exc:
+            QMessageBox.critical(self, "Install Failed", str(exc))
+            return
+
+        self.installed_mod_name = os.path.basename(dst)
+        QMessageBox.information(
+            self,
+            "Mod Added",
+            f"Added '{self.installed_mod_name}' to your Extra Mods list.\n\n"
+            "Make sure it's checked in Step 3, then click Apply & Build in Step 4.",
+        )
+        self.accept()

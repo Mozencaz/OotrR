@@ -1,5 +1,6 @@
 """Desktop application (Tkinter). Run with ``python -m oot_rando``."""
 import ctypes
+from typing import Optional
 import json
 import os
 from pathlib import Path
@@ -8,10 +9,11 @@ import secrets
 import threading
 import webbrowser
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
+from tkinter import ttk, messagebox, simpledialog
+from oot_rando import native_dialogs as filedialog
 
 from oot_rando.randomizer.randomizer_core import Settings, CHECKS, GENERATOR_VERSION
-from oot_rando.randomizer.randomizer_services import (read_artifact, qol_seed_warning,
+from oot_rando.randomizer.randomizer_services import (read_artifact,
                                                       regeneration_settings, validate_mod_directory)
 from oot_rando.randomizer.qol_install import install_qol
 from oot_rando.tracker.auto_tracker import TrackerSession, find_save_slots, newest_save
@@ -24,9 +26,9 @@ from oot_rando.patching.randomize_kokiri import POOL, TITLE
 from oot_rando.game.randomizer_categories import CATEGORIES
 from oot_rando.game.world_maps import SAFE_CATEGORIES
 from oot_rando.logic import rando_options
-from oot_rando.paths import data_dir, seeds_dir, state_dir
+from oot_rando.paths import data_dir, open_in_file_manager, seeds_dir, state_dir
 from oot_rando.gui import theme
-from oot_rando.gui.generation_worker import generate_isolated
+from oot_rando.gui.parties_page import PartiesPage
 from oot_rando import __version__ as APP_VERSION, updater
 
 STATE = state_dir()
@@ -106,6 +108,10 @@ OPTION_TIPS = {
     'open_door_of_time': 'The Door of Time is open from the start and the Master Sword can be pulled without the '
                          'Spiritual Stones or the Song of Time. Zelda\'s escape still gives the Ocarina of Time '
                          'and the Song of Time. To be confirmed in game.',
+    'starting_age': 'Child: the usual start in Kokiri Forest. Adult: a new game begins as adult Link in the '
+                    'Temple of Time, the Door of Time open (forced on) and time travel possible both ways at the '
+                    'pedestal. Link holds the Master Sword, needed to travel back, plus the starting inventory '
+                    'you choose below, nothing else. New save required. To be confirmed in game.',
     'door_of_time_requirement': 'Play the Song of Time with an ocarina at the door. Choose whether this also '
                                 'needs all three Spiritual Stones, only the Goron Ruby and Zora Sapphire, or '
                                 'no stones. Door of Time open overrides this choice. The stones for Zelda\'s '
@@ -183,7 +189,7 @@ OPTION_TIPS = {
 # A visible option missing here is shown at the end, in a card named after its tab.
 SETTING_GROUPS = (
     ('Open world', 'Zones and quests open from the start.',
-     ['game:open_forest', 'open_kakariko', 'open_door_of_time', 'door_of_time_requirement', 'spiritual_stones', 'zora_fountain', 'gerudo_fortress',
+     ['game:open_forest', 'starting_age', 'open_kakariko', 'open_door_of_time', 'door_of_time_requirement', 'spiritual_stones', 'zora_fountain', 'gerudo_fortress',
       'open_gerudo_valley_bridge', 'skip_child_zelda']),
     ('Logic and accessibility', '',
      ['accessibility', 'logic_no_night_tokens_without_suns_song', 'game:skulltulas_always_present']),
@@ -270,7 +276,7 @@ def default_mods_dir():
     folder = Path(appdata) / 'eden' / 'load' / TITLE if appdata else None
     return str(folder) if folder and folder.is_dir() else ''
 
-class Application:
+class Application(PartiesPage):
     def __init__(self, root):
         self.root = root
         root.title('OoT Randomizer')
@@ -301,6 +307,7 @@ class Application:
         self.tracker_search, self.save_path = tk.StringVar(), tk.StringVar()
         self.auto_save = tk.BooleanVar(value=True)
         self.app_state = self.read_app_state()
+        self.init_parties()
         self.turbo_enabled = tk.BooleanVar(value=self.app_state.get('turbo_a', True) is not False)
         # Remembered between app starts (it was off again at every start: 15/11 report, issue #39).
         self.options['skulltulas_always_present'].set(self.app_state.get('skulltulas_always_present') is True)
@@ -311,7 +318,7 @@ class Application:
         self.nup.set(self.app_state.get('game_file') or '')
         self.mods.set(self.app_state.get('mods_dir') or default_mods_dir())
         self.nup.trace_add('write', lambda *args: self.write_app_state(game_file=self.nup.get()))
-        self.mods.trace_add('write', lambda *args: self.write_app_state(mods_dir=self.mods.get()))
+        self.mods.trace_add('write', self._on_mods_dir_changed)
         self.check_updates = tk.BooleanVar(value=self.app_state.get('check_updates', True) is not False)
         self.check_updates.trace_add('write', lambda *args: self.write_app_state(check_updates=self.check_updates.get()))
         # Opt-in: also offer the GitHub pre-releases (vX.Y.Z-beta.N) when checking for updates.
@@ -339,8 +346,13 @@ class Application:
         self.sidebar.pack(side='left', fill='y')
         outer = ttk.Frame(root, padding=(34, 26, 34, 18), style='Page.TFrame')
         outer.pack(side='left', fill='both', expand=True)
+        self._outer = outer
         header = ttk.Frame(outer, style='Page.TFrame')
         header.pack(fill='x', pady=(0, 18))
+        self._header = header
+        self._midna_host = None
+        self._chrome_hidden = False
+        self._startup_modal_open = False
         self.page_title, self.page_subtitle = tk.StringVar(), tk.StringVar()
         titles = ttk.Frame(header, style='Page.TFrame')
         titles.pack(side='left', fill='x', expand=True)
@@ -352,9 +364,16 @@ class Application:
         self.pages = {}
         self.seed_name, self.tracker_counts, self.tracker_filter = '', None, 'all'
         self.home_tab = self.tab('home', 'Home', 'Welcome', 'Your adventure at a glance.')
+        self.parties_tab = self.tab('parties', 'My Games', 'My Games',
+                                   'Find each adventure with its seed and its save.')
         self.settings_tab = self.tab('newseed', 'New seed', 'New seed', 'Pick an adventure, then generate it.')
         self.tracker_tab = self.tab('tracker', 'Tracker', 'Tracker', 'What you found, and what you can reach now.')
         self.multiworld_tab = self.tab('multiworld', 'Multiworld', 'Multiworld', 'Play with friends through Archipelago. Three steps.')
+        self.midna_tab = ttk.Frame(self.tabs, style='Page.TFrame')
+        self.tabs.add(self.midna_tab, text="Midna's Devotion (Mods)")
+        self.pages['midnas_devotion'] = (self.midna_tab, "Midna's Devotion (Mods)", '')
+        self._build_midna_embedded_tab()
+        self._add_mod_manager_sidebar_action()
         self.sidebar.gap()
         self.setup_tab = self.tab('setup', 'Setup', 'Setup', 'Where your game lives. Set once.')
         self.spoiler_tab = self.tab('spoiler', 'Spoiler', 'Spoiler', 'Every reward of the open seed. Reveal only if you want to know.')
@@ -363,6 +382,7 @@ class Application:
         self.home_body, self.settings_body = self.scrollable(self.home_tab), self.scrollable(self.settings_tab)
         self.multiworld_body, self.setup_body = self.scrollable(self.multiworld_tab), self.scrollable(self.setup_tab)
         self.build_home()
+        self.build_parties()
         self.build_setup()
         self.build_categories()
         self.build_tracker()
@@ -374,19 +394,65 @@ class Application:
         self.update_home()
         bottom = ttk.Frame(outer, style='Page.TFrame')
         bottom.pack(side='bottom', fill='x', pady=(12, 0), before=self.tabs)
+        self._bottom = bottom
         self.progress = ttk.Progressbar(bottom, mode='indeterminate', length=120)
         ttk.Label(bottom, textvariable=self.status, style='Page.TLabel', wraplength=760).pack(side='left', fill='x')
         self.show_page('home')
         self.root.protocol('WM_DELETE_WINDOW', self.close)
         self.register_hotkey()
         self.tracker_search.trace_add('write', lambda *args: self.render_tracker())
-        root.after(100, self.poll)
+        self._after_ids = set()
+        self.root.bind("<Destroy>", self._on_root_destroy, add="+")
+        self._schedule_after(100, self.poll)
         updater.cleanup()
         if self.check_updates.get():
-            root.after(2500, lambda: self.check_for_updates(silent=True))
-        root.after(1800, self.tracker_tick)
-        root.after(50, self.restore_last_artifact)
-        root.after(60, self.start_turbo)
+            self._schedule_after(2500, lambda: self.check_for_updates(silent=True))
+        self._schedule_after(1800, self.tracker_tick)
+        self._schedule_after(50, self.restore_last_artifact)
+        self._schedule_after(60, self.start_turbo)
+
+    def _schedule_after(self, delay_ms, callback):
+        if getattr(self, 'closed', False):
+            return None
+        ids = getattr(self, '_after_ids', None)
+        if ids is None:
+            ids = set()
+            self._after_ids = ids
+        box = [None]
+        def _wrapped():
+            if box[0] is not None:
+                ids.discard(box[0])
+            if getattr(self, 'closed', False):
+                return
+            callback()
+        aid = self.root.after(delay_ms, _wrapped)
+        box[0] = aid
+        ids.add(aid)
+        return aid
+
+    def _on_root_destroy(self, event=None):
+        if event is not None and getattr(event, "widget", None) is not self.root:
+            return
+        self.closed = True
+        self._cancel_all_after()
+        after_id = getattr(self, "_midna_path_sync_after", None)
+        if after_id is not None:
+            try:
+                self.root.after_cancel(after_id)
+            except Exception:
+                pass
+            self._midna_path_sync_after = None
+
+    def _cancel_all_after(self):
+        ids = getattr(self, '_after_ids', None)
+        if not ids:
+            return
+        for aid in list(ids):
+            try:
+                self.root.after_cancel(aid)
+            except Exception:
+                pass
+        ids.clear()
 
     def configure_theme(self):
         self.colors = dict(theme.COLORS, bg=theme.COLORS['surface'], accent=theme.COLORS['green'])
@@ -469,13 +535,38 @@ class Application:
         self.tabs.select(self.pages[key][0])
         self.page_changed()
 
+    def _set_full_bleed_chrome(self, full_bleed: bool) -> None:
+        """Hide or restore outer Tk header/status chrome so the embedded Midna tab fills the viewport."""
+        if full_bleed == self._chrome_hidden:
+            return
+        self._chrome_hidden = full_bleed
+        if full_bleed:
+            self._header.pack_forget()
+            self._bottom.pack_forget()
+            self._outer.configure(padding=(0, 0, 0, 0))
+        else:
+            self._outer.configure(padding=(34, 26, 34, 18))
+            self._header.pack(fill='x', pady=(0, 18), before=self.tabs)
+            self._bottom.pack(side='bottom', fill='x', pady=(12, 0), before=self.tabs)
+
     def page_changed(self):
         current = self.tabs.select()
+        active_key = None
         for key, (frame, title, subtitle) in self.pages.items():
             if str(frame) == current:
+                active_key = key
                 self.sidebar.select(key)
                 self.page_title.set(title)
                 self.page_subtitle.set(subtitle)
+        is_midna = active_key == 'midnas_devotion'
+        self._set_full_bleed_chrome(is_midna)
+        if self._midna_host is not None:
+            if is_midna:
+                self._midna_host.sync_from_randomizer(self.mods.get())
+                self._midna_host.show()
+            else:
+                self._midna_host.hide()
+        self._sync_midna_sidebar_theme(is_midna)
 
     def path_row(self, parent, text, variable, kind):
         frame = ttk.Frame(parent)
@@ -485,9 +576,26 @@ class Application:
         row.pack(fill='x', pady=(5, 0))
         ttk.Entry(row, textvariable=variable).pack(side='left', fill='x', expand=True)
         def choose():
-            value = filedialog.askopenfilename(filetypes=[('NUP game', '*.nup')]) if kind == 'file' else filedialog.askdirectory()
+            current = variable.get().strip()
+            value = (
+                filedialog.askopenfilename(
+                    title='Choose Game File (.nup)',
+                    initialdir=current,
+                    filetypes=[('NUP game', '*.nup')],
+                    parent=self.root,
+                )
+                if kind == 'file'
+                else filedialog.askdirectory(
+                    title='Choose Folder',
+                    initialdir=current,
+                    parent=self.root,
+                )
+            )
             if value:
-                variable.set(value)
+                if kind == 'directory' and variable is self.mods:
+                    value = self._normalize_chosen_mods_dir(value)
+                if value:
+                    variable.set(value)
         ttk.Button(row, text='Browse…', command=choose).pack(side='right', padx=(8, 0))
 
     def build_setup(self):
@@ -568,7 +676,7 @@ class Application:
         hero = ttk.Frame(parent, style='Hero.TFrame', padding=(28, 24, 28, 24))
         hero.pack(fill='x', pady=(0, 6))
         ttk.Label(hero, text='CURRENT ADVENTURE', style='HeroField.TLabel').pack(anchor='w')
-        ttk.Label(hero, textvariable=self.home_seed, style='HeroTitle.TLabel').pack(anchor='w', pady=(4, 14))
+        ttk.Label(hero, textvariable=self.home_seed, style='HeroTitle.TLabel', wraplength=650).pack(anchor='w', pady=(4, 14))
         self.home_bar = ttk.Progressbar(hero, style='Hero.Horizontal.TProgressbar', maximum=1, value=0)
         self.home_bar.pack(fill='x')
         row = ttk.Frame(hero, style='HeroIn.TFrame')
@@ -583,7 +691,7 @@ class Application:
         links = ttk.Frame(parent, style='Page.TFrame')
         links.pack(fill='x', pady=(0, 12))
         for text, command in [('Open a seed…', self.open_artifact), ('Open the folder', self.open_folder),
-                              ('Spoiler', self.show_spoilers)]:
+                              ('Spoiler', self.show_spoilers), ('Mod Manager', self.launch_mod_manager)]:
             ttk.Button(links, text=text, style='Page.Link.TButton', command=command).pack(side='left', padx=(4, 14))
         tiles = ttk.Frame(parent, style='Page.TFrame')
         tiles.pack(fill='x', pady=(0, 14))
@@ -626,7 +734,7 @@ class Application:
         if not hasattr(self, 'home_tiles'):
             return
         counts = self.tracker_counts if self.tracker else None
-        self.home_seed.set(self.seed_name or 'No adventure yet')
+        self.home_seed.set(self.party_context['name'] if self.party_context else self.seed_name or 'No adventure yet')
         if counts:
             self.home_bar.configure(maximum=max(counts['total'], 1), value=counts['done'])
             self.home_progress.set(f'{counts["done"]} / {counts["total"]} found')
@@ -714,13 +822,12 @@ class Application:
 
     PRESET_CARDS = [('prudent', 'Chests only', 'A gentle first run: chests are shuffled, keys and enemies stay as usual.'),
                     ('ap_defaults', 'Classic', 'The standard Archipelago rules. The recommended balance.'),
-                    ('everything', 'Everything', 'Shops, pots, crates, grass, rocks and enemy souls join in.')]
+                    ('everything', 'Everything', 'Shops, songs, pots, crates, grass, rocks and enemy souls join in.')]
 
     def build_categories(self):
         parent = self.settings_body
         self.full_enabled = tk.BooleanVar(value=True)
         self.full_vars, self.category_controls = {}, {}
-        self.full_reason = tk.StringVar(value='Select a setting to read what it does.')
         self.customize_label, self.customize_hint = tk.StringVar(value='Customize settings  ▸'), tk.StringVar()
         grid = ttk.Frame(parent, style='Page.TFrame')
         grid.pack(fill='x', pady=(0, 14))
@@ -746,7 +853,6 @@ class Application:
         ttk.Label(row, textvariable=self.customize_hint, style='Page.TLabel').pack(side='left')
         self.details = ttk.Frame(parent, style='Page.TFrame')
         details = self.details
-        ttk.Label(details, textvariable=self.full_reason, style='Page.TLabel', wraplength=780, justify='left').pack(anchor='w', padx=4, pady=(0, 10))
         visible = {}
         for option in rando_options.OPTIONS:
             if option.kind in ('items', 'list'):
@@ -1010,6 +1116,8 @@ class Application:
         self.update_archipelago_controls()
 
     def toggle_archipelago(self):
+        if self.busy:
+            return
         from oot_rando.archipelago.client import ArchipelagoClient, ClientError
         if self.ap_client:
             self.stop_archipelago()
@@ -1025,6 +1133,8 @@ class Application:
             self.ap_status.set(str(error))
             return
         self.write_app_state(ap_address=self.ap_address.get().strip())
+        if self.party_context:
+            self.party_library.set_address(self.party_context['id'], self.ap_address.get())
         self.ap_client, self.ap_log_seen = client, 0
         self.ap_log.configure(state='normal')
         self.ap_log.delete('1.0', 'end')
@@ -1088,15 +1198,222 @@ class Application:
         except OSError:
             pass
 
+    def _prompt_longshot_channel(self, channels, default_channel=None):
+        """Modal picker shown when 2+ Longshot channels (stable / RC / nightly) are installed."""
+        if not channels:
+            return None
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Choose Longshot Channel")
+        dlg.transient(self.root)
+        dlg.resizable(False, False)
+        dlg.configure(background=self.colors["page"])
+
+        frame = ttk.Frame(dlg, padding=(22, 18), style="Page.TFrame")
+        frame.pack(fill="both", expand=True)
+        ttk.Label(
+            frame,
+            text="Multiple Longshot channels detected",
+            style="Heading.TLabel",
+        ).pack(anchor="w")
+        ttk.Label(
+            frame,
+            text="Choose which Longshot installation OoT Randomizer and Midna" + chr(39) + "s Devotion should use:",
+            style="Muted.TLabel",
+            wraplength=460,
+            justify="left",
+        ).pack(anchor="w", pady=(4, 12))
+
+        default_key = default_channel if any(c["channel"] == default_channel for c in channels) else channels[0]["channel"]
+        selected_var = tk.StringVar(value=default_key)
+        for ch in channels:
+            lbl = ch["label"]
+            ver = ch["version_name"]
+            text = f"{lbl}  —  {ver}"
+            ttk.Radiobutton(
+                frame,
+                text=text,
+                value=ch["channel"],
+                variable=selected_var,
+            ).pack(anchor="w", pady=3)
+            ttk.Label(
+                frame,
+                text="    " + str(ch["mods_dir"]),
+                style="Small.TLabel",
+                wraplength=460,
+            ).pack(anchor="w", pady=(0, 6))
+
+        chosen = {"value": None}
+
+        def confirm(_event=None):
+            key = selected_var.get()
+            chosen["value"] = next((c for c in channels if c["channel"] == key), channels[0])
+            dlg.destroy()
+
+        def cancel(_event=None):
+            dlg.destroy()
+
+        btns = ttk.Frame(frame, style="Page.TFrame")
+        btns.pack(fill="x", pady=(12, 0))
+        ttk.Button(btns, text="Cancel", command=cancel).pack(side="right", padx=(8, 0))
+        ttk.Button(btns, text="Use Selected Channel", style="Accent.TButton", command=confirm).pack(side="right")
+
+        dlg.bind("<Return>", confirm)
+        dlg.bind("<Escape>", cancel)
+        dlg.protocol("WM_DELETE_WINDOW", cancel)
+        dlg.update_idletasks()
+        try:
+            rx = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - dlg.winfo_width()) // 2)
+            ry = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - dlg.winfo_height()) // 2)
+            dlg.geometry(f"+{rx}+{ry}")
+        except Exception:
+            pass
+        self._startup_modal_open = True
+        try:
+            dlg.grab_set()
+            self.root.wait_window(dlg)
+        finally:
+            self._startup_modal_open = False
+        return chosen["value"]
+
+    def _normalize_chosen_mods_dir(self, raw_path):
+        """Auto-resolve picked port root (v3.x.x) or Longshot channel root to its mods/ directory."""
+        from oot_rando import pc_port
+        norm = pc_port.normalize_port_mods_dir(raw_path)
+        if not norm:
+            return ""
+        p = Path(norm)
+        if p.name.upper() == TITLE or (p.name.lower() == "mods" and pc_port.is_port_folder(p.parent)):
+            return norm
+        info = pc_port.resolve_longshot_update(norm)
+        if info["status"] == "choose_channel":
+            chosen = self._prompt_longshot_channel(info["channels"], default_channel=info["current_channel"])
+            return str(chosen["mods_dir"]) if chosen is not None else ""
+        if info["recommended"] is not None:
+            return str(info["recommended"]["mods_dir"])
+        return norm
+
+    def _resolve_stale_mods_path(self, stale_mods):
+        """Resolve a deleted Longshot version mods path to the current valid installation if available."""
+        from oot_rando import pc_port
+        info = pc_port.resolve_longshot_update(stale_mods)
+        if info["status"] == "upgraded" and info["recommended"] is not None:
+            return str(info["recommended"]["mods_dir"])
+        if info["status"] == "choose_channel":
+            chosen = self._prompt_longshot_channel(info["channels"], default_channel=info["current_channel"])
+            if chosen is not None:
+                return str(chosen["mods_dir"])
+        return ""
+
+    def _reconcile_longshot_installation(self):
+        """Detect Longshot updates or multi-channel installs at startup and migrate Setup, Parties, and Midna."""
+        from oot_rando import pc_port
+
+        candidates = []
+        cur_mods = self.mods.get().strip()
+        if cur_mods:
+            candidates.append(cur_mods)
+        if self.party_library and self.party_library.active_id:
+            try:
+                active = self.party_library.get(self.party_library.active_id)
+                if active.get("mods") and active["mods"] not in candidates:
+                    candidates.append(active["mods"])
+            except Exception:
+                pass
+
+        info = None
+        source_mods = ""
+        for cand in candidates:
+            probe = pc_port.resolve_longshot_update(cand)
+            if probe["status"] != "not_longshot":
+                info = probe
+                source_mods = cand
+                break
+
+        if info is None:
+            return ""
+
+        chosen = None
+        if info["status"] == "choose_channel":
+            chosen = self._prompt_longshot_channel(info["channels"], default_channel=info["current_channel"])
+            if chosen is None:
+                return ""
+        elif info["status"] == "upgraded":
+            chosen = info["recommended"]
+        else:
+            # Even when Setup already points at v3.2.0, migrate any leftover stale parties under the same root.
+            if self.party_library is not None and info["recommended"] is not None:
+                try:
+                    migrated = self.party_library.migrate_mods_directory(
+                        str(info["recommended"]["mods_dir"]),
+                        root=info["root"],
+                    )
+                    if migrated:
+                        self.render_parties()
+                except Exception:
+                    pass
+            return ""
+
+        new_mods = str(chosen["mods_dir"])
+        migrated = []
+        if self.party_library is not None:
+            try:
+                migrated = self.party_library.migrate_mods_directory(
+                    new_mods,
+                    old_mods=source_mods,
+                    root=info["root"],
+                )
+            except Exception:
+                migrated = []
+
+        self.mods.set(new_mods)
+        cur_nup = self.nup.get().strip()
+        if cur_nup and not Path(cur_nup).is_file():
+            found_nup = pc_port.resolve_stale_nup_path(cur_nup, new_mods, longshot_root=info.get("root"))
+            if found_nup is not None:
+                self.nup.set(str(found_nup))
+        cur_save = self.save_path.get().strip()
+        if cur_save and not Path(cur_save).exists():
+            found_save = pc_port.resolve_stale_port_subpath(cur_save, source_mods, new_mods)
+            if found_save is not None:
+                self.save_path.set(str(found_save))
+            elif self.auto_save.get():
+                self.save_path.set("")
+        try:
+            from oot_rando.midnas_devotion.core.config import AppConfig
+            AppConfig().sync_from_randomizer(new_mods, persist=True)
+        except Exception:
+            pass
+        if self._midna_host is not None and self._midna_host.is_mounted:
+            self._midna_host.sync_from_randomizer(new_mods, refresh_always=True)
+        if migrated:
+            self.render_parties()
+
+        old_ver = Path(source_mods).parent.name if source_mods else ""
+        old_chan = info.get("current_channel") or ""
+        old_desc = f"{old_chan}/{old_ver}".strip("/") if old_ver else source_mods
+        new_desc = chosen["channel"] + "/" + chosen["version_name"]
+        noun = 'party' if len(migrated) == 1 else 'parties'
+        extra = f" (migrated {len(migrated)} {noun})" if migrated else ""
+        return f"Longshot updated: {old_desc} → {new_desc}{extra}."
+
     def restore_last_artifact(self):
+        ls_notice = self._reconcile_longshot_installation()
+        if self.restore_party():
+            if ls_notice:
+                cur_status = self.status.get()
+                self.status.set(ls_notice + ("  " + cur_status if cur_status else ""))
+            return
+        if ls_notice:
+            self.status.set(ls_notice)
         last = self.app_state.get('last_artifact')
         if not last or self.artifact or not (Path(last) / 'manifest.json').is_file():
             return
+        prefix = (ls_notice + "  ") if ls_notice else ""
         try:
             self.use_artifact(last)
-            self.status.set('Last seed reloaded: ' + Path(last).name)
+            self.status.set(prefix + "Last seed reloaded: " + Path(last).name)
         except Exception as error:
-            self.status.set('Last seed not reloaded: ' + str(error))
+            self.status.set(prefix + "Last seed not reloaded: " + str(error))
 
     # ---------------------------------------------------------- saves
     def hookshot_root(self):
@@ -1106,11 +1423,17 @@ class Application:
 
     def newest_save(self):
         """progress.sav most recently written, across every save and slot folder."""
+        if self.party_context:
+            saves = Path(self.party_context['saves'])
+            candidates = list(saves.glob('slot_*/progress.sav'))
+            return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
         return newest_save(self.hookshot_root(), TITLE, self.mods.get() or None)
 
     def follow_newest_save(self):
         newest = self.newest_save()
         if newest is None:
+            if self.party_context:
+                self.save_path.set('')
             if not self.save_path.get():
                 self.connection_status.set('No save found. Start a game and save, or choose progress.sav.')
             return False
@@ -1144,7 +1467,7 @@ class Application:
             self.refresh_tracker()
 
     def choose_save(self):
-        value = filedialog.askopenfilename(title='Choose the save of this game', filetypes=[('Hookshot progress', 'progress.sav'), ('Saves', '*.sav')])
+        value = filedialog.askopenfilename(title='Choose the save of this game', initialdir=self.save_path.get().strip(), filetypes=[('Hookshot progress', 'progress.sav'), ('Saves', '*.sav')], parent=getattr(self, 'root', None))
         if value:
             # A save picked by hand is kept: stop following the newest one.
             self.auto_save.set(False)
@@ -1169,6 +1492,9 @@ class Application:
     def tracker_tick(self):
         if self.closed:
             return
+        if self.busy:
+            self._schedule_after(1000, self.tracker_tick)
+            return
         try:
             if self.auto_save.get():
                 self.follow_newest_save()
@@ -1178,11 +1504,15 @@ class Application:
             self.refresh_tracker()
         if self.turbo and self.turbo.last_hold:
             self.turbo_status.set(self.turbo.status + ' — last: ' + self.turbo.last_hold)
-        self.root.after(1000, self.tracker_tick)   # live memory: ~1 s; the save path is cheap to stat
+        self._schedule_after(1000, self.tracker_tick)   # live memory: ~1 s; the save path is cheap to stat
 
     def refresh_tracker(self):
-        if not self.tracker or self.tracker_refreshing:
+        if self.busy or not self.tracker or self.tracker_refreshing:
             return
+        if self.party_context and self.save_path.get() and not Path(self.save_path.get()).resolve().is_relative_to(
+                Path(self.party_context['saves'])):
+            self.save_path.set('')
+            self.follow_newest_save()
         tracker = self.tracker
         tracker.save_path = self.save_path.get()
         self.tracker_refreshing = True
@@ -1199,7 +1529,6 @@ class Application:
         label, help_text = OPTION_COPY.get(option.name, (option.label, option.help))
         tip = option_tip(option, label, help_text)
         def describe():
-            self.full_reason.set(label + ' — ' + (help_text or 'Choose the value that suits your game.'))
             self.update_presets()
         if option.kind in ('items', 'list'):
             variable = ItemsVar() if option.kind == 'items' else ListVar(option)
@@ -1273,7 +1602,7 @@ class Application:
         self.update_category_states()
 
     def import_ap_yaml(self):
-        name = filedialog.askopenfilename(filetypes=[('Archipelago YAML', '*.yaml *.yml')])
+        name = filedialog.askopenfilename(title='Import Archipelago YAML', filetypes=[('Archipelago YAML', '*.yaml *.yml')], parent=getattr(self, 'root', None))
         if name:
             try:
                 values, ignored = rando_options.from_ap_yaml(Path(name).read_text(encoding='utf-8'))
@@ -1291,7 +1620,7 @@ class Application:
     def export_ap_yaml(self):
         try:
             values = rando_options.validate(self.full_values())
-            name = filedialog.asksaveasfilename(defaultextension='.yaml', filetypes=[('Archipelago YAML', '*.yaml')])
+            name = filedialog.asksaveasfilename(title='Export Archipelago YAML', defaultextension='.yaml', filetypes=[('Archipelago YAML', '*.yaml')], parent=getattr(self, 'root', None))
             if name:
                 Path(name).write_text(rando_options.to_ap_yaml(values, open_forest=self.options['open_forest'].get()),
                                       encoding='utf-8')
@@ -1310,8 +1639,8 @@ class Application:
             if not player:
                 return
             text = bridge.player_yaml(values, self.options['open_forest'].get(), player)
-            name = filedialog.asksaveasfilename(defaultextension='.yaml', initialfile=f'{player}.yaml',
-                                                filetypes=[('Archipelago YAML', '*.yaml')])
+            name = filedialog.asksaveasfilename(title='Export Multiworld YAML', defaultextension='.yaml', initialfile=f'{player}.yaml',
+                                                filetypes=[('Archipelago YAML', '*.yaml')], parent=getattr(self, 'root', None))
             if name:
                 Path(name).write_text(text, encoding='utf-8')
                 self.status.set('Multiworld YAML exported.')
@@ -1326,8 +1655,8 @@ class Application:
             nup = Path(self.nup.get())
             if not nup.is_file():
                 raise ValueError('Select the local NUP file.')
-            name = filedialog.asksaveasfilename(defaultextension='.apworld', initialfile='oot_remake.apworld',
-                                                filetypes=[('Archipelago world', '*.apworld')])
+            name = filedialog.asksaveasfilename(title='Export Archipelago World', defaultextension='.apworld', initialfile='oot_remake.apworld',
+                                                filetypes=[('Archipelago world', '*.apworld')], parent=getattr(self, 'root', None))
             if not name:
                 return
 
@@ -1342,11 +1671,12 @@ class Application:
     def generate_from_patch(self):
         from oot_rando.archipelago import bridge
         try:
-            name = filedialog.askopenfilename(filetypes=[('Archipelago patch', '*' + bridge.PATCH_SUFFIX)])
+            name = filedialog.askopenfilename(title='Choose Archipelago Patch', filetypes=[('Archipelago patch', '*' + bridge.PATCH_SUFFIX)], parent=getattr(self, 'root', None))
             if not name:
                 return
             settings = bridge.settings_from_patch(
                 bridge.load_patch(name), self.options['skulltulas_always_present'].get()).validate_supported()
+            self.party_name.set('')
             nup = Path(self.nup.get())
             if not nup.is_file():
                 raise ValueError('Select the local NUP file.')
@@ -1419,7 +1749,7 @@ class Application:
             self.error(error)
 
     def import_settings(self):
-        name = filedialog.askopenfilename(filetypes=[('JSON settings', '*.json')])
+        name = filedialog.askopenfilename(title='Import Settings', filetypes=[('JSON settings', '*.json')], parent=getattr(self, 'root', None))
         if name:
             try:
                 value = json.loads(Path(name).read_text(encoding='utf-8'))
@@ -1433,7 +1763,7 @@ class Application:
     def export_settings(self):
         try:
             settings = self.get_settings()
-            name = filedialog.asksaveasfilename(defaultextension='.json', filetypes=[('JSON settings', '*.json')])
+            name = filedialog.asksaveasfilename(title='Export Settings', defaultextension='.json', filetypes=[('JSON settings', '*.json')], parent=getattr(self, 'root', None))
             if name:
                 Path(name).write_text(json.dumps({'format': 'oot-remake-settings-v1', 'settings': settings.to_dict()}, ensure_ascii=False, indent=2), encoding='utf-8')
                 self.status.set('Settings exported.')
@@ -1463,7 +1793,10 @@ class Application:
             settings.validate_supported()
             nup = Path(self.nup.get())
             if not nup.is_file():
-                raise ValueError('Select the local NUP file.')
+                raise ValueError("Select the local NUP file.")
+            if self._using_real_generator():
+                from oot_rando.randomizer.randomizer_services import validate_nup_file
+                validate_nup_file(nup)
             mods = validate_mod_directory(self.mods.get())
             self.start_generation(nup, mods, settings)
         except Exception as error:
@@ -1474,40 +1807,29 @@ class Application:
         try:
             settings = self.regen_settings
             if settings is None or self.artifact is None:
-                raise ValueError('This seed is already up to date.')
+                raise ValueError("This seed is already up to date.")
+            settings.validate_supported()
             nup = Path(self.nup.get())
             if not nup.is_file():
-                raise ValueError('Select the local NUP file.')
+                raise ValueError("Select the local NUP file.")
+            if self._using_real_generator():
+                from oot_rando.randomizer.randomizer_services import validate_nup_file
+                validate_nup_file(nup)
             mods = validate_mod_directory(self.artifact.parent)
             if not messagebox.askyesno(
                     'Regenerate the seed',
                     f'Seed "{settings.seed}" was made by an older version of the randomizer. Generate it '
                     f'again with version {APP_VERSION}, with the same name and settings?\n\n'
-                    'The current copy is moved to the archive (never deleted). The new version may '
+                    'A named updated party keeps a copy of your progress; the original party is preserved. The new version may '
                     'place items differently: a new game may be needed.'):
                 return
 
-            self.start_generation(nup, mods, settings)
+            self.generate_party(nup, mods, settings, continuing=self.party_context)
         except Exception as error:
             self.error(error)
 
     def start_generation(self, nup, mods, settings):
-        def job(progress):
-            installed = generate_isolated(nup, mods, settings, ARCHIVE, progress)
-            return installed, installed
-        self.run_job(job, self.generated_and_installed)
-
-    def generated_and_installed(self, result):
-        directory, installed = result
-        previous = self.artifact_manifest   # seed replaced by this one (same folder if regenerated)
-        self.use_artifact(directory)
-        self.show_page('tracker')
-        self.status.set('Seed generated and installed: ' + str(installed))
-        warning = qol_seed_warning(Path(installed).parent)
-        messagebox.showinfo('Seed ready', 'Seed installed in:\n' + str(installed)
-                            + '\n\nStart a new game to enable automatic tracking and first collections.'
-                            + ('\n\n' + warning if warning else ''))
-        self.offer_save_migration(self.artifact_manifest, previous)
+        self.generate_party(nup, mods, settings)
 
     def offer_save_migration(self, manifest, previous=None):
         """Offer to give the saves of this seed the start values they never received.
@@ -1517,7 +1839,17 @@ class Application:
         the player agrees, and each save is backed up first (tracker/save_patch.py)."""
         from oot_rando.tracker import save_patch
         try:
-            paths = find_save_slots(self.hookshot_root(), TITLE, self.mods.get() or None)
+            from oot_rando.tracker.auto_tracker import resolve_party_save_root
+            party_saves = None
+            if self.party_context:
+                rec_saves = Path(self.party_context["saves"])
+                party_saves = (
+                    rec_saves
+                    if rec_saves.is_dir()
+                    else resolve_party_save_root(rec_saves, mods=self.party_context.get("mods"))
+                )
+            paths = (list(party_saves.glob("slot_*/progress.sav")) if party_saves is not None
+                     else find_save_slots(self.hookshot_root(), TITLE, self.mods.get() or None))
             candidates = save_patch.migration_candidates(paths, manifest, previous)
         except Exception as error:   # never block the installation on a save scan
             self.status.set('Saves not checked: ' + str(error))
@@ -1559,7 +1891,10 @@ class Application:
         self.status.set(text.splitlines()[0])
 
     def use_artifact(self, directory):
+        if self.busy:
+            return
         manifest, _ = read_artifact(directory)
+        self.match_party(directory)
         self.artifact, self.artifact_manifest = Path(directory), manifest
         self.result.set('Seed: ' + manifest['settings']['seed'] + '\nIdentity: ' + manifest['seed_id'][:16]
                         + f' • {len(manifest["files"])} resources checked\n' + str(directory))
@@ -1578,7 +1913,7 @@ class Application:
         if manifest.get('tracking', {}).get('new_save_required'):
             self.result.set(self.result.get() + '\nA new game is needed for automatic tracking.')
         self.seed_name = (manifest['settings']['seed'] or manifest['seed_id'][:12])[:28]
-        self.seed_chip.set('Seed  ' + self.seed_name)
+        self.seed_chip.set(self.party_chip() if self.party_context else 'Seed  ' + self.seed_name)
         self.write_app_state(last_artifact=str(Path(directory).resolve()))
         if self.auto_save.get():
             self.follow_newest_save()
@@ -1587,8 +1922,175 @@ class Application:
         self.reset_spoiler()
         self.status.set('Seed opened.')
 
+    def _add_mod_manager_sidebar_action(self) -> None:
+        """Register the Midna's Devotion entry in the Tkinter sidebar with a downscaled icon."""
+        from oot_rando.midnas_devotion.launcher import resolve_asset
+        if not hasattr(self.sidebar, 'add_action'):
+            return
+        icon_p = resolve_asset('icon.png')
+        img = None
+        if os.path.isfile(icon_p):
+            try:
+                img = tk.PhotoImage(file=icon_p)
+                while img.width() > 20 or img.height() > 20:
+                    img = img.subsample(2, 2)
+                # Hold a reference on self so Tk does not garbage-collect the PhotoImage.
+                self._midna_sidebar_icon = img
+            except Exception:
+                img = None
+        self.sidebar.add_action('midnas_devotion', "Midna's Devotion (Mods)", self.launch_mod_manager, icon_image=img)
+
+    def _is_midna_tab_active(self) -> bool:
+        """Return True when the embedded Midna's Devotion notebook tab is currently selected."""
+        try:
+            current = self.tabs.select()
+            frame = self.pages.get('midnas_devotion', (None,))[0]
+            return frame is not None and str(frame) == current
+        except Exception:
+            return False
+
+    def _on_mods_dir_changed(self, *_args) -> None:
+        """Persist mods_dir edits and debounce syncing the new path into the embedded Midna tab."""
+        self.write_app_state(mods_dir=self.mods.get())
+        after_id = getattr(self, "_midna_path_sync_after", None)
+        if after_id is not None:
+            try:
+                self.root.after_cancel(after_id)
+            except Exception:
+                pass
+        if getattr(self, "closed", False):
+            self._midna_path_sync_after = None
+            return
+        try:
+            self._midna_path_sync_after = self.root.after(300, self._flush_midna_path_sync)
+        except Exception:
+            self._midna_path_sync_after = None
+
+    def _flush_midna_path_sync(self) -> None:
+        """Deliver the debounced mods_dir update to Midna once mounted."""
+        self._midna_path_sync_after = None
+        if getattr(self, "closed", False):
+            return
+        if self._midna_host is not None and self._midna_host.is_mounted:
+            self._midna_host.sync_from_randomizer(self.mods.get())
+
+    def _sync_midna_sidebar_theme(self, is_midna: Optional[bool] = None, forced_theme: str = "") -> None:
+        """Match the Tk sidebar and notebook chrome to Midna's active theme when its tab is visible."""
+        if not hasattr(self.sidebar, 'set_midna_style'):
+            return
+        active_tab = self._is_midna_tab_active() if is_midna is None else bool(is_midna)
+        if not active_tab:
+            # Fast-path: never read Midna's AppConfig from disk while switching non-Midna tabs.
+            self.sidebar.set_midna_style(False)
+            self._apply_midna_chrome_style(False)
+            return
+        theme_id = forced_theme.strip().lower()
+        if not theme_id and self._midna_host is not None and getattr(self._midna_host, '_window', None) is not None:
+            try:
+                theme_id = str(self._midna_host._window.cfg.effective_ui_theme or "").strip().lower()
+            except Exception:
+                theme_id = ""
+        if not theme_id:
+            try:
+                from oot_rando.midnas_devotion.core.config import AppConfig
+                theme_id = str(AppConfig().effective_ui_theme or "").strip().lower()
+            except Exception:
+                theme_id = "mozencaz"
+        midna_dark = bool(theme_id == "araragi")
+        self.sidebar.set_midna_style(midna_dark)
+        self._apply_midna_chrome_style(midna_dark)
+
+    def _apply_midna_chrome_style(self, active: bool) -> None:
+        """Switch Tk root/notebook chrome between dark borderless Midna styling and default parchment."""
+        if getattr(self, "_midna_chrome_active", None) == active:
+            return
+        self._midna_chrome_active = active
+        if not hasattr(self, "_default_root_bg"):
+            self._default_root_bg = self.root.cget("background")
+        if not getattr(self, "_midna_tk_styles_ready", False):
+            style = ttk.Style(self.root)
+            dark = "#121824"
+            style.configure("MidnaPage.TFrame", background=dark, borderwidth=0, relief="flat")
+            style.configure(
+                "Midna.TNotebook",
+                background=dark,
+                bordercolor=dark,
+                lightcolor=dark,
+                darkcolor=dark,
+                focuscolor=dark,
+                borderwidth=0,
+                padding=0,
+                tabmargins=[0, 0, 0, 0],
+            )
+            style.layout("Midna.TNotebook", [("Notebook.client", {"sticky": "nswe"})])
+            style.layout("Midna.TNotebook.Tab", [])
+            self._midna_tk_styles_ready = True
+
+        if active:
+            self.root.configure(background="#121824")
+            self._outer.configure(style="MidnaPage.TFrame")
+            self.tabs.configure(style="Midna.TNotebook", takefocus=False)
+            self.midna_tab.configure(style="MidnaPage.TFrame")
+        else:
+            self.root.configure(background=self._default_root_bg)
+            self._outer.configure(style="Page.TFrame")
+            self.tabs.configure(style="Pages.TNotebook")
+            self.midna_tab.configure(style="Page.TFrame")
+        self.root.update_idletasks()
+
+    def _build_midna_embedded_tab(self) -> None:
+        """Create the Tkinter host frame and wire theme/fallback callbacks for ``EmbeddedMidnaHost``."""
+        from oot_rando.midnas_devotion.ui.embedded_host import EmbeddedMidnaHost
+        container = tk.Frame(self.midna_tab, background='#161a21', highlightthickness=0, bd=0)
+        container.pack(fill='both', expand=True)
+        def _on_theme_changed(tid: str) -> None:
+            self._sync_midna_sidebar_theme(forced_theme=tid)
+            try:
+                self.root.after_idle(lambda t=tid: self._sync_midna_sidebar_theme(forced_theme=t))
+            except Exception:
+                pass
+
+        def _jump_to_setup() -> None:
+            try:
+                self.root.after_idle(lambda: self.show_page('setup'))
+            except Exception:
+                pass
+
+        self._midna_host = EmbeddedMidnaHost(
+            self.root,
+            container,
+            on_fallback_window=self.launch_mod_manager_external,
+            on_theme_changed=_on_theme_changed,
+            on_jump_to_setup=_jump_to_setup,
+            initial_mods_getter=lambda: self.mods.get(),
+        )
+
+    def launch_mod_manager(self) -> None:
+        """Switch the main notebook to the embedded Midna's Devotion tab."""
+        self.show_page('midnas_devotion')
+
+    def launch_mod_manager_external(self) -> None:
+        """Fallback launcher: open Midna's Devotion in a standalone process when embedding fails."""
+        import subprocess
+        import sys
+        from oot_rando.paths import FROZEN
+        try:
+            if FROZEN:
+                cmd = [sys.executable, 'mod-manager']
+            else:
+                cmd = [sys.executable, '-m', 'oot_rando', 'mod-manager']
+            subprocess.Popen(cmd, close_fds=True)
+        except OSError as exc:
+            messagebox.showerror('Mod Manager', f"Could not launch Midna's Devotion: {exc}")
+
     def open_artifact(self):
-        directory = filedialog.askdirectory(title='Choose the folder holding manifest.json')
+        if self.busy:
+            return
+        directory = filedialog.askdirectory(
+            title="Choose the folder holding manifest.json",
+            initialdir=self.mods.get().strip(),
+            parent=getattr(self, "root", None),
+        )
         if directory:
             try:
                 self.use_artifact(directory)
@@ -1597,7 +2099,7 @@ class Application:
 
     def open_folder(self):
         if self.artifact:
-            os.startfile(str(self.artifact))
+            open_in_file_manager(self.artifact)
 
     def show_spoilers(self):
         self.show_page('spoiler')
@@ -1734,8 +2236,8 @@ class Application:
     def export_spoiler(self):
         try:
             report = self.load_spoiler_report()
-            name = filedialog.asksaveasfilename(defaultextension='.txt', filetypes=[('Text', '*.txt')],
-                                                initialfile='spoiler_' + (report['seed'] or report['seed_id'][:16]) + '.txt')
+            name = filedialog.asksaveasfilename(title='Export Spoiler Log', defaultextension='.txt', filetypes=[('Text', '*.txt')],
+                                                initialfile='spoiler_' + (report['seed'] or report['seed_id'][:16]) + '.txt', parent=getattr(self, 'root', None))
             if name:
                 spoiler_report.write_text(report, name)
                 self.status.set('Spoiler exported: ' + name)
@@ -1749,11 +2251,13 @@ class Application:
             if not path.is_file():
                 # Seeds generated before spoiler.txt existed: create it next to spoiler.json.
                 spoiler_report.write_text(report, path)
-            os.startfile(str(path))
+            open_in_file_manager(path)
         except Exception as error:
             self.error(error)
 
     def load_tracker(self):
+        if self.busy:
+            return
         self.tracker, self.current_checks = None, []
         self.tracker_details, self.tracker_signature = {}, None
         self.tracker_summary.set('Open a seed to show its locations.')
@@ -1765,7 +2269,26 @@ class Application:
             manifest, catalogue = read_artifact(self.artifact)
             self.current_checks = catalogue['checks']
             live = live_memory.LiveGameData() if live_memory.supported() else None
-            self.tracker = TrackerSession(self.artifact, self.slot.get(), save_path=self.save_path.get(), live=live)
+            manual_directory = None
+            if self.party_context:
+                ident = self.party_context['id']
+                self.slot.set('party-' + ident)
+                manual_directory = self.party_library.tracker_dir(ident)
+                # A save chosen manually must stay inside the active party's account.
+                if self.save_path.get() and not Path(self.save_path.get()).resolve().is_relative_to(
+                        Path(self.party_context['saves'])):
+                    self.save_path.set('')
+                    self.follow_newest_save()
+            self.tracker = TrackerSession(self.artifact, self.slot.get(), save_path=self.save_path.get(),
+                                          live=live, manual_directory=manual_directory)
+            if self.party_context:
+                imported = self.party_library.folder(self.party_context['id']) / 'imported-tracker.json'
+                if imported.is_file() and not self.tracker.manual.path.exists():
+                    checks = json.loads(imported.read_text(encoding='utf-8'))
+                    if checks.get('seed_id') == self.tracker.seed_id:
+                        for check in set(checks.get('completed', [])) & self.tracker.manual.allowed:
+                            self.tracker.manual.set_completed(check, True)
+                    imported.rename(imported.with_suffix('.imported'))
             self.connection_status.set('Reading at the latest save' if self.save_path.get() else 'Choose a progress.sav file to enable automatic tracking.')
             self.render_tracker()
             self.refresh_tracker()
@@ -1865,6 +2388,8 @@ class Application:
                 tree.update_idletasks()
                 tree.yview_moveto(self.tracker_scroll[container])
             def toggle(event=None, widget=tree):
+                if self.busy or self.tracker is None:
+                    return 'break'
                 selection = widget.selection()
                 if selection and not selection[0].startswith('zone::'):
                     ident = selection[0]
@@ -2170,6 +2695,12 @@ class Application:
                     for button in (self.generate_button, self.qol_button):
                         button.state(['!disabled'])
                     if kind == 'error':
+                        self.render_parties()
+                        if self.party_job_paused:
+                            self.party_job_paused = False
+                            if not self.restore_party():
+                                self.load_tracker()
+                                self.start_turbo()
                         self.error(payload)
                     else:
                         callback, value = payload
@@ -2179,7 +2710,7 @@ class Application:
                             self.error(error)
         except queue.Empty:
             pass
-        self.root.after(100, self.poll)
+        self._schedule_after(100, self.poll)
 
     def save_extra_emulators(self):
         text = self.extra_emulators.get().strip()
@@ -2257,6 +2788,9 @@ class Application:
         if self.busy:
             messagebox.showinfo('Operation running', 'Wait for the generation or analysis to finish before closing.')
             return False
+        if self._midna_host is not None and self._midna_host.is_busy():
+            messagebox.showinfo('Operation running', "Wait for Midna's Devotion to finish applying mods before closing.")
+            return False
         if self.hotkey_thread_id:
             ctypes.windll.user32.PostThreadMessageW(self.hotkey_thread_id, 0x0012, 0, 0)
             self.hotkey_thread.join(timeout=1)
@@ -2270,7 +2804,17 @@ class Application:
         if self.ap_client:
             self.ap_client.stop()
         self.save_extra_emulators()
+        after_id = getattr(self, "_midna_path_sync_after", None)
+        if after_id is not None:
+            try:
+                self.root.after_cancel(after_id)
+            except Exception:
+                pass
+            self._midna_path_sync_after = None
+        if self._midna_host is not None:
+            self._midna_host.destroy()
         self.closed = True
+        self._cancel_all_after()
         self.root.destroy()
         return True
 

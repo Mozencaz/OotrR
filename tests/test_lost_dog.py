@@ -47,6 +47,17 @@ class LostDog(unittest.TestCase):
         with self.assertRaises(ValueError):
             dog.map_from_start(result)
 
+    def test_random_appear_dog_pool_ignores_kakariko_gate(self):
+        import ainb
+        from oot_rando.patching import lost_dog as dog
+        source = self.read(dog.POOL_MODULE)
+        expected = ainb.AINB.from_binary(source).as_dict()
+        expected['Nodes'][dog.POOL_GATE_NODE]['Parameters']['Inputs']['String'][0]['Default Value'] = dog.CHILDHOOD
+        result, _ = dog.pool_from_start(source)
+        self.assertEqual(ainb.AINB.from_binary(result).as_dict(), expected)
+        with self.assertRaises(ValueError):
+            dog.pool_from_start(result)
+
     def test_first_reward_depends_only_on_receipt_not_quest_or_inventory(self):
         from oot_rando.patching import lost_dog as dog
         source = self.read(dog.FLOW)
@@ -82,6 +93,7 @@ class LostDog(unittest.TestCase):
         from oot_rando.patching import lost_dog as dog, story_fixes
         self.assertIn((dog.FLOW, 'lost_dog_reward', dog.reward_until_received), story_fixes.flow_fixes(()))
         self.assertIn((dog.MODULE, 'lost_dog_map', dog.map_from_start), story_fixes.scene_module_fixes())
+        self.assertIn((dog.POOL_MODULE, 'lost_dog_pool', dog.pool_from_start), story_fixes.scene_module_fixes())
 
     def test_new_save_has_no_reward_or_return_receipt(self):
         from oot_rando.patching import lost_dog as dog

@@ -69,6 +69,9 @@ def _run(argv=None):
     if command == 'reload-test':
         from oot_rando.archipelago.reload_test import main as reload_test
         return reload_test(argv)
+    if command in ('mod-manager', 'mods', 'midnas-devotion'):
+        from oot_rando.midnas_devotion.launcher import main as mod_manager
+        return mod_manager(argv)
     print(__doc__)
     return 2
 
@@ -154,6 +157,11 @@ def selftest(argv):
         for name in modules:
             importlib.import_module(name)
         report['modules'] = len(modules)
+        from oot_rando.updater import tls_context
+        # Exercise CA data loading inside the frozen executable, not just imports.
+        report['tls_ca_certificates'] = tls_context().cert_store_stats()['x509_ca']
+        if not report['tls_ca_certificates']:
+            raise RuntimeError('No trusted TLS certificate authorities in this build')
         from oot_rando.logic.rules import Logic
         from oot_rando.logic.world import World
         world = World()

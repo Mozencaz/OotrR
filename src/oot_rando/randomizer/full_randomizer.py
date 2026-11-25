@@ -9,9 +9,10 @@ from types import SimpleNamespace
 
 from oot_rando.logic.rules import Logic, age_member, vanilla_placements
 from oot_rando.logic import rando_options
-from oot_rando.game.remake_world import (PROGRESSIVE, BASE_REQUIRED, STATIC_TIER_SOURCES, item_actor,
+from oot_rando.game.remake_world import (PROGRESSIVE, BASE_REQUIRED, STATIC_TIER_SOURCES, static_tier_gid, item_actor,
                           match_locations, coverage_summary, FOLDER_DUNGEON,
-                          ZONE_LABELS, TRACKED_TYPES, location_zone, source_age, zone_label)
+                          ZONE_LABELS, TRACKED_TYPES, location_zone, source_age, zone_label,
+                          TREASURE_GAME_REWARD)
 from oot_rando.game.item_forms import can_take, form_actor, underwater_actor
 from oot_rando.game.extra_sources import match_sources, area_locations
 from oot_rando.patching.soul_adapter import plan_souls, chest_requirements, soul_label
@@ -176,6 +177,19 @@ CASTLE_JUNK = 'Rupee (1)'
 CASTLE_SONG = 'Zeldas Lullaby'
 
 
+# Adult start (patching/adult_start.py): the first-adult cinematics never play (not at the start,
+# nor when travelling back and forth later), so Rauru's Light Medallion and the Master Sword
+# pull cannot be collected. Both checks hold a green rupee; their items are shuffled elsewhere
+# (the Master Sword is the player's from the start unless it is shuffled).
+ADULT_START_CHECKS = ('Links Pocket', 'ToT Master Sword')
+
+
+def adult_start_check(entry, options):
+    ap = list(entry.get('ap') or ())
+    return (options.get('starting_age') == 'adult' and len(ap) == 1 and ap[0] in ADULT_START_CHECKS
+            and entry.get('source') in ('boss', 'master_sword'))
+
+
 def skipped_castle_check(entry):
     """True for a check of the child castle grounds or one of the castle's gifts."""
     ap = list(entry.get('ap') or ())
@@ -238,6 +252,10 @@ def ap_settings(options, open_forest):
     return values
 
 
+# Ring-dungeon spots checked in game as reachable without any key (remake_world.KNOWN_CHEST_GROUPS).
+KEY_FREE_SPOTS = frozenset({'Fire Temple Near Boss Chest', 'Forest Temple First Room Chest'})
+
+
 class FillError(ValueError):
     pass
 
@@ -261,7 +279,7 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
     sources = enabled_sources(options)
     if extra:
         import copy as _copy
-        chosen = {gid: _copy.deepcopy(e) for gid, e in extra.items() if source_in_scope(e, sources)}
+        chosen = {gid: _copy.deepcopy(e) for gid, e in extra.items() if source_in_scope(e, sources) or adult_start_check(e, options)}
         used = {l for e in matches.values() if e['kind'] in ('exact', 'group') for l in e['ap']}
         match_sources(chosen, data, probe, used)
         for gid, entry in chosen.items():
@@ -290,6 +308,21 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             for location in probe.location_names():
                 if data.vanilla_item(location) == family and data.location_type(location) != 'Chest':
                     location_requirements.setdefault(location, set()).add(family)
+    # A key ring may only land where its dungeon's doors cannot lock it in: the matching of
+    # remake sources to AP locations never checked the remake's own chain locks, so every
+    # location of a ring dungeon needs one key of it (the ring), except verified spots.
+    from oot_rando.patching.key_adapter import small_key_item as _small_key
+    from oot_rando.game.extra_sources import BOSS_HEARTS
+    from oot_rando.game.remake_world import FOLDER_AP_DUNGEON as _AP_DUNGEON
+    for _folder in key_ring_folders(options, seed_key):
+        for _region in data.regions:
+            # Boss rooms carry no dungeon tag: they lie behind the dungeon's own doors too.
+            if (_region.get('dungeon') == _AP_DUNGEON.get(_folder)
+                    or (_region['region_name'].endswith('Boss Room')
+                        and BOSS_HEARTS.get(_folder) in _region.get('locations', {}))):
+                for _location in _region.get('locations', {}):
+                    if _location not in KEY_FREE_SPOTS:
+                        location_requirements.setdefault(_location, set()).add(_small_key(_folder))
     logic = Logic(data, settings, souls['exit_requirements'], location_requirements)
     relevant = set(logic.referenced) | set(souls['items'])
 
@@ -496,6 +529,8 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             item = POOL_FILLER
         if item == 'Rutos Letter' and ruto_letter_removed(options):
             item = 'Bottle'
+        if item == 'Master Sword' and adult_start_check(entry, options) and not options.get('shuffle_master_sword'):
+            item = POOL_FILLER   # held from the start (randomizer_core.starting_pouch_items)
         pool.append(item)
 
     def removable(item):
@@ -539,6 +574,9 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
         # Every shuffled castle check holds a green rupee, reserved in the pool.
         castle_junk = sorted(g for g in shuffled if skipped_castle_check(shuffled[g]))
         pool.extend([CASTLE_JUNK] * len(castle_junk))
+    adult_junk = sorted(g for g in shuffled if adult_start_check(shuffled[g], options))
+    pool.extend([CASTLE_JUNK] * len(adult_junk))
+    castle_junk = castle_junk + adult_junk
     # Whatever was added or replaced above: exactly one item per shuffled check.
     pool = balance_pool(pool, len(shuffled), removable, keep={CASTLE_JUNK: len(castle_junk)})
     logic_locations =sorted(g for g in shuffled if vname(g) in logic.virtual)
@@ -571,10 +609,11 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             canonical_cache[key] = item_actor(item, shuffled[gid]['folder'])
         return canonical_cache[key]
 
-    castle_junk_set = set(castle_junk) if options.get('skip_child_zelda') else None
+    castle_junk_set = set(castle_junk)
+    castle_skipped = bool(options.get('skip_child_zelda'))
 
     def allowed(item, gid):
-        if castle_junk_set and gid in castle_junk_set:
+        if gid in castle_junk_set:
             return item == CASTLE_JUNK
         rule, dungeon = restricted_dungeon.get(item, (None, None))
         if rule == 'dungeon' and folder_dungeon[gid] != dungeon:
@@ -585,7 +624,7 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             return False
         actor = canonical(item, gid)
         song_mode = options.get('shuffle_song_items', 'song')
-        if castle_junk_set is not None and item == CASTLE_SONG:
+        if castle_skipped and item == CASTLE_SONG:
             # The castle skipped, Impa's song has no song location left: it goes
             # anywhere a song can be given, whatever the song mode.
             song_mode = 'everywhere'
@@ -644,10 +683,12 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
     if forced is not None:
         state, collected, spheres = sweep(forced)
         child_missing = child_door_missing(c, forced)
+        soul_missing = sorted(item for item in souls['items'] if not state.has(item))
         sphere_of = {loc[len('Remake|'):]: index for index, sphere in enumerate(spheres)
                      for loc in sphere if loc.startswith('Remake|')}
-        return {'beatable': state.has('Triforce') and not child_missing,
+        return {'beatable': state.has('Triforce') and not child_missing and not soul_missing,
                 'before_adult_missing': child_missing, 'spheres': sphere_of, 'sphere_count': len(spheres),
+                'unreachable_souls': soul_missing,
                 'unreachable': sorted(g for g in logic_locations if vname(g) not in collected),
                 'progressive': progressive_plan(forced, c.natives),
                 # Read by verify: the chests left in place get their opening flag too.
@@ -707,6 +748,10 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
         state, collected, spheres = sweep(placed)
         if not state.has('Triforce'):
             last_error = 'victory not guaranteed'
+            continue
+        soul_missing = sorted(item for item in souls['items'] if not state.has(item))
+        if soul_missing:
+            last_error = 'Unreachable enemy souls: ' + ', '.join(soul_missing)
             continue
         if options['accessibility'] == 'full':
             missing = [g for g in logic_locations if vname(g) not in collected]
@@ -883,7 +928,7 @@ def native_sources(matches, shuffled, extra=None):
                 and entry.get('source', 'chest') in FIXED_LEVEL_SOURCES and entry['variants']):
             natives[gid] = entry
     for location, (family, tier) in STATIC_TIER_SOURCES.items():
-        gid = 'npc#' + location
+        gid = static_tier_gid(location)
         entry = (extra or {}).get(gid)
         if gid in shuffled or entry is None or entry['kind'] == 'junk':
             continue   # a junk gift has no reliable event to change: it stays native
@@ -1048,7 +1093,7 @@ def tracker_checks(data, matches, shuffled):
                        'collection_state': 'unverified', 'logic': entry['kind']})
     for location in sorted(data.location_table):
         areas = data.location_areas(location)
-        if location in covered or data.location_type(location) not in TRACKED_TYPES:
+        if location in covered or location in UNTRACKED_LOCATIONS or data.location_type(location) not in TRACKED_TYPES:
             continue
         if data.location_type(location) in ORIGINAL_ONLY_TYPES and not _is_reward(data.vanilla_item(location)):
             # Rupees, hearts and ammo of the original game's pots, crates, beehives
@@ -1068,6 +1113,8 @@ def tracker_checks(data, matches, shuffled):
     return checks
 
 
+# AP locations with no readable trace in the remake (absent from the spoiler, unticked by the tracker).
+UNTRACKED_LOCATIONS = frozenset({'Gift from Sages'})
 ORIGINAL_ONLY_TYPES = {'Freestanding', 'Pot', 'FlyingPot', 'Crate', 'SmallCrate', 'Beehive', 'RupeeTower'}
 _JUNK_PREFIXES = ('Rupee', 'Rupees', 'Recovery Heart', 'Deku Nuts', 'Deku Stick', 'Deku Seeds', 'Arrows',
                   'Bombs', 'Bombchus', 'Fairy', 'Magic Jar')
@@ -1101,6 +1148,10 @@ def _patches(entry):
             result.append({'resource': variant['resource'],
                            'path': ['Actors', variant['index'], 'Dynamic', 'Drop__DropActor'],
                            'before': variant['before']})
+            if entry['id'] == TREASURE_GAME_REWARD:
+                result.append({'resource': variant['resource'],
+                               'path': ['Actors', variant['index'], 'Dynamic', 'DropViewActor'],
+                               'before': variant['dynamic']['DropViewActor']})
     return result
 
 

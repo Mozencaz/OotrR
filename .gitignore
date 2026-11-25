@@ -16,6 +16,7 @@ htmlcov/
 build/
 dist/
 data/
+Parties/
 backups/
 *.spec.bak
 

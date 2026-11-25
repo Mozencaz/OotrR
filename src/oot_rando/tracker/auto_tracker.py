@@ -66,6 +66,7 @@ def save_roots(hookshot_root=None, mods=None):
         if data:
             names = dict.fromkeys(name.lower() for name in port_appdata_names(root))
             roots.extend(data / name / 'save' for name in names)
+
     portable = emulator_save_root(mods) if mods else None
     if portable:
         roots.append(portable)
@@ -108,6 +109,57 @@ def newest_save(hookshot_root=None, title=None, mods=None):
     return best
 
 
+def default_port_save_roots():
+    """Standard OS save folders for known PC ports when no port root is specified."""
+    roots = []
+    appdata = os.environ.get('APPDATA')
+    names = port_appdata_names(Path("."))
+    if appdata:
+        roots.extend(Path(appdata) / name / 'save' for name in names)
+    data = linux_data_home()
+    if data:
+        for name in dict.fromkeys(n.lower() for n in names):
+            roots.append(data / name / 'save')
+    return roots
+
+def resolve_party_save_root(recorded_saves, mods=None, fallback_saves=None):
+    """Resolve a party save folder across PCs, usernames, and moved/extracted builds."""
+    candidates = []
+    if recorded_saves:
+        rec = Path(recorded_saves)
+        candidates.append(rec)
+        if rec.name and not rec.name.startswith("slot_"):
+            for root in save_roots(mods, mods):
+                if root.is_dir():
+                    account_cand = root / rec.name
+                    if account_cand.is_dir() and any(account_cand.glob("slot_*/progress.sav")):
+                        candidates.append(account_cand)
+    search_roots = list(save_roots(mods, mods))
+    for r in default_port_save_roots():
+        if r not in search_roots:
+            search_roots.append(r)
+    for root in search_roots:
+        if not root.is_dir():
+            continue
+        if any(root.glob("slot_*/progress.sav")):
+            candidates.append(root)
+        try:
+            for child in sorted(root.iterdir()):
+                if child.is_dir() and any(child.glob("slot_*/progress.sav")):
+                    candidates.append(child)
+        except OSError:
+            pass
+    if fallback_saves:
+        candidates.append(Path(fallback_saves))
+    for cand in candidates:
+        if cand.is_dir() and any(cand.rglob("progress.sav")):
+            return cand
+    for cand in candidates:
+        if cand.is_dir():
+            return cand
+    return Path(recorded_saves) if recorded_saves else Path(fallback_saves or ".")
+
+
 def soul_zones(metadata, counts):
     """Souls of a seed by zone: ``[(zone label, [(soul name, owned)])]``, in map order.
 
@@ -132,7 +184,7 @@ def soul_zones(metadata, counts):
 
 class TrackerSession:
     """A session observes one selected save; rollbacks replace its automatic state."""
-    def __init__(self, directory, slot, save_path='', live=None):
+    def __init__(self, directory, slot, save_path='', live=None, manual_directory=None):
         self.directory = Path(directory)
         self.live, self.live_status = live, ''   # live_memory.LiveGameData, optional
         self.live_bool64 = False
@@ -140,7 +192,7 @@ class TrackerSession:
         self.seed_id, self.slot = self.manifest['seed_id'], slot
         self.checks = catalogue['checks']
         self.save_path = str(save_path)
-        self.manual = ManualTracker(state_dir() / 'tracker',
+        self.manual = ManualTracker(manual_directory if manual_directory is not None else state_dir() / 'tracker',
                                     self.seed_id, slot, [c['id'] for c in self.checks])
         self.metadata = None
         if self.manifest.get('tracking'):

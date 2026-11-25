@@ -18,7 +18,7 @@ import hashlib
 import json
 
 GAME = 'OoT Remake'
-CATALOG_VERSION = 2   # 2: readable location names (game/check_names.py)
+CATALOG_VERSION = 3   # 3: native AI combat dependencies for soul progression
 PATCH_FORMAT = 'oot-remake-archipelago'
 PATCH_VERSION = 1
 PATCH_SUFFIX = '.aprmk'
@@ -40,6 +40,8 @@ def scan_fingerprint(groups, enemies, extra):
     Room locks of an enemy linked straight to its shutters (``'direct'``) only add a
     Presence to those shutters at generation: the soul-bound enemies and the logic are
     the same, so they stay out of the fingerprint and earlier patches remain valid.
+    Native ``combat`` evidence stays IN the fingerprint: old AP placements may
+    contain soul deadlocks and must be regenerated with a rebuilt apworld.
     """
     enemies = [dict(enemy, locks=[lock for lock in enemy['locks'] if not lock.get('direct')])
                if any(lock.get('direct') for lock in enemy.get('locks') or ()) else enemy

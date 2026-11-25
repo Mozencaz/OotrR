@@ -14,10 +14,11 @@ Kokiri Forest Deku Babas...) reads a new GameData BoolExp instead: its soul AND 
 vanilla condition (:func:`soul_expression`). They used to stay soul-independent,
 so they appeared without their soul (Discord 17/11).
 
-Logic (conservative): entering a dungeon requires the souls of every family
-patched in that dungeon, entering a boss room requires the boss soul, chests
-that appear on a condition require the souls of their map, and named overworld
-enemy checks require their family soul.
+Logic (conservative): entering a dungeon requires its mechanical and combat
+souls, entering a boss room requires the boss soul. Native AI defeat outputs,
+counter locks and scripted rewards count even when a shutter is hidden by the
+patch. Overworld passage fights gate their AP region; physical rewards get
+the souls of the native AI group controlling them.
 """
 from collections import defaultdict
 
@@ -93,7 +94,8 @@ REGION_LABELS = {
     'LakeHylia': 'Lac Hylia', 'KakarikoVillage': 'Cocorico', 'GoronCity': 'Village Goron', 'ZoraDomain': 'Domaine Zora',
 }
 LOCATION_KEYWORDS = {'Wolfos': 'Wolfos', 'Redead': 'ReDead', 'Moblin': 'Moblin', 'Octorok': 'Octorok',
-                     'Tektite': 'Tektite', 'Deku Baba': 'DekuBaba', 'Dodongo': 'Dodongo', 'Peahat': 'Peahat'}
+                     'Tektite': 'Tektite', 'Deku Baba': 'DekuBaba', 'Dodongo': 'Dodongo', 'Peahat': 'Peahat',
+                     'Target in Woods': 'DekuScrub'}
 FLAG_PREFIX = 'IsGet.'
 
 
@@ -223,7 +225,7 @@ ALWAYS_MECHANICAL = ('BigOcto', 'DarkLink', 'FlareDancer', 'JabuTentacle')
 def is_mechanical(enemy):
     if 'mechanics' not in enemy:
         return True
-    return bool(enemy['mechanics']) or family_of(enemy['actor']) in ALWAYS_MECHANICAL
+    return bool(enemy['mechanics'] or enemy.get('locks') or enemy.get('combat')) or family_of(enemy['actor']) in ALWAYS_MECHANICAL
 
 
 def plan_souls(mode, enemies, logic_regions):
@@ -237,6 +239,9 @@ def plan_souls(mode, enemies, logic_regions):
     per_folder = defaultdict(set)       # folder -> soul keys (non-boss)
     boss_rooms = {}
     per_map = defaultdict(set)
+    combat_targets = defaultdict(set)
+    combat_regions = defaultdict(set)
+    scripted_locations = defaultdict(set)
     edits = []
     candidates = []
     for enemy in enemies:
@@ -253,6 +258,21 @@ def plan_souls(mode, enemies, logic_regions):
     candidates, door_edits = resolve_room_locks(candidates)
     for enemy, key, boss in candidates:
         patched[key].add(enemy['folder'])
+        if enemy['folder'] == 'KokiriForest' and family_of(enemy['actor']) == 'DekuBaba':
+            for location in ('Deku Baba Sticks', 'Deku Baba Nuts'):
+                scripted_locations[location].add(soul_item(key))
+        if 'NPC_Scrub_Deku_TargetPractice' in enemy.get('mechanics', ()):
+            scripted_locations['LW Target in Woods'].add(soul_item(key))
+        for combat in enemy.get('combat', ()):
+            for target in combat['targets']:
+                combat_targets[enemy['folder'] + '#' + target].add(soul_item(key))
+            for region in combat['regions']:
+                combat_regions[region].add(soul_item(key))
+        # Old catalogs do not carry AI evidence, but their native room locks
+        # already identify the Royal Tomb battle. Never assume hidden shutters
+        # remove the script-controlled collision or make its reward reachable.
+        if enemy['folder'] == 'Graveyard' and family_of(enemy['actor']) == 'Keese' and enemy.get('locks'):
+            combat_regions['Graveyard Royal Familys Tomb'].add(soul_item(key))
         if boss and mode != 'regional':
             boss_rooms[boss] = key
         else:
@@ -283,16 +303,21 @@ def plan_souls(mode, enemies, logic_regions):
                         requirement |= {soul_item(k) for k in per_folder.get(folder, ())}
             if target in boss_rooms and not region.get('is_boss_room'):
                 requirement.add(soul_item(boss_rooms[target]))
+            requirement.update(combat_regions.get(target, ()))
             if requirement:
                 exit_requirements[(name, target)] = requirement
-    location_requirements = {}
-    if mode == 'all' and 'DekuBaba' in patched:
-        for location in ('Deku Baba Sticks', 'Deku Baba Nuts'):
-            location_requirements[location] = {soul_item('DekuBaba')}
+    location_requirements = {k: set(v) for k, v in scripted_locations.items()}
+    for region in logic_regions:
+        required = combat_regions.get(region['region_name'])
+        if required:
+            for location in region.get('locations', {}):
+                location_requirements.setdefault(location, set()).update(required)
     return {'items': sorted(soul_item(k) for k in patched), 'edits': edits, 'door_edits': door_edits,
             'exit_requirements': exit_requirements,
             'location_requirements': location_requirements, 'per_map': {k: sorted(v) for k, v in per_map.items()},
-            'families': {k: sorted(v) for k, v in patched.items()}, 'mode': mode}
+            'families': {k: sorted(v) for k, v in patched.items()}, 'mode': mode,
+            'combat_targets': {k: sorted(v) for k, v in combat_targets.items()},
+            'combat_regions': {k: sorted(v) for k, v in combat_regions.items()}}
 
 
 def chest_requirements(plan, group, ap_locations):
@@ -300,7 +325,10 @@ def chest_requirements(plan, group, ap_locations):
     if not plan['items']:
         return set()
     required = set()
+    required.update(plan.get('combat_targets', {}).get(group.get('id'), ()))
     for variant in group['variants']:
+        required.update(plan.get('combat_targets', {}).get(
+            group['folder'] + '#' + str(variant.get('hash')), ()))
         if variant.get('dynamic', {}).get('SpawnType') == 1:
             required |= {soul_item(k) for k in plan['per_map'].get(variant['resource'], ())}
     if plan['mode'] != 'regional':

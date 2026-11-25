@@ -3,6 +3,7 @@ import _src_path  # noqa: F401  (src on sys.path)
 import hashlib
 import io
 import json
+import ssl
 import tarfile
 import tempfile
 import unittest
@@ -34,6 +35,25 @@ def release():
 
 
 class UpdaterTest(unittest.TestCase):
+    def test_tls_bundle_works_without_system_certificates(self):
+        # Frozen builds must still trust public roots on a machine with an empty store.
+        empty = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        self.assertEqual(empty.cert_store_stats()['x509_ca'], 0)
+        with patch.object(updater.ssl, 'create_default_context', return_value=empty), \
+                patch.object(updater.sys, 'platform', 'win32'):
+            context = updater.tls_context()
+        self.assertGreater(context.cert_store_stats()['x509_ca'], 0)
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
+
+    def test_tls_bundle_keeps_system_trust(self):
+        import certifi
+        from unittest.mock import Mock
+        context = Mock()
+        with patch.object(updater.ssl, 'create_default_context', return_value=context):
+            self.assertIs(updater.tls_context(), context)
+        context.load_verify_locations.assert_called_once_with(cafile=certifi.where())
+
     def test_versions(self):
         self.assertEqual(updater.parse_version('v0.10.2'), (0, 10, 2))
         self.assertEqual(updater.parse_version('1.2'), (1, 2, 0))

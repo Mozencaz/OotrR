@@ -118,7 +118,8 @@ def can_self_update():
 
 
 def tls_context():
-    """TLS context that also finds the distribution's certificates from a frozen Linux build."""
+    """System trust plus bundled public roots, including in portable builds."""
+    import certifi
     context = ssl.create_default_context()
     if not context.get_ca_certs() and sys.platform.startswith('linux'):
         # A bundled OpenSSL may look for certificates where this distribution keeps none.
@@ -126,6 +127,9 @@ def tls_context():
             if os.path.isfile(path):
                 context.load_verify_locations(path)
                 break
+    # System stores can be empty or outdated. Keep their trusted roots while
+    # adding the portable CA bundle used by Archipelago's official clients.
+    context.load_verify_locations(cafile=certifi.where())
     return context
 
 

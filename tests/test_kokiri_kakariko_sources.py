@@ -66,6 +66,24 @@ class KokiriKakarikoSources(unittest.TestCase):
         self.assertTrue(records[0]['flag'].startswith('Rando.Check.'))
         self.assertEqual(maps, original)
 
+    def test_burnt_banc_pots_and_beehives_merge_one_to_one_by_position(self):
+        def actor(name, ident, x, drop):
+            return {'Hash': ident, 'Gyaml': name, 'Translate': [x, 100.0, 0.0],
+                    'Dynamic': {'Drop__DropActor': drop} if drop else {}}
+        pot = lambda i, x: actor('Obj_Pot_A_08', i, x, None)
+        hive = lambda i, x: actor('Obj_Kokiri_Beehive_A_01', i, x, 'Obj_Rupee_Blue')
+        maps = {
+            KAK.format(''): {'root': {'Actors': [pot(1, 0.0), pot(2, 1.0), hive(5, 50.0)]}},
+            KAK.format('Alternative_'): {'root': {'Actors': [pot(3, 0.05), pot(4, 1.1), hive(6, 50.1)]}},
+            KAK.format('Alternative_').replace('Dynamic', 'Static'): {'root': {'Actors': [pot(7, 0.0)]}},
+        }
+        entries = scan_map_sources(maps, lambda *_: True)
+        self.assertEqual(len(entries), 4)  # 2 pots, 1 beehive, the static pot (other map: not merged)
+        self.assertEqual(sorted(len(e['variants']) for e in entries.values()), [1, 2, 2, 2])
+        self.assertIn('KakarikoVillage#pots#1', entries)
+        self.assertIn('KakarikoVillage#pots#2', entries)
+        self.assertIn('KakarikoVillage#beehives#5', entries)
+
     @unittest.skipUnless(os.environ.get('OOT_NUP'), 'OOT_NUP absent')
     def test_native_maps_keep_all_other_rocks_and_merge_only_adult_tree(self):
         from oot_rando.formats.inspect_nup import Nup
@@ -77,7 +95,7 @@ class KokiriKakarikoSources(unittest.TestCase):
         try:
             members = effective_members(nup)
             selected = {p: v for p, v in members.items()
-                        if p.startswith(('Banc/KokiriForest/', 'Banc/KakarikoVillage/'))}
+                        if p.startswith(('Banc/KokiriForest/', 'Banc/KakarikoVillage/', 'Logic/'))}
             maps, groups, _ = scan_maps(nup, dictionaries(nup), selected)
             entries = collect(nup, dictionaries(nup), members, maps)
             # Resolve the user's original labels before candidate exclusions.
@@ -104,6 +122,13 @@ class KokiriKakarikoSources(unittest.TestCase):
         self.assertEqual({maps[v['resource']]['root']['Actors'][v['index']]['Hash']
                           for v in trees[0]['variants']}, {NORMAL, BURNT})
         self.assertEqual(source_age(trees[0]['variants']), 'adult')
+        # Every adult source exists once across the two bancs (pots, beehives, tree).
+        for entry in entries.values():
+            if entry['folder'] == 'KakarikoVillage' and entry['source'] != 'shop':
+                resources = [v['resource'] for v in entry['variants'] if '_Adult_' in v['resource']]
+                if resources:
+                    self.assertEqual(any('Adult_Alternative_' in r for r in resources),
+                                     any('Adult_Alternative_' not in r for r in resources), entry['id'])
 
 
 if __name__ == '__main__':

@@ -3,6 +3,8 @@ from oot_rando.patching.quest_guard import CHALLENGES
 
 FLOW = 'Event/EventFlow/SubEvent_FindRichard.bfevfl.zs'
 MODULE = 'Logic/Market_Child_Prefab_f3a2.logic.module.ainb'
+POOL_MODULE = 'Logic/HrlMarket_Child_Dog_Prefab_7574.logic.module.ainb'
+POOL_GATE_NODE = 2
 CHILDHOOD = 'Sequence_IsChildhood'
 KAKARIKO_GATE = 'Npc_Hylia_Soldier_003_GateOpen'
 RECEIPT = 'SubEvent_FindRichard_GetHeartPiece'
@@ -38,6 +40,22 @@ def map_from_start(raw):
             nodes[index]['Parameters']['Inputs']['String'][0]['Default Value'] = CHILDHOOD
 
     return _module_edit(raw, check, edit), {'module': MODULE, 'dependency': CHILDHOOD}
+
+
+def pool_from_start(raw):
+    """Release the random-appear Market dogs (the lost dog's spawn pool) without the gate."""
+    from oot_rando.patching.story_fixes import _module_edit
+
+    def check(nodes):
+        node = nodes[POOL_GATE_NODE]
+        if (node['Name'] != 'HoldGameDataGetBoolSimple'
+                or node['Parameters']['Inputs']['String'][0]['Default Value'] != KAKARIKO_GATE):
+            raise ValueError('Unexpected lost dog spawn gate (already patched?).')
+
+    def edit(nodes):
+        nodes[POOL_GATE_NODE]['Parameters']['Inputs']['String'][0]['Default Value'] = CHILDHOOD
+
+    return _module_edit(raw, check, edit), {'module': POOL_MODULE, 'dependency': CHILDHOOD}
 
 
 def reward_until_received(raw):

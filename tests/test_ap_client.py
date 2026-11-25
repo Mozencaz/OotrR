@@ -62,6 +62,26 @@ def connected_packet(**changes):
 
 
 class Units(unittest.TestCase):
+    def test_certificate_error_reports_reason_without_plain_fallback(self):
+        import ssl
+        from unittest.mock import Mock
+        for address in ('host:1', 'wss://host:1'):
+            with self.subTest(address=address):
+                error = ssl.SSLCertVerificationError(1, 'certificate verify failed')
+                error.verify_code = 20
+                error.verify_message = 'unable to get local issuer certificate'
+                connect = Mock(side_effect=error)
+                client = ap.ArchipelagoClient(MANIFEST, address, 'secret', connect=connect)
+                with self.assertRaises(ap.ClientError) as caught:
+                    client._open()
+                message = str(caught.exception)
+                self.assertIn('unable to get local issuer certificate', message)
+                self.assertIn('20', message)
+                self.assertIn('wss://host:1', message)
+                self.assertNotIn('ws://', message)
+                self.assertNotIn('secret', message)
+                connect.assert_called_once()
+
     def test_server_urls(self):
         self.assertEqual(ap.server_urls('archipelago.gg:38281'),
                          ['wss://archipelago.gg:38281', 'ws://archipelago.gg:38281'])

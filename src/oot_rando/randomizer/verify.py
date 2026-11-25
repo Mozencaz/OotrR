@@ -32,7 +32,7 @@ from oot_rando.patching.qol_patches import (STATIC, KOKIRI_SHOP_MAPS, KOKIRI_SHO
                                             NOCTURNAL_FIELD, is_nocturnal_skulltula)
 from oot_rando.formats import byml_codec
 from oot_rando.patching.soul_adapter import murmur3, RSDB_FILES, GAMEDATA, FLAG_PREFIX
-from oot_rando.game.remake_world import PROGRESSIVE, item_actor
+from oot_rando.game.remake_world import PROGRESSIVE, item_actor, TREASURE_GAME_REWARD
 from oot_rando.game.item_forms import is_derived, canonical_of
 from oot_rando.patching.key_adapter import is_key_actor
 from oot_rando.patching.progressive import applied_flag, is_token
@@ -118,6 +118,8 @@ def verify(nup_path, seed_dir):
             if actor != placement['before']:
                 for variant in groups[gid]:
                     map_edits[variant['resource']].setdefault(variant['index'], {})['Drop__DropActor'] = actor
+                    if gid == TREASURE_GAME_REWARD:
+                        map_edits[variant['resource']][variant['index']]['DropViewActor'] = actor
             continue
         entry = extra.get(gid)
         if entry is None:
@@ -184,8 +186,13 @@ def verify(nup_path, seed_dir):
         dispatch = 'signal' in mailbox
         if dispatch and mailbox['signal'] != ap_mailbox.SIGNAL:
             raise ValueError('Unexpected Archipelago mailbox signal.')
-        if (seed_dir / 'romfs' / ap_mailbox.MAIN_UPDATE).read_bytes() != ap_mailbox.patch_main_update(
-                nup.read(members[ap_mailbox.MAIN_UPDATE]), expected, dispatch=dispatch):
+        main_update = ap_mailbox.patch_main_update(nup.read(members[ap_mailbox.MAIN_UPDATE]), expected,
+                                                   dispatch=dispatch)
+        watch = manifest.get('skips', {}).get('progressive_watch')
+        if watch:
+            from oot_rando.patching import progressive
+            main_update = progressive.patch_main_update(main_update, watch['tokens'])
+        if (seed_dir / 'romfs' / ap_mailbox.MAIN_UPDATE).read_bytes() != main_update:
             raise ValueError('Unexpected global sequence (Archipelago reception).')
         rows = {r['__RowId']: r for r in Byml(out(ap_mailbox.EVENT_SETTINGS)).root}
         flags = {entry['Hash'] for entry in byml_codec.load(out(GAMEDATA))['root']['Data']['Bool']}
@@ -200,6 +207,22 @@ def verify(nup_path, seed_dir):
             if murmur3(record['recv']) not in flags or murmur3(record['got']) not in flags:
                 raise ValueError('Missing Archipelago reception flag: ' + record['key'])
         report['ap_reception'] = len(expected)
+    watch = manifest.get('skips', {}).get('progressive_watch')
+    if watch:
+        # Safety net of the progressive tokens: its watchers, event row and dependencies.
+        from oot_rando.patching import progressive
+        all_tokens = sorted(set(plan['progressive']['tokens'].values()) | {n['token'] for n in plan['progressive']['natives']})
+        if watch['tokens'] != all_tokens:
+            raise ValueError('Progressive token watchers differ from the spoiler.')
+        if mailbox is None:
+            if (seed_dir / 'romfs' / progressive.MAIN_UPDATE).read_bytes() != progressive.patch_main_update(
+                    nup.read(members[progressive.MAIN_UPDATE]), all_tokens):
+                raise ValueError('Unexpected global sequence (progressive tokens).')
+        row = {r['__RowId']: r for r in Byml(out(progressive.EVENT_SETTINGS)).root}.get(progressive.WATCH_EVENT)
+        if not row or row.get('EntryPointName') != progressive.CONVERTER_ENTRY or not row.get(
+                'FlowchartFileName', '').endswith('/' + progressive.ACTION_GUIDE + '.evfc'):
+            raise ValueError('Missing progressive converter event row.')
+        report['progressive_watch'] = len(all_tokens)
     from oot_rando.patching import blue_fire_arrows
     blue_arrows = bool((manifest['settings'].get('full') or {}).get('blue_fire_arrows', False))
     if bool(manifest.get('skips', {}).get('blue_fire_arrows')) != blue_arrows:
@@ -284,6 +307,10 @@ def verify(nup_path, seed_dir):
         path = gerudo_fortress.CELL_MODULE
         if (seed_dir / 'romfs' / path).read_bytes() != gerudo_fortress.open_completed_cells(nup.read(members[path])):
             raise ValueError('Unexpected completed fortress cell locks.')
+        path = gerudo_fortress.UNLOCK_FLOW
+        if (seed_dir / 'romfs' / path).read_bytes() != gerudo_fortress.skip_completed_unlocks(
+                decompress(nup.read(members[path]), d))[0]:
+            raise ValueError('Unexpected completed fortress cell unlocks.')
     from oot_rando.patching import game_defaults
     for option, details in openings.items():
         defaults = details.get('defaults') or {}
@@ -578,7 +605,8 @@ def verify(nup_path, seed_dir):
                 from oot_rando.randomizer.randomizer_core import starting_pouch_items
                 from oot_rando.patching.event_patch import starting_item_events
                 given = starting_pouch_items({'archipelago': manifest.get('archipelago'),
-                                              'starting': manifest.get('starting')})
+                                              'starting': manifest.get('starting'),
+                                              'options': (manifest.get('settings') or {}).get('full')})
                 for item, name in zip(given, starting_item_events(given)):
                     before[name] = {'Num': 1, 'IsEquipDIrect': False,
                                                         'IsSetMessageTargetActorName': False,
@@ -596,7 +624,14 @@ def verify(nup_path, seed_dir):
                     if presentation_flags != presentation_start_values():
                         raise ValueError('Area presentation flags differ from the spoiler.')
                     values = dict(values, **presentation_flags)
-                from oot_rando.patching import child_castle_skip
+                from oot_rando.patching import adult_start, child_castle_skip
+                if adult_start.enabled((manifest.get('settings') or {}).get('full')):
+                    # Adult start: era flag, then the banc change to the Temple of Time.
+                    if (skips.get('story_fixes') or {}).get('adult_start', {}).get('events') != list(adult_start.event_params()):
+                        raise ValueError('Adult start events differ from the settings.')
+                    for name, params in adult_start.event_params().items():
+                        before[name] = params
+                        report['start_values'] = report.get('start_values', 0) + 1
                 if child_castle_skip.enabled((manifest.get('settings') or {}).get('full')):
                     values = dict(values, **child_castle_skip.START_VALUES)
                     # The castle quests replayed at the start (native requests, copied).
@@ -850,6 +885,8 @@ def verify(nup_path, seed_dir):
     if plan.get('before_adult_missing'):
         raise ValueError('Logic replay: Door of Time items unavailable before adulthood: '
                          + ', '.join(plan['before_adult_missing']))
+    if plan.get('unreachable_souls'):
+        raise ValueError('Logic replay: unreachable enemy souls: ' + ', '.join(plan['unreachable_souls']))
     if not plan['beatable']:
         raise ValueError('Logic replay: victory not reached.')
     report.update(souls=len(soul_actors), derived=len(derived), beatable=True, spheres=plan['sphere_count'],
