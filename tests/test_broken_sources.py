@@ -1,3 +1,4 @@
+import _src_path  # noqa: F401
 import unittest
 
 from oot_rando.game.remake_world import BROKEN_SOURCES, inaccessible_child_actor

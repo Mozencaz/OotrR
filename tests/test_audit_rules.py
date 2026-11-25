@@ -177,12 +177,8 @@ class RealGameTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from oot_rando.logic.world import World
-        from oot_rando.game.extra_sources import scan_world
-        from oot_rando.formats.inspect_nup import Nup
-        from oot_rando.formats.inspect_resources import dictionaries
-        from oot_rando.game.world_maps import effective_members
-        nup = Nup(NUP)
-        maps, groups, _, extra = scan_world(nup, dictionaries(nup), effective_members(nup))
+        from game_fixture import scan_world
+        maps, groups, _, extra = scan_world()
         data = World()
         cls.with_fixes = A.run_audit(data, maps, groups, extra)
         cls.without_fixes = A.run_audit(data, maps, groups, extra, without_fixes=True)

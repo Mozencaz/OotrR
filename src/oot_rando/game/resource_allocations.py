@@ -1,4 +1,5 @@
 """Grow exactly the requested resource allocations; never shrink or add entries."""
+import functools
 import struct
 import zlib
 
@@ -70,17 +71,25 @@ def add_resources(raw, sizes_by_path):
     return bytes(result), records
 
 
-def allocation(raw, path):
-    """Current RESTBL allocation of a resource, or None when it has no entry."""
+@functools.lru_cache(maxsize=4)
+def _allocation_index(raw):
+    """``({name: size}, {crc32: size})`` of a RESTBL, the first entry of each kept."""
     version, block, count, names = struct.unpack_from('<IIII', raw, 6)
-    target = path.removesuffix('.zs')
+    by_name, by_crc = {}, {}
     for index in range(names):
         position = 22 + count * 8 + index * (block + 4)
-        if raw[position:position + block].split(b'\0', 1)[0].decode() == target:
-            return struct.unpack_from('<I', raw, position + block)[0]
-    digest = zlib.crc32(target.encode())
+        name = raw[position:position + block].split(b'\0', 1)[0].decode()
+        by_name.setdefault(name, struct.unpack_from('<I', raw, position + block)[0])
     for index in range(count):
         crc, size = struct.unpack_from('<II', raw, 22 + index * 8)
-        if crc == digest:
-            return size
-    return None
+        by_crc.setdefault(crc, size)
+    return by_name, by_crc
+
+
+def allocation(raw, path):
+    """Current RESTBL allocation of a resource, or None when it has no entry."""
+    by_name, by_crc = _allocation_index(bytes(raw))
+    target = path.removesuffix('.zs')
+    if target in by_name:
+        return by_name[target]
+    return by_crc.get(zlib.crc32(target.encode()))

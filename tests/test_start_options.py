@@ -223,13 +223,13 @@ class Integration(unittest.TestCase):
         from oot_rando.logic.world import World
         from oot_rando.formats.inspect_nup import Nup
         from oot_rando.formats.inspect_resources import decompress, dictionaries
-        from oot_rando.game.remake_world import scan_maps
         from oot_rando.game.world_maps import effective_members
+        from game_fixture import scan_maps
         cls.data = World()
+        _, cls.groups, cls.enemies = scan_maps()
         nup = Nup(NUP)
         try:
             dic, members = dictionaries(nup), effective_members(nup)
-            _, cls.groups, cls.enemies = scan_maps(nup, dic, members)
             cls.opening = decompress(nup.read(members[OPENING]), dic)
             cls.gamedata = decompress(nup.read(members['GameData/GameDataList.Product.110.byml.zs']), dic)
         finally:

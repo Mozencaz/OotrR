@@ -23,6 +23,7 @@ placement has no persistent hash key. This placed reward always runs its get
 event, including for minor items, and is recorded only after the pouch push.
 """
 import copy
+import functools
 import hashlib
 import math
 import struct
@@ -99,6 +100,31 @@ def _guid(text):
     return str(uuid.uuid5(uuid.NAMESPACE_URL, 'oot-randomizer/' + text))
 
 
+@functools.lru_cache(maxsize=32)
+def _parsed_ainb(raw):
+    """``(script, document)`` of an AINB file, decoded once per content.
+
+    The same native graphs (pickup event, drop AI) are instrumented once per
+    repeatable check: hundreds of times a seed. Shared: never change either."""
+    import ainb
+    script = ainb.AINB.from_binary(raw)
+    return script, script.as_dict()
+
+
+def _ainb(raw):
+    return _parsed_ainb(bytes(raw))
+
+
+@functools.lru_cache(maxsize=32)
+def _rewrites_faithfully(raw):
+    """Whether ``raw`` is written back byte for byte from its document (blackboard restored)."""
+    import ainb
+    script, original = _ainb(raw)
+    result = ainb.AINB.from_dict(copy.deepcopy(original))
+    result.blackboard = script.blackboard
+    return result.to_binary() == script.to_binary()
+
+
 def instrument_pickup_event(raw, flag, filename, canonical=None, also_set=(), skip_if_collected=True):
     """Clone an event AI and sequence a GameData write AFTER native pouch push.
 
@@ -113,8 +139,7 @@ def instrument_pickup_event(raw, flag, filename, canonical=None, also_set=(), sk
         import ainb
     except ImportError as error:
         raise ValueError('Install ainb==0.2.17 for first-collection rewards.') from error
-    script = ainb.AINB.from_binary(raw)
-    original = script.as_dict()
+    _, original = _ainb(raw)
     document = copy.deepcopy(original)
     if document['Version'] != 0x408:
         raise ValueError('Unexpected AINB version for first collection.')
@@ -316,8 +341,7 @@ def instrument_shop_ai(raw, flag, filename, shop_event_raw):
         import ainb
     except ImportError as error:
         raise ValueError('Install ainb==0.2.17 for single purchases in shops.') from error
-    script = ainb.AINB.from_binary(raw)
-    original = script.as_dict()
+    script, original = _ainb(raw)
 
     def build(document):
         # ainb 0.2.17 drops this graph's blackboard in as_dict(): restore it (no
@@ -325,7 +349,7 @@ def instrument_shop_ai(raw, flag, filename, shop_event_raw):
         result = ainb.AINB.from_dict(document)
         result.blackboard = script.blackboard
         return result.to_binary()
-    if build(original) != script.to_binary():
+    if not _rewrites_faithfully(bytes(raw)):
         raise ValueError('The shop item AI cannot be rewritten faithfully.')
     document = copy.deepcopy(original)
     if document['Version'] != 0x408:
@@ -450,15 +474,14 @@ def instrument_drop_ai(raw, flag, filename, event_raw, mark_on_spawn=None, resto
         import ainb
     except ImportError as error:
         raise ValueError('Install ainb==0.2.17 for first-collection rewards.') from error
-    script = ainb.AINB.from_binary(raw)
-    original = script.as_dict()
+    script, original = _ainb(raw)
 
     def build(document):
         # As for the shop AI, the blackboard must be restored after as_dict().
         result = ainb.AINB.from_dict(document)
         result.blackboard = script.blackboard
         return result.to_binary()
-    if build(original) != script.to_binary():
+    if not _rewrites_faithfully(bytes(raw)):
         raise ValueError('The drop AI cannot be rewritten faithfully.')
     document = copy.deepcopy(original)
     if document['Version'] != 0x408:
@@ -472,7 +495,7 @@ def instrument_drop_ai(raw, flag, filename, event_raw, mark_on_spawn=None, resto
     if len(starts) != 1 or any(prop['Name'] == 'IsLoop' and prop['Default Value']
                                for prop in starts[0]['Properties'].get('Bool', [])):
         raise ValueError('Drop AI: start-up sequence ambiguous or missing.')
-    templates = ainb.AINB.from_binary(event_raw).as_dict()['Nodes']
+    templates = _ainb(event_raw)[1]['Nodes']
 
     def native(source, name):
         found = [n for n in source if n['Name'] == name]
@@ -494,7 +517,7 @@ def instrument_drop_ai(raw, flag, filename, event_raw, mark_on_spawn=None, resto
                 prop['Default Value'] = False
         handover = []
     else:
-        restore = ainb.AINB.from_binary(restore_raw).as_dict()['Nodes']
+        restore = _ainb(restore_raw)[1]['Nodes']
         reserve, death = native(restore, 'OneShotDropReserveDropItemCreate'), native(restore, 'OneShotDeathRequestDeath')
         if death['Parameters']['Inputs']['Int'][0].get('Node Index', -1) != -1:
             raise ValueError('Drop AI: the native death request has no fixed reason.')

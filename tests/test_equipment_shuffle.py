@@ -32,16 +32,9 @@ class EquipmentOptions(unittest.TestCase):
 class EquipmentSources(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        from oot_rando.formats.inspect_nup import Nup
-        from oot_rando.formats.inspect_resources import dictionaries
-        from oot_rando.game.world_maps import effective_members
-        from oot_rando.game.extra_sources import scan_world
+        from game_fixture import scan_world
         from oot_rando.logic.world import World
-        nup = Nup(os.environ['OOT_NUP'])
-        try:
-            _, cls.groups, cls.enemies, cls.extra = scan_world(nup, dictionaries(nup), effective_members(nup))
-        finally:
-            nup.stream.close()
+        _, cls.groups, cls.enemies, cls.extra = scan_world()
         cls.data = World()
 
     def test_native_reward_sites_and_option_scopes(self):

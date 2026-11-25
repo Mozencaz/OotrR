@@ -68,12 +68,12 @@ class GameData(unittest.TestCase):
     def setUpClass(cls):
         from oot_rando.formats.inspect_nup import Nup
         from oot_rando.formats.inspect_resources import dictionaries
-        from oot_rando.game.extra_sources import scan_world
         from oot_rando.game.world_maps import effective_members
+        from game_fixture import scan_world
         cls.nup = Nup(os.environ['OOT_NUP'])
         cls.d = dictionaries(cls.nup)
         cls.members = effective_members(cls.nup)
-        cls.maps, cls.groups, cls.enemies, cls.extra = scan_world(cls.nup, cls.d, cls.members)
+        cls.maps, cls.groups, cls.enemies, cls.extra = scan_world()
 
     @classmethod
     def tearDownClass(cls):

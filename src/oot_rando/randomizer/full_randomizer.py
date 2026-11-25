@@ -305,7 +305,7 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
         # Upgrades given by NPCs (bullet bag, bomb bag, quiver…) need the base
         # item in the remake: the logic must not treat them as the first copy.
         for family in BASE_REQUIRED:
-            for location in probe.location_names():
+            for location in sorted(probe.location_names()):
                 if data.vanilla_item(location) == family and data.location_type(location) != 'Chest':
                     location_requirements.setdefault(location, set()).add(family)
     # A key ring may only land where its dungeon's doors cannot lock it in: the matching of
@@ -1026,7 +1026,9 @@ def _result(data, logic, options, matches, shuffled, placed, natives, sphere_of,
             'tracking_logic': {
                 'settings': logic.settings,
                 'exits': [[a, b, sorted(items)] for (a, b), items in logic.extra_exit_requirements.items()],
-                'locations': {name: sorted(items) for name, items in logic.extra_location_requirements.items()},
+                # Sorted: the requirements are gathered from sets (no stable order across processes).
+                'locations': {name: sorted(items)
+                              for name, items in sorted(logic.extra_location_requirements.items())},
                 'virtual': {name: list(members) for name, members in logic.virtual.items()}}}
 
 

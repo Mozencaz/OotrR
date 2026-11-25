@@ -270,16 +270,9 @@ class MissingSoulsTests(unittest.TestCase):
 class NativeCombatTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        from oot_rando.formats.inspect_nup import Nup
-        from oot_rando.formats.inspect_resources import dictionaries
-        from oot_rando.game.remake_world import scan_maps
-        from oot_rando.game.world_maps import effective_members
+        from game_fixture import scan_maps
         from oot_rando.logic.world import World
-        nup = Nup(os.environ['OOT_NUP'])
-        try:
-            cls.maps, cls.groups, cls.enemies = scan_maps(nup, dictionaries(nup), effective_members(nup))
-        finally:
-            nup.stream.close()
+        cls.maps, cls.groups, cls.enemies = scan_maps()
         cls.data = World()
 
     def test_native_ai_only_grotto_fights_guard_chests_without_spawn_type(self):

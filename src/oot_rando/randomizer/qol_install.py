@@ -63,7 +63,7 @@ def generate_qol_files(nup_path, intro_skip=True, fast_chests=True, progress=Non
                 'title_id': TITLE, 'build_id': BUILD,
                 'options': {'intro_skip': intro_skip, 'fast_chests': fast_chests},
                 'files': {p: {'size': len(v), 'sha256': sha256(v)} for p, v in sorted(files.items())},
-                'source_files': sources, 'resource_allocations': allocations, 'skips': skips,
+                'source_files': dict(sorted(sources.items())), 'resource_allocations': allocations, 'skips': skips,
                 'credit': CREDIT}
     return files, manifest
 

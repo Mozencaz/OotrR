@@ -30,9 +30,10 @@ SAFE_SCRUBS = frozenset({'Shop_DekuNutBundle_01', 'Shop_BombBundle_01', 'Shop_Bo
 
 def effective_members(nup):
     result = {}
-    for package in ('0', '1'):
+    ordered = sorted(nup.entries)
+    for package in ('0', '1'):   # the update's copy ('1/') replaces the base's
         prefix = package + '/romfs/'
-        for member in sorted(nup.entries):
+        for member in ordered:
             if member.startswith(prefix):
                 result[member[len(prefix):]] = member
     return result

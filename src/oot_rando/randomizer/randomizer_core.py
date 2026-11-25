@@ -879,7 +879,8 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
                     'title_id': TITLE, 'build_id': BUILD, 'settings': settings.to_dict(),
                     'scope': 'Four Kokiri chests, ordinary chests, explicit drops of the selected pots, bushes and rocks, and QoL. Progression and ambiguous sources kept.',
                     'files': {p: {'size': len(v), 'sha256': sha256(v)} for p, v in sorted(files.items())},
-                    'source_files': sources, 'resource_allocations': allocations,
+                    # Sorted: the read order follows set iterations (not stable across processes).
+                    'source_files': dict(sorted(sources.items())), 'resource_allocations': allocations,
                     'coverage': world['coverage'], 'skips': skips, 'progression_randomized': full is not None,
                     'complete_randomizer': False,
                     'validation': 'Static checks done; this composed seed is still to be tested in game.'}
@@ -979,7 +980,8 @@ def _build_full(nup, dictionaries_, members, settings, raw_maps, sources, read, 
     if settings.archipelago is not None:
         from oot_rando.archipelago import bridge
         patch = settings.archipelago
-        if patch['game_build'] != BUILD or patch['world'] != data.fingerprint()                 or patch['scan'] != bridge.scan_fingerprint(groups, enemies, extra):
+        if (patch['game_build'] != BUILD or patch['world'] != data.fingerprint()
+                or patch['scan'] != bridge.scan_fingerprint(groups, enemies, extra)):
             raise ValueError('This Archipelago patch was generated with an apworld built from another game '
                              'or another version of the application: rebuild the apworld and generate again.')
         report('Applying the Archipelago placements…')

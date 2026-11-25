@@ -44,10 +44,9 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --disable-pip-version-check -c packaging/constraints.txt -r requirements.txt PyYAML
       - name: Unit tests
-        # A hung test dumps every thread's stack after 15 minutes, then the job fails.
-        run: >-
-          python -X faulthandler -c "import faulthandler, unittest; faulthandler.dump_traceback_later(900, exit=True);
-          unittest.main(module=None, argv=['unittest', 'discover', '-s', 'tests', '-v'])"
+        # One process per test module; a hung module dumps every thread's stack
+        # before its 15-minute timeout, then the job fails.
+        run: python tests/run_parallel.py --timeout 900 --durations 15
 
   build-windows:
     name: Build Windows

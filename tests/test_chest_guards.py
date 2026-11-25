@@ -66,12 +66,9 @@ class SameChestTests(unittest.TestCase):
 @unittest.skipUnless(NUP, 'OOT_NUP absent')
 class RealGameGuardTests(unittest.TestCase):
     def test_kokiri_copy_of_the_lost_woods_chest(self):
-        from oot_rando.formats.inspect_nup import Nup
-        from oot_rando.formats.inspect_resources import dictionaries
-        from oot_rando.game.remake_world import SAME_CHESTS, scan_maps
-        from oot_rando.game.world_maps import effective_members
-        nup = Nup(NUP)
-        _, groups, _ = scan_maps(nup, dictionaries(nup), effective_members(nup))
+        from oot_rando.game.remake_world import SAME_CHESTS
+        from game_fixture import scan_maps
+        _, groups, _ = scan_maps()
         copy_id, original_id = next(iter(SAME_CHESTS.items()))
         self.assertNotIn(copy_id, groups)
         chest = groups[original_id]
@@ -85,12 +82,8 @@ class RealGameGuardTests(unittest.TestCase):
         self.assertAlmostEqual(offset[2], -87.86, places=1)
 
     def test_guarded_chests(self):
-        from oot_rando.formats.inspect_nup import Nup
-        from oot_rando.formats.inspect_resources import dictionaries
-        from oot_rando.game.remake_world import scan_maps
-        from oot_rando.game.world_maps import effective_members
-        nup = Nup(NUP)
-        _, groups, _ = scan_maps(nup, dictionaries(nup), effective_members(nup))
+        from game_fixture import scan_maps
+        _, groups, _ = scan_maps()
         guarded = {gid: chest_guards(v) for gid, v in groups.items() if chest_guards(v)}
         bombs = [gid for gid, g in guarded.items() if BOMBS_GUARD in g]
         # Gerudo Training Ground like-like room: chest in the alcove of the cracked wall.
