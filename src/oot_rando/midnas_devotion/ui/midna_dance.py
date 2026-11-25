@@ -265,6 +265,8 @@ class MidnaDanceWidget(QLabel):
         self._movie: Optional[QMovie] = None
         self._frame_idx = 0
         self._running = False
+        self._state = "idle"
+        self._base_interval_ms = 120
 
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setStyleSheet("background: transparent; border: none;")
@@ -332,6 +334,31 @@ class MidnaDanceWidget(QLabel):
             self._movie.setScaledSize(QSize(size, size))
         else:
             self._rebuild_frames()
+
+    @property
+    def state(self) -> str:
+        """Return current Midna animation state (idle, scanning, merging, success, warning)."""
+        return self._state
+
+    def set_state(self, state: str) -> None:
+        """Apply Midna-scoped visual accent and playback speed for the given workflow state."""
+        valid = ("idle", "scanning", "merging", "success", "warning")
+        st = state if state in valid else "idle"
+        self._state = st
+        styles = {
+            "idle": "background: transparent; border: none;",
+            "scanning": "background: rgba(18, 28, 40, 95); border: 2px solid #26c6da; border-radius: 14px;",
+            "merging": "background: rgba(20, 26, 38, 115); border: 2px solid #4dd0e1; border-radius: 14px;",
+            "success": "background: rgba(18, 42, 34, 110); border: 2px solid #66bb6a; border-radius: 14px;",
+            "warning": "background: rgba(54, 24, 24, 120); border: 2px solid #ef5350; border-radius: 14px;",
+        }
+        self.setStyleSheet(styles[st])
+        speed_pct = {"idle": 85, "scanning": 120, "merging": 135, "success": 100, "warning": 80}[st]
+        if self._movie is not None:
+            self._movie.setSpeed(speed_pct)
+        elif hasattr(self, "_timer"):
+            base_ms = max(40, int(getattr(self, "_base_interval_ms", 120)))
+            self._timer.setInterval(max(35, int(base_ms * 100 / speed_pct)))
 
     def start(self) -> None:
         """Begin animating (or mark running so animation starts once visible)."""

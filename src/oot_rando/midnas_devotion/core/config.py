@@ -574,6 +574,98 @@ class AppConfig:
             self.save_settings()
         return changed
 
+    def list_presets(self) -> Dict[str, Dict]:
+        raw = self.saved_state.get("mod_presets")
+        if not isinstance(raw, dict):
+            return {}
+        return {str(k): dict(v) for k, v in raw.items() if isinstance(v, dict)}
+
+    def get_preset(self, name: str) -> Optional[Dict]:
+        return self.list_presets().get(str(name))
+
+    def save_preset(self, name: str, preset_data: Dict) -> None:
+        key = str(name).strip()
+        if not key:
+            raise ValueError("Preset name cannot be empty.")
+        presets = self.list_presets()
+        presets[key] = dict(preset_data)
+        self.save_settings({"mod_presets": presets})
+
+    def delete_preset(self, name: str) -> bool:
+        key = str(name).strip()
+        presets = self.list_presets()
+        if key not in presets:
+            return False
+        del presets[key]
+        self.save_settings({"mod_presets": presets})
+        return True
+
+    @staticmethod
+    def _classify_asset_kind(rel_path: str) -> str:
+        low = rel_path.replace(chr(92), "/").lower()
+        if low.endswith((".bfres.zs", ".bfres")):
+            return "Model / Scene (.bfres)"
+        if low.endswith((".blarc.zs", ".blarc")):
+            return "UI Layout (.blarc)"
+        if low.endswith((".bntx.zs", ".bntx")):
+            return "Texture (.bntx)"
+        if low.endswith((".bars.zs", ".bars")):
+            return "Audio Table (.bars)"
+        if "message" in low or "mals" in low or low.endswith((".msbt", ".msbt.zs")):
+            return "Message / Mals"
+        if "restbl" in low or low.endswith((".rstbl", ".rstbl.zs")):
+            return "Resource Table (RESTBL)"
+        return "Other Asset"
+
+    def build_overlap_breakdown(
+        self,
+        enabled_mods: List[StandaloneMod],
+        *,
+        char_path: Optional[str] = None,
+        rando_path: Optional[str] = None,
+    ) -> List[Dict]:
+        overlaps, auto_merged = self.classify_overlaps(
+            enabled_mods,
+            char_path=char_path,
+            rando_path=rando_path,
+        )
+        priority_rank = {m.name: idx + 10 for idx, m in enumerate(enabled_mods)}
+        rows: List[Dict] = []
+
+        def pick_winner(owners: List[str]) -> str:
+            if not owners:
+                return ""
+            best = owners[-1]
+            best_rank = -1
+            for o in owners:
+                r = priority_rank.get(o, 0)
+                if r >= best_rank:
+                    best_rank = r
+                    best = o
+            return best
+
+        for rel, owners in overlaps.items():
+            rows.append({
+                "path": rel,
+                "category": self._classify_asset_kind(rel),
+                "status": "Conflict",
+                "owners": list(owners),
+                "winner": pick_winner(owners),
+                "detail": "Last in load order overwrites earlier mod(s).",
+            })
+        for rel, payload in auto_merged.items():
+            owners, reasons = payload
+            rows.append({
+                "path": rel,
+                "category": self._classify_asset_kind(rel),
+                "status": "Auto-Merged",
+                "owners": list(owners),
+                "winner": "Auto-Merged",
+                "detail": "; ".join(reasons) if reasons else "Compatible layers merged automatically.",
+            })
+        rows.sort(key=lambda r: (0 if r["status"] == "Conflict" else 1, r["category"], r["path"].lower()))
+        return rows
+
     def save_settings(self, state_updates: Optional[Dict] = None) -> None:
         """Atomically persist configuration and UI state to ``settings.json``."""
         if state_updates:

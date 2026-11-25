@@ -135,6 +135,7 @@ class PartiesPage:
                           'No party found' if parties else 'Your next adventure starts here',
                           'Create a party, import a seed or keep the one already installed.'
                           if not parties else 'Try another name.')
+            self._ensure_party_icons()
             for party in shown:
                 ident = party['id']
                 active = ident == self.party_library.active_id
@@ -157,17 +158,71 @@ class PartiesPage:
                 copied = datetime.fromisoformat(party['updated']).astimezone().strftime('%Y-%m-%d %H:%M')
                 ttk.Label(box, text='Last copy: ' + copied,
                           style='Small.TLabel').pack(anchor='w')
+                try:
+                    from oot_rando.gui.party_save_card import render_party_save_card, summarize_party_save
+                    summary = summarize_party_save(bundle / 'seed', saves)
+                    render_party_save_card(box, summary, getattr(self, 'colors', {}))
+                except Exception:
+                    _LOG.debug('Failed rendering party save preview for %s', ident, exc_info=True)
                 row = self.buttons(box, pady=(12, 0))
                 ttk.Button(row, text='Continue' if active else 'Activate', style='Accent.TButton',
                            command=lambda key=ident: self.activate_party(key)).pack(side='left')
                 ttk.Button(row, text='Rename', command=lambda key=ident: self.rename_party(key)).pack(side='left', padx=8)
                 ttk.Button(row, text='Folder', command=lambda key=ident: self.party_folder(key)).pack(side='left')
+                ttk.Button(row, text='Health', command=lambda key=ident: self.party_health_check(key)).pack(side='left', padx=(8, 0))
                 delete = ttk.Button(row, text='Delete', command=lambda key=ident: self.delete_party(key))
                 delete.pack(side='right')
                 if active:
                     delete.state(['disabled'])
         except Exception as error:
             self.card(self.parties_rows, 'Library unavailable', str(error))
+
+    def _ensure_party_icons(self):
+        """Extract game item icons in the background on Linux/Windows/macOS so Party cards show real icons."""
+        if getattr(self, "_party_icons_started", False):
+            return
+        try:
+            from oot_rando.paths import state_dir
+            from oot_rando.pc_port import port_root
+            from oot_rando.tracker.game_overlay import IconCache
+            mods_val = self.mods.get().strip() if hasattr(self, "mods") else ""
+            nup_val = self.nup.get().strip() if hasattr(self, "nup") else ""
+            port = port_root(mods_val) if mods_val else None
+            romfs = (port / "romfs") if port else None
+            cache = IconCache(state_dir() / "icons", romfs, nup_val or None)
+            if not cache.missing():
+                self._party_icons_started = True
+                return
+            self._party_icons_started = True
+            done_flag = [False]
+            def _on_done():
+                done_flag[0] = True
+            cache.ensure(done=_on_done)
+            sched = getattr(self, "_schedule_after", None)
+            def _poll_icons():
+                if done_flag[0]:
+                    self.render_parties()
+                elif getattr(cache, "_thread", None) and cache._thread.is_alive():
+                    if callable(sched):
+                        sched(350, _poll_icons)
+            if callable(sched):
+                sched(350, _poll_icons)
+        except Exception:
+            _LOG.debug("Party icon cache init skipped", exc_info=True)
+
+    def party_health_check(self, ident):
+        """Run Seed & Party Health Diagnostics and present a concise report."""
+        from oot_rando.party_health import check_party_health
+        report = check_party_health(self.party_library, ident, stage_root=self._midna_stage_root())
+        icons = {"ok": "[OK]", "warn": "[WARN]", "error": "[ERROR]"}
+        lines = [icons.get(c["level"], "[INFO]") + " " + c["message"] for c in report["checks"]]
+        title = "Party Health — " + (report.get("name") or ident[:8])
+        body = '\n'.join(lines)
+        has_issue = any(c["level"] in ("warn", "error") for c in report["checks"])
+        if has_issue:
+            messagebox.showwarning(title, body, parent=self.root)
+        else:
+            messagebox.showinfo(title, body, parent=self.root)
 
     def new_party(self):
         if self.busy:
@@ -286,6 +341,62 @@ class PartiesPage:
             return snapshot_seed
         return live_seed
 
+    def _party_merged_archive_dir(self, party):
+        """Return the per-party archive directory used to store Merged_Zelda_Rando while inactive."""
+        return self.party_library.folder(party["id"]) / "midna_merged"
+
+    def _archive_party_merged_mod(self, party, parked_merged_dir):
+        """Archive a parked Merged_Zelda_Rando alongside its owning party folder."""
+        archive_root = self._party_merged_archive_dir(party)
+        archive_root.mkdir(parents=True, exist_ok=True)
+        dst_merged = archive_root / "Merged_Zelda_Rando"
+        prev_backup = None
+        if dst_merged.exists() or dst_merged.is_symlink():
+            prev_backup = archive_root / (".prev-merged-" + uuid.uuid4().hex)
+            shutil.move(str(dst_merged), str(prev_backup))
+        try:
+            shutil.move(str(parked_merged_dir), str(dst_merged))
+            meta = {
+                "seed_id": party.get("seed_id") or "",
+                "mod_name": party.get("mod_name") or "",
+            }
+            meta_tmp = archive_root / (".meta-" + uuid.uuid4().hex + ".tmp")
+            meta_tmp.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+            os.replace(str(meta_tmp), str(archive_root / "meta.json"))
+        except Exception:
+            if prev_backup is not None and prev_backup.exists() and not dst_merged.exists():
+                try:
+                    shutil.move(str(prev_backup), str(dst_merged))
+                except Exception:
+                    _LOG.debug("Failed restoring previous archived merge for %s", party.get("id"), exc_info=True)
+            raise
+        if prev_backup is not None and prev_backup.exists():
+            shutil.rmtree(prev_backup, ignore_errors=True)
+
+    def _restore_party_merged_mod(self, party):
+        """Restore a party archived Merged_Zelda_Rando into mods/ when its seed_id matches."""
+        archive_root = self._party_merged_archive_dir(party)
+        archived_merged = archive_root / "Merged_Zelda_Rando"
+        meta_path = archive_root / "meta.json"
+        if not archived_merged.is_dir() or not meta_path.is_file():
+            return False
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        expected_seed = party.get("seed_id") or ""
+        if not expected_seed or meta.get("seed_id") != expected_seed:
+            return False
+        target_mods = Path(party["mods"])
+        live_merged = target_mods / "Merged_Zelda_Rando"
+        live_seed = target_mods / party["mod_name"]
+        if not target_mods.is_dir() or live_merged.exists():
+            return False
+        shutil.move(str(archived_merged), str(live_merged))
+        if live_seed.is_dir():
+            shutil.rmtree(live_seed, ignore_errors=True)
+        return True
+
     def _run_with_midna_bridge(self, target_mods, target_manifest, action, outgoing=None):
         """Prepare live mods/ for a party switch when Midna merged or standalone mods exist."""
         from oot_rando.parties import _copy
@@ -293,6 +404,10 @@ class PartiesPage:
 
         self.party_library._closed()
         target_mods = Path(target_mods)
+        from oot_rando.party_health import preflight_mods_operation
+        pf = preflight_mods_operation(target_mods)
+        if not pf["ok"]:
+            raise RuntimeError("; ".join(pf["errors"]))
         if outgoing is None and self.party_library.active_id:
             outgoing = self.party_library.get(self.party_library.active_id)
 
@@ -326,7 +441,7 @@ class PartiesPage:
                     park_parent.mkdir(parents=True, exist_ok=True)
                     parked = park_parent / (".midna-merged-tmp-" + uuid.uuid4().hex)
                     shutil.move(str(merged), str(parked))
-                    parked_merged.append((merged, parked))
+                    parked_merged.append((mdir, merged, parked))
 
             # 3. Auto-stage any remaining conflicting live mods so Midna can merge them cleanly.
             if target_mods.is_dir() and target_manifest is not None:
@@ -362,7 +477,7 @@ class PartiesPage:
                     _LOG.debug("Rollback failed restoring previous staged copy %s", dst_mod, exc_info=True)
             if restored_outgoing is not None and restored_outgoing.exists():
                 shutil.rmtree(restored_outgoing, ignore_errors=True)
-            for orig_merged, parked in reversed(parked_merged):
+            for _, orig_merged, parked in reversed(parked_merged):
                 try:
                     if parked.exists() and not orig_merged.exists():
                         shutil.move(str(parked), str(orig_merged))
@@ -370,10 +485,20 @@ class PartiesPage:
                     _LOG.debug("Rollback failed restoring parked merged mod %s", orig_merged, exc_info=True)
             raise
 
-        # Commit cleanup: stale Merged_Zelda_Rando belonged to the previous seed.
-        for _, parked in parked_merged:
-            if parked.exists():
-                shutil.rmtree(parked, ignore_errors=True)
+        # Commit cleanup: archive outgoing party Merged_Zelda_Rando and restore incoming if available.
+        outgoing_mods_res = Path(outgoing["mods"]).resolve() if outgoing else None
+        archived_outgoing = False
+        for mdir, _, parked in parked_merged:
+            if not parked.exists():
+                continue
+            if outgoing and not archived_outgoing and mdir.resolve() == outgoing_mods_res:
+                try:
+                    self._archive_party_merged_mod(outgoing, parked)
+                    archived_outgoing = True
+                    continue
+                except Exception:
+                    _LOG.warning("Failed archiving Merged_Zelda_Rando for party %s", outgoing.get("id"), exc_info=True)
+            shutil.rmtree(parked, ignore_errors=True)
         for _, _, prev_backup in staged_moves:
             if prev_backup is not None:
                 if prev_backup.is_symlink() or prev_backup.is_file():
@@ -381,14 +506,28 @@ class PartiesPage:
                 elif prev_backup.exists():
                     shutil.rmtree(prev_backup, ignore_errors=True)
 
+        restored_target_merged = False
+        if isinstance(result, dict) and result.get("id") and result.get("mods"):
+            try:
+                restored_target_merged = self._restore_party_merged_mod(result)
+            except Exception:
+                _LOG.warning("Failed restoring Merged_Zelda_Rando for party %s", result.get("id"), exc_info=True)
+
         notes = []
-        if parked_merged:
+        if archived_outgoing:
+            notes.append("Archived previous Merged_Zelda_Rando")
+        elif parked_merged:
             notes.append("Cleared previous Merged_Zelda_Rando")
+        if restored_target_merged:
+            notes.append("restored Merged_Zelda_Rando for this party")
         if staged_moves:
             names = ", ".join(src.name for src, _, _ in staged_moves)
             notes.append("staged conflicting mods (" + names + ")")
         if notes:
-            self._last_midna_switch_note = "; ".join(notes) + " — open Midna's Devotion and click Apply & Build to re-merge for this game."
+            if restored_target_merged and not staged_moves:
+                self._last_midna_switch_note = "; ".join(notes) + ". You can start the game."
+            else:
+                self._last_midna_switch_note = "; ".join(notes) + " — open Midna's Devotion and click Apply & Build to re-merge for this game."
         return result
 
     def activate_party(self, ident):
@@ -437,6 +576,13 @@ class PartiesPage:
         self.render_parties()
         self.update_home()
         note = getattr(self, "_last_midna_switch_note", "")
+        if midna_host is not None and hasattr(midna_host, "set_party_banner"):
+            midna_host.set_party_banner(
+                note,
+                show_remerge=("Apply & Build" in note),
+                party_name=party["name"],
+                stage_dir=str(self._midna_stage_root()),
+            )
         if note:
             self.status.set("Active party: " + party["name"] + ". " + note)
         else:

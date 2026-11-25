@@ -39,6 +39,7 @@ class EmbeddedMidnaHost:
         self._mounted = False
         self._visible = False
         self._destroyed = False
+        self._pending_party_banner = None
         self._pump_after_id: Optional[str] = None
         self._resize_after_id: Optional[str] = None
         self._error_frame: Optional[tk.Frame] = None
@@ -69,6 +70,28 @@ class EmbeddedMidnaHost:
         except Exception:
             _LOG.debug("Failed to sync Midna embedded host from randomizer", exc_info=True)
 
+    def set_party_banner(
+        self,
+        message: str,
+        *,
+        show_remerge: bool = True,
+        party_name: str = "",
+        stage_dir: str = "",
+    ) -> None:
+        """Deliver or queue a party-switch status banner for the embedded Midna window."""
+        payload = (message or "", bool(show_remerge), party_name or "", stage_dir or "")
+        self._pending_party_banner = payload
+        if self._window is not None and not self._destroyed and hasattr(self._window, "set_party_banner"):
+            try:
+                self._window.set_party_banner(
+                    payload[0],
+                    show_remerge=payload[1],
+                    party_name=payload[2],
+                    stage_dir=payload[3],
+                )
+            except Exception:
+                _LOG.debug("Failed applying Midna party banner", exc_info=True)
+
     def ensure_mounted(self) -> bool:
         """Lazily mount the Qt ``MainWindow`` and start the Tk->Qt event pump."""
         if self._destroyed:
@@ -79,6 +102,9 @@ class EmbeddedMidnaHost:
         try:
             self._mount_qt_window()
             self._mounted = True
+            if self._pending_party_banner and self._window is not None and hasattr(self._window, "set_party_banner"):
+                msg, show_rm, pname, sdir = self._pending_party_banner
+                self._window.set_party_banner(msg, show_remerge=show_rm, party_name=pname, stage_dir=sdir)
             self._start_pump()
             return True
         except Exception as exc:

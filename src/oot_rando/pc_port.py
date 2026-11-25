@@ -88,7 +88,7 @@ def options_ini(folder):
 import os
 import re
 
-LONGSHOT_CHANNELS = ("stable", "release candidate", "nightly")
+LONGSHOT_CHANNELS = ("stable", "release candidate", "nightly", "pull request")
 
 _CHANNEL_ALIAS_MAP = {
     "stable": "stable",
@@ -98,12 +98,23 @@ _CHANNEL_ALIAS_MAP = {
     "release_candidate": "release candidate",
     "releasecandidate": "release candidate",
     "rc": "release candidate",
+    "pull request": "pull request",
+    "pull requests": "pull request",
+    "pull-request": "pull request",
+    "pull-requests": "pull request",
+    "pull_request": "pull request",
+    "pull_requests": "pull request",
+    "pullrequest": "pull request",
+    "pullrequests": "pull request",
+    "pr": "pull request",
+    "prs": "pull request",
 }
 
 _CHANNEL_LABELS = {
     "stable": "Stable",
     "release candidate": "Release Candidate",
     "nightly": "Nightly",
+    "pull request": "Pull Request",
 }
 
 _PRE_RANK = {"rc": 4, "beta": 3, "alpha": 2, "pre": 1, "dev": 0}
@@ -113,6 +124,10 @@ _SEMVER_RE = re.compile(
 )
 _DATE_RE = re.compile(
     r"(\d{4})[-_]?(\d{2})[-_]?(\d{2})(?:[-_T]?(\d{2})(\d{2})?)?"
+)
+_PR_RE = re.compile(
+    r"(?:^|[^a-z0-9])(?:pr|pull[-_\s]?request)[-_#\s]?(\d+)",
+    re.IGNORECASE,
 )
 
 
@@ -150,7 +165,7 @@ def _port_mtime(folder):
 
 
 def version_sort_key(path):
-    """Sort key ranking Longshot version folders: semver > date > mtime/natural name."""
+    """Sort key ranking Longshot version folders: semver > date > PR number > mtime/natural name."""
     folder = Path(path)
     name = folder.name
     mtime = _port_mtime(folder)
@@ -161,13 +176,16 @@ def version_sort_key(path):
         pre_num = int(m.group(3)) if m.group(3) else 0
         is_release = 1 if not pre_tag else 0
         pre_rank = _PRE_RANK.get(pre_tag, 0) if pre_tag else 99
-        return (2, nums, is_release, pre_rank, pre_num, mtime, name.lower())
+        return (3, nums, is_release, pre_rank, pre_num, mtime, name.lower())
     dm = _DATE_RE.search(name)
     if dm:
         y, mo, d = int(dm.group(1)), int(dm.group(2)), int(dm.group(3))
         hh = int(dm.group(4)) if dm.group(4) else 0
         mm = int(dm.group(5)) if dm.group(5) else 0
-        return (1, (y, mo, d, hh, mm), 0, 0, 0, mtime, name.lower())
+        return (2, (y, mo, d, hh, mm), 0, 0, 0, mtime, name.lower())
+    pm = _PR_RE.search(name)
+    if pm:
+        return (1, (int(pm.group(1)),), 0, 0, 0, mtime, name.lower())
     return (0, (), 0, 0, 0, mtime, name.lower())
 
 
@@ -307,3 +325,62 @@ def normalize_port_mods_dir(path):
     if is_port_folder(p):
         return str(p / "mods")
     return norm
+
+
+def resolve_stale_port_subpath(stale_path, old_mods, new_mods):
+    """Relocate a missing path (such as save_path) from an old port folder to the new port folder."""
+    raw = str(stale_path or "").strip()
+    if not raw or not new_mods:
+        return None
+    p = Path(raw)
+    if p.exists():
+        return p
+    new_port = Path(new_mods).parent if Path(new_mods).name.lower() == "mods" else Path(new_mods)
+    if old_mods:
+        old_port = Path(old_mods).parent if Path(old_mods).name.lower() == "mods" else Path(old_mods)
+        try:
+            rel = p.relative_to(old_port)
+            cand = new_port / rel
+            if cand.exists():
+                return cand
+        except ValueError:
+            pass
+    return None
+
+
+def resolve_stale_nup_path(nup_path, new_mods, longshot_root=None):
+    """Locate a moved .nup game file under a new port folder or Longshot root when stale."""
+    raw = str(nup_path or "").strip()
+    if not raw:
+        return None
+    p = Path(raw)
+    if p.is_file():
+        return p
+    search_dirs = []
+    if new_mods:
+        nm = Path(new_mods)
+        port_dir = nm.parent if nm.name.lower() == "mods" else nm
+        search_dirs.extend([port_dir, port_dir.parent])
+    if longshot_root:
+        search_dirs.append(Path(longshot_root))
+    target_name = p.name.casefold()
+    seen = set()
+    fallback_nups = []
+    for d in search_dirs:
+        if not d or not d.is_dir():
+            continue
+        key = str(d.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            for entry in d.iterdir():
+                if entry.is_file() and entry.suffix.lower() == ".nup":
+                    if entry.name.casefold() == target_name:
+                        return entry
+                    fallback_nups.append(entry)
+        except OSError:
+            continue
+    if len(fallback_nups) == 1:
+        return fallback_nups[0]
+    return None

@@ -400,13 +400,58 @@ class Application(PartiesPage):
         self.root.protocol('WM_DELETE_WINDOW', self.close)
         self.register_hotkey()
         self.tracker_search.trace_add('write', lambda *args: self.render_tracker())
-        root.after(100, self.poll)
+        self._after_ids = set()
+        self.root.bind("<Destroy>", self._on_root_destroy, add="+")
+        self._schedule_after(100, self.poll)
         updater.cleanup()
         if self.check_updates.get():
-            root.after(2500, lambda: self.check_for_updates(silent=True))
-        root.after(1800, self.tracker_tick)
-        root.after(50, self.restore_last_artifact)
-        root.after(60, self.start_turbo)
+            self._schedule_after(2500, lambda: self.check_for_updates(silent=True))
+        self._schedule_after(1800, self.tracker_tick)
+        self._schedule_after(50, self.restore_last_artifact)
+        self._schedule_after(60, self.start_turbo)
+
+    def _schedule_after(self, delay_ms, callback):
+        if getattr(self, 'closed', False):
+            return None
+        ids = getattr(self, '_after_ids', None)
+        if ids is None:
+            ids = set()
+            self._after_ids = ids
+        box = [None]
+        def _wrapped():
+            if box[0] is not None:
+                ids.discard(box[0])
+            if getattr(self, 'closed', False):
+                return
+            callback()
+        aid = self.root.after(delay_ms, _wrapped)
+        box[0] = aid
+        ids.add(aid)
+        return aid
+
+    def _on_root_destroy(self, event=None):
+        if event is not None and getattr(event, "widget", None) is not self.root:
+            return
+        self.closed = True
+        self._cancel_all_after()
+        after_id = getattr(self, "_midna_path_sync_after", None)
+        if after_id is not None:
+            try:
+                self.root.after_cancel(after_id)
+            except Exception:
+                pass
+            self._midna_path_sync_after = None
+
+    def _cancel_all_after(self):
+        ids = getattr(self, '_after_ids', None)
+        if not ids:
+            return
+        for aid in list(ids):
+            try:
+                self.root.after_cancel(aid)
+            except Exception:
+                pass
+        ids.clear()
 
     def configure_theme(self):
         self.colors = dict(theme.COLORS, bg=theme.COLORS['surface'], accent=theme.COLORS['green'])
@@ -1316,6 +1361,18 @@ class Application(PartiesPage):
                 migrated = []
 
         self.mods.set(new_mods)
+        cur_nup = self.nup.get().strip()
+        if cur_nup and not Path(cur_nup).is_file():
+            found_nup = pc_port.resolve_stale_nup_path(cur_nup, new_mods, longshot_root=info.get("root"))
+            if found_nup is not None:
+                self.nup.set(str(found_nup))
+        cur_save = self.save_path.get().strip()
+        if cur_save and not Path(cur_save).exists():
+            found_save = pc_port.resolve_stale_port_subpath(cur_save, source_mods, new_mods)
+            if found_save is not None:
+                self.save_path.set(str(found_save))
+            elif self.auto_save.get():
+                self.save_path.set("")
         try:
             from oot_rando.midnas_devotion.core.config import AppConfig
             AppConfig().sync_from_randomizer(new_mods, persist=True)
@@ -1430,7 +1487,7 @@ class Application(PartiesPage):
         if self.closed:
             return
         if self.busy:
-            self.root.after(1000, self.tracker_tick)
+            self._schedule_after(1000, self.tracker_tick)
             return
         try:
             if self.auto_save.get():
@@ -1441,7 +1498,7 @@ class Application(PartiesPage):
             self.refresh_tracker()
         if self.turbo and self.turbo.last_hold:
             self.turbo_status.set(self.turbo.status + ' — last: ' + self.turbo.last_hold)
-        self.root.after(1000, self.tracker_tick)   # live memory: ~1 s; the save path is cheap to stat
+        self._schedule_after(1000, self.tracker_tick)   # live memory: ~1 s; the save path is cheap to stat
 
     def refresh_tracker(self):
         if self.busy or not self.tracker or self.tracker_refreshing:
@@ -2630,7 +2687,7 @@ class Application(PartiesPage):
                             self.error(error)
         except queue.Empty:
             pass
-        self.root.after(100, self.poll)
+        self._schedule_after(100, self.poll)
 
     def save_extra_emulators(self):
         text = self.extra_emulators.get().strip()
@@ -2734,6 +2791,7 @@ class Application(PartiesPage):
         if self._midna_host is not None:
             self._midna_host.destroy()
         self.closed = True
+        self._cancel_all_after()
         self.root.destroy()
         return True
 

@@ -484,6 +484,10 @@ class MainWindow(QMainWindow):
         self.ui_style_btn.setToolTip("Switch between Mozencaz' Default UI Experience and Arararagi's UI Experience.")
         self.ui_style_btn.clicked.connect(self._open_ui_style_picker)
 
+        self.folders_btn = QPushButton("Folders ▾")
+        self.folders_btn.setToolTip("Open UserModLibrary, ArchivedSeeds, staged_for_generation, Merged_Zelda_Rando, or mods/.")
+        self.folders_btn.clicked.connect(self._open_quick_folders_menu)
+
         self.settings_btn = QPushButton("Configure Folders…")
         self.settings_btn.clicked.connect(self._open_settings)
 
@@ -495,9 +499,37 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(self.path_label, 1)
         top_bar.addWidget(self.instructions_btn)
         top_bar.addWidget(self.ui_style_btn)
+        top_bar.addWidget(self.folders_btn)
         top_bar.addWidget(self.settings_btn)
         top_bar.addWidget(self._refresh_btn)
         root.addWidget(top_frame)
+
+        # Party-aware status / one-click re-merge banner (Midna-scoped twilight accent)
+        self._party_stage_dir = ""
+        self.party_banner = QFrame()
+        self.party_banner.setObjectName("partyBanner")
+        self.party_banner.setStyleSheet(
+            "QFrame#partyBanner { background: rgba(20, 44, 52, 200); border: 1px solid #26c6da; border-radius: 7px; }"
+        )
+        pb_lay = QHBoxLayout(self.party_banner)
+        pb_lay.setContentsMargins(12, 8, 12, 8)
+        pb_lay.setSpacing(10)
+        self.party_banner_lbl = QLabel("")
+        self.party_banner_lbl.setWordWrap(True)
+        self.party_banner_lbl.setStyleSheet("border: none; background: transparent; color: #e0f7fa; font-weight: bold;")
+        self.party_banner_merge_btn = QPushButton("Re-Apply & Merge for Active Seed")
+        self.party_banner_merge_btn.setStyleSheet(
+            "QPushButton { background: #00838f; color: #ffffff; border: 1px solid #4dd0e1; border-radius: 5px; padding: 5px 12px; font-weight: bold; }"
+            "QPushButton:hover { background: #0097a7; }"
+        )
+        self.party_banner_merge_btn.clicked.connect(self._on_party_banner_remerge)
+        self.party_banner_dismiss_btn = QPushButton("Dismiss")
+        self.party_banner_dismiss_btn.clicked.connect(lambda: self.party_banner.setVisible(False))
+        pb_lay.addWidget(self.party_banner_lbl, 1)
+        pb_lay.addWidget(self.party_banner_merge_btn)
+        pb_lay.addWidget(self.party_banner_dismiss_btn)
+        self.party_banner.setVisible(False)
+        root.addWidget(self.party_banner)
 
         # --- Middle Area: Left (Step 1 + Step 2) | Right (Step 3) ---
         mid_split = QSplitter(Qt.Orientation.Horizontal)
@@ -687,6 +719,14 @@ class MainWindow(QMainWindow):
         self.btn_inspect_mod.setToolTip("See every file inside the selected mod and check for conflicts.")
         self.btn_inspect_mod.clicked.connect(self._inspect_selected_mod)
 
+        self.btn_overlap_inspector = QPushButton("Overlaps…")
+        self.btn_overlap_inspector.setToolTip("Pre-build conflict and overlap breakdown across all checked mods.")
+        self.btn_overlap_inspector.clicked.connect(self._open_overlap_inspector)
+
+        self.btn_presets = QPushButton("Loadouts ▾")
+        self.btn_presets.setToolTip("Save or apply named mod loadouts (enabled mods, priority order, and character).")
+        self.btn_presets.clicked.connect(self._open_presets_menu)
+
         self.btn_rename_mod = QPushButton("Rename…")
         self.btn_rename_mod.setToolTip("Rename the selected extra mod folder.")
         self.btn_rename_mod.clicked.connect(self._rename_selected_mod)
@@ -713,6 +753,15 @@ class MainWindow(QMainWindow):
         mod_mgmt_row.addStretch(1)
         mod_mgmt_row.addWidget(self.btn_delete_mod)
         s3.addLayout(mod_mgmt_row)
+
+        mod_tools_row = QHBoxLayout()
+        mod_tools_row.setSpacing(6)
+        self.btn_overlap_inspector.setText("Conflict & Overlap Inspector…")
+        self.btn_presets.setText("Mod Loadouts ▾")
+        mod_tools_row.addWidget(self.btn_overlap_inspector)
+        mod_tools_row.addWidget(self.btn_presets)
+        mod_tools_row.addStretch(1)
+        s3.addLayout(mod_tools_row)
 
         right_outer.addWidget(step3_card)
 
@@ -911,9 +960,88 @@ class MainWindow(QMainWindow):
         self._build_log_view.setVisible(checked)
         self._build_log_toggle.setText("Hide Technical Log ▴" if checked else "Show Technical Log ▾")
 
+    def _quick_folder_targets(self):
+        from oot_rando.paths import data_dir
+
+        target_mods = getattr(self.cfg, "target_mods_dir", "") or ""
+        live_mods = getattr(self.cfg, "live_mods_dir", "") or ""
+        active_mods = target_mods if (target_mods and os.path.isdir(target_mods)) else (live_mods or target_mods)
+
+        merged_dir = ""
+        for base_dir in (target_mods, live_mods):
+            if base_dir:
+                cand = os.path.join(base_dir, "Merged_Zelda_Rando")
+                if os.path.isdir(cand):
+                    merged_dir = cand
+                    break
+        if not merged_dir and active_mods:
+            merged_dir = os.path.join(active_mods, "Merged_Zelda_Rando")
+
+        stage_dir = self._party_stage_dir or str(data_dir() / "party-midna-staging")
+        return [
+            ("UserModLibrary", getattr(self.cfg, "backup_dir", "") or "", True),
+            ("ArchivedSeeds", getattr(self.cfg, "uninstalled_seeds_dir", "") or "", True),
+            ("staged_for_generation", stage_dir, True),
+            ("Merged_Zelda_Rando", merged_dir, False),
+            ("Active mods/ Folder", active_mods, True),
+        ]
+
+    def _open_quick_folders_menu(self) -> None:
+        """Show one-click folder shortcuts using the cross-platform file manager opener."""
+        import importlib
+        from oot_rando.paths import open_in_file_manager
+        qtw = importlib.import_module(type(self.folders_btn).__module__)
+        menu = qtw.QMenu(self)
+        for label, path_str, create_if_missing in self._quick_folder_targets():
+            act = menu.addAction(label)
+            if not path_str:
+                act.setEnabled(False)
+                continue
+            exists = os.path.isdir(path_str)
+            if not exists and not create_if_missing:
+                act.setText(label + " (not created yet)")
+                act.setEnabled(False)
+                continue
+            def _open_target(_checked=False, p=path_str, make=create_if_missing, lbl=label):
+                try:
+                    if make:
+                        os.makedirs(p, exist_ok=True)
+                    open_in_file_manager(p)
+                except Exception as exc:
+                    self.status_lbl.setText("Could not open " + lbl + ": " + str(exc))
+            act.triggered.connect(_open_target)
+        menu.exec(self.folders_btn.mapToGlobal(self.folders_btn.rect().bottomLeft()))
+
+    def set_party_banner(
+        self,
+        message: str,
+        *,
+        show_remerge: bool = True,
+        party_name: str = "",
+        stage_dir: str = "",
+    ) -> None:
+        """Show or hide the party-switch re-merge banner inside the Midna tab."""
+        if stage_dir:
+            self._party_stage_dir = stage_dir
+        msg = (message or "").strip()
+        if not msg:
+            self.party_banner.setVisible(False)
+            return
+        prefix = ("Party " + party_name + ": ") if party_name else ""
+        self.party_banner_lbl.setText(prefix + msg)
+        self.party_banner_merge_btn.setVisible(bool(show_remerge))
+        self.party_banner.setVisible(True)
+
+    def _on_party_banner_remerge(self) -> None:
+        """Trigger a one-click re-apply & merge for the currently active party seed."""
+        self.party_banner.setVisible(False)
+        self.refresh_all()
+        self._start_build()
+
     def _return_from_build_view(self) -> None:
         if self.worker and self.worker.isRunning():
             return
+        self.midna_dancer.set_state("idle")
         self.midna_dancer.stop()
         self._view_stack.setCurrentWidget(self._main_page)
 
@@ -1933,6 +2061,168 @@ class MainWindow(QMainWindow):
         dlg = ModFilesDialog(mod, conflicts, auto_merged, self)
         dlg.exec()
 
+    def _party_title_lookup(self) -> Dict[str, str]:
+        import json as _json
+        from pathlib import Path as _Path
+        from oot_rando import paths as _paths
+
+        mapping: Dict[str, str] = {}
+        roots = []
+        try:
+            from oot_rando.parties import PartyLibrary as _PartyLibrary
+            pr = _Path(_PartyLibrary().root)
+            if pr not in roots:
+                roots.append(pr)
+        except Exception:
+            pass
+        for fn_name in ("app_dir", "state_dir", "data_dir"):
+            fn = getattr(_paths, fn_name, None)
+            if callable(fn):
+                base = _Path(fn())
+                for sub in ("Parties", "parties"):
+                    cand = base / sub
+                    if cand not in roots:
+                        roots.append(cand)
+
+        for parties_root in roots:
+            if not parties_root.is_dir():
+                continue
+            try:
+                for pdir in parties_root.iterdir():
+                    if not pdir.is_dir() or pdir.name.startswith("."):
+                        continue
+                    meta_file = pdir / "party.json"
+                    if not meta_file.is_file():
+                        continue
+                    try:
+                        meta = _json.loads(meta_file.read_text(encoding="utf-8"))
+                    except Exception:
+                        continue
+                    pname = str(meta.get("name") or "").strip()
+                    if not pname:
+                        continue
+                    sid = str(meta.get("seed_id") or "").strip()
+                    if sid:
+                        mapping["seed:" + sid] = pname
+                        mapping["seed16:" + sid[:16]] = pname
+                    if meta.get("mod_name"):
+                        mapping["mod:" + str(meta["mod_name"])] = pname
+                    if meta.get("id"):
+                        mapping["id:" + str(meta["id"])] = pname
+            except OSError:
+                continue
+        return mapping
+
+    def _party_title_for_seed(self, seed_path: str, lookup: Optional[Dict[str, str]] = None) -> str:
+        import json as _json
+        from pathlib import Path as _Path
+
+        if not seed_path:
+            return ""
+        lut = lookup if lookup is not None else self._party_title_lookup()
+        if not lut:
+            return ""
+        sp = _Path(seed_path)
+        mf = sp / "manifest.json"
+        if mf.is_file():
+            try:
+                m = _json.loads(mf.read_text(encoding="utf-8"))
+                sid = str(m.get("seed_id") or "")
+                if sid:
+                    if ("seed:" + sid) in lut:
+                        return lut["seed:" + sid]
+                    if ("seed16:" + sid[:16]) in lut:
+                        return lut["seed16:" + sid[:16]]
+            except Exception:
+                pass
+        bname = sp.name
+        if ("mod:" + bname) in lut:
+            return lut["mod:" + bname]
+        if bname.startswith("OoT_Randomizer_"):
+            tail = bname[len("OoT_Randomizer_"):]
+            if ("seed16:" + tail[:16]) in lut:
+                return lut["seed16:" + tail[:16]]
+        for parent in sp.parents:
+            if ("id:" + parent.name) in lut:
+                return lut["id:" + parent.name]
+        return ""
+
+    def _open_overlap_inspector(self) -> None:
+        from oot_rando.midnas_devotion.ui.conflict_inspector_dialog import ConflictInspectorDialog
+        enabled = self._enabled_standalone_mods()
+        rows = self.cfg.build_overlap_breakdown(
+            enabled,
+            char_path=self.char_combo.currentData(),
+            rando_path=self.seed_combo.currentData(),
+        )
+        dlg = ConflictInspectorDialog(rows, parent=self, plain=self._is_plain_ui())
+        dlg.exec()
+
+    def _capture_current_loadout(self) -> Dict:
+        enabled_names = [m.name for m in self._enabled_standalone_mods()]
+        mod_order = [
+            self.mod_list.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(self.mod_list.count())
+            if self.mod_list.item(i).data(Qt.ItemDataRole.UserRole) != "__step1_character__"
+        ]
+        return {
+            "selected_char_path": self.char_combo.currentData(),
+            "prefer_rando_logo": bool(self.cb_prefer_rando_logo.isChecked()),
+            "enabled_standalone": enabled_names,
+            "mod_order": mod_order,
+        }
+
+    def _apply_loadout_preset(self, name: str) -> None:
+        preset = self.cfg.get_preset(name)
+        if not preset:
+            return
+        updates = {
+            "selected_char_path": preset.get("selected_char_path"),
+            "prefer_rando_logo": bool(preset.get("prefer_rando_logo", True)),
+            "enabled_standalone": list(preset.get("enabled_standalone") or []),
+            "mod_order": list(preset.get("mod_order") or []),
+        }
+        self.cfg.save_settings(updates)
+        if updates["selected_char_path"]:
+            self._select_combo_by_path(self.char_combo, updates["selected_char_path"])
+        else:
+            self.char_combo.setCurrentIndex(0)
+        self.cb_prefer_rando_logo.setChecked(updates["prefer_rando_logo"])
+        self.refresh_all()
+        self.status_lbl.setText("Applied loadout preset: " + name)
+
+    def _open_presets_menu(self) -> None:
+        import importlib
+        qtw = importlib.import_module(type(self.mod_list).__module__)
+        menu = qtw.QMenu(self)
+
+        save_act = menu.addAction("Save Current Loadout…")
+        def _do_save():
+            name, ok = qtw.QInputDialog.getText(self, "Save Mod Loadout", "Loadout name (e.g. QoL Only, Full Visuals):")
+            if ok and name.strip():
+                self.cfg.save_preset(name.strip(), self._capture_current_loadout())
+                self.status_lbl.setText("Saved loadout preset: " + name.strip())
+        save_act.triggered.connect(_do_save)
+
+        presets = self.cfg.list_presets()
+        if presets:
+            menu.addSeparator()
+            apply_menu = menu.addMenu("Apply Loadout")
+            del_menu = menu.addMenu("Delete Loadout")
+            for pname in sorted(presets.keys(), key=str.casefold):
+                a = apply_menu.addAction(pname)
+                a.triggered.connect(lambda _c=False, n=pname: self._apply_loadout_preset(n))
+                d = del_menu.addAction(pname)
+                def _do_del(_c=False, n=pname):
+                    self.cfg.delete_preset(n)
+                    self.status_lbl.setText("Deleted loadout preset: " + n)
+                d.triggered.connect(_do_del)
+        else:
+            empty_act = menu.addAction("(No saved loadouts yet)")
+            empty_act.setEnabled(False)
+
+        menu.exec(self.btn_presets.mapToGlobal(self.btn_presets.rect().bottomLeft()))
+
     def _open_selected_mod_folder(self) -> None:
         """Open the selected mod's folder on disk using the OS file manager."""
         mod = self._selected_standalone_mod()
@@ -2089,6 +2379,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Folders Not Configured", "Please configure your base romfs/ folder first.")
             self._open_settings()
             return
+        from oot_rando.party_health import preflight_mods_operation
+        pf = preflight_mods_operation(self.cfg.target_mods_dir)
+        if not pf["ok"]:
+            QMessageBox.warning(self, "Preflight Check Failed", chr(10).join(pf["errors"]))
+            return
         for path in paths:
             self._open_preflight(initial_archive=path)
 
@@ -2233,8 +2528,12 @@ class MainWindow(QMainWindow):
         self.seeds = self.cfg.find_seeds()
         self.seed_combo.blockSignals(True)
         self.seed_combo.clear()
+        party_titles = self._party_title_lookup()
         for idx, seed in enumerate(self.seeds):
-            self.seed_combo.addItem(_friendly_seed_label(seed, is_newest=(idx == 0)), seed.path)
+            base_lbl = _friendly_seed_label(seed, is_newest=(idx == 0))
+            ptitle = self._party_title_for_seed(seed.path, party_titles)
+            label = (ptitle + " — " + base_lbl) if ptitle else base_lbl
+            self.seed_combo.addItem(label, seed.path)
         self.seed_combo.addItem("No Randomizer (Play Normal Story)", None)
         if prev_seed:
             self._select_combo_by_path(self.seed_combo, prev_seed)
@@ -2306,7 +2605,9 @@ class MainWindow(QMainWindow):
 
         parts = [pretty_mod_name(os.path.basename(char_path)) if char_path else "Vanilla Link"]
         if seed_path:
-            parts.append(os.path.basename(seed_path).replace("OoT_Randomizer_", "Seed "))
+            ptitle = self._party_title_for_seed(seed_path)
+            s_disp = os.path.basename(seed_path).replace("OoT_Randomizer_", "Seed ")
+            parts.append((ptitle + " (" + s_disp + ")") if ptitle else s_disp)
         else:
             parts.append("No Randomizer")
 
@@ -2579,6 +2880,7 @@ class MainWindow(QMainWindow):
         worker.failed.connect(self._on_build_failed)
         worker.finished.connect(worker.deleteLater)
         self._view_stack.setCurrentWidget(self._build_page)
+        self.midna_dancer.set_state("merging")
         self.midna_dancer.start()
         worker.start()
         self._update_mod_action_buttons()
@@ -2596,7 +2898,10 @@ class MainWindow(QMainWindow):
     def _on_build_ok(self) -> None:
         """Finalize UI state after ``BuildWorker`` succeeds and refresh discovered mods."""
         self.worker = None
+        self.midna_dancer.set_state("success")
         self.midna_dancer.stop()
+        if hasattr(self, "party_banner"):
+            self.party_banner.setVisible(False)
         self._view_stack.setCurrentWidget(self._main_page)
         self.build_btn.setEnabled(True)
         self.mode_btn.setEnabled(True)
@@ -2611,6 +2916,7 @@ class MainWindow(QMainWindow):
     def _on_build_failed(self, err: str) -> None:
         """Surface build failure details on the build page with theme-accessible error contrast."""
         self.worker = None
+        self.midna_dancer.set_state("warning")
         self.midna_dancer.stop()
         self.build_btn.setEnabled(True)
         self.mode_btn.setEnabled(True)
