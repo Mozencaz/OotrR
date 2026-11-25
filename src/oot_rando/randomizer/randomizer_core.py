@@ -314,22 +314,29 @@ def grow_resource_table(files, growths, new_sizes, read, d):
 
 
 def publish_mod(output, files, documents, finish=None):
-    """Write a mod folder atomically: ``romfs/<path>`` for ``files``, then ``documents``
-    (name to bytes or text), then whatever ``finish(staging)`` adds. ``output`` must not exist."""
+    "Write a mod folder atomically: romfs/<path> for files, then documents, then finish(staging)."
+    import os
+    from oot_rando.path_safety import fs_path, validate_file_path
     output = Path(output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='.oot-stage-', dir=output.parent) as temporary:
-        staging = Path(temporary) / 'ready'
-        staging.mkdir()
+    os.makedirs(fs_path(output.parent), exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".oot-stage-", dir=fs_path(output.parent)) as temporary:
+        staging = Path(temporary) / "ready"
+        os.makedirs(fs_path(staging), exist_ok=True)
         for path, data in files.items():
-            destination = staging / 'romfs' / path
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(data)
+            validate_file_path(output / "romfs" / path, label="Generated game resource")
+            destination = staging / "romfs" / path
+            os.makedirs(fs_path(destination.parent), exist_ok=True)
+            with open(fs_path(destination), "wb") as f_out:
+                f_out.write(data)
         for name, data in documents.items():
+            validate_file_path(output / name, label="Generated seed document")
+            doc_dst = staging / name
             if isinstance(data, bytes):
-                (staging / name).write_bytes(data)
+                with open(fs_path(doc_dst), "wb") as f_out:
+                    f_out.write(data)
             else:
-                (staging / name).write_text(data, encoding='utf-8')
+                with open(fs_path(doc_dst), "w", encoding="utf-8") as f_out:
+                    f_out.write(data)
         if finish:
             finish(staging)
         staging.rename(output)
@@ -346,10 +353,12 @@ def generate(nup_path, output, settings, progress=None, save_seed_id=None, saves
     continues (its save marker is kept); by default the seed binds its own saves.
     ``saves_from``: oldest application version these saves may come from, when the seed
     replaces an older one (tracker/save_patch.py, ``saves_from``)."""
+    from oot_rando.path_safety import validate_path_headroom
     settings.validate_supported()
     output = Path(output)
     if output.exists():
-        raise ValueError('The output folder already exists. Choose a new folder.')
+        raise ValueError("The output folder already exists. Choose a new folder.")
+    validate_path_headroom(output, max_relative_len=70, label="Output seed folder", enforce_win_classic=False)
     report = progress or (lambda message: None)
     report('Checking the game and the settings…')
     nup = Nup(nup_path)

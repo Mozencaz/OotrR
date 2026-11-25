@@ -25,13 +25,15 @@ class EmbeddedMidnaHost:
         on_fallback_window: Optional[Callable[[], None]] = None,
         on_theme_changed: Optional[Callable[[str], None]] = None,
         on_jump_to_setup: Optional[Callable[[], None]] = None,
+        initial_mods_getter: Optional[Callable[[], str]] = None,
     ) -> None:
-        """Initialize host state and bind container resize/map events (mount is deferred)."""
+        "Initialize host state and bind container resize/map events (mount is deferred)."
         self._tk_root = tk_root
         self._container = container
         self._on_fallback = on_fallback_window
         self._on_theme_changed = on_theme_changed
         self._on_jump_to_setup = on_jump_to_setup
+        self._initial_mods_getter = initial_mods_getter
 
         self._qapp = None
         self._parent_qwindow = None
@@ -153,7 +155,13 @@ class EmbeddedMidnaHost:
 
         cfg = AppConfig()
         cfg.embedded_in_randomizer = True
-        cfg.sync_from_randomizer(persist=True)
+        init_mods = None
+        if callable(self._initial_mods_getter):
+            try:
+                init_mods = (self._initial_mods_getter() or "").strip() or None
+            except Exception:
+                init_mods = None
+        cfg.sync_from_randomizer(init_mods, persist=True)
         win = MainWindow(cfg)
         win._on_jump_to_setup = self._on_jump_to_setup
         win.setWindowFlags(Qt.WindowType.FramelessWindowHint)
@@ -202,6 +210,8 @@ class EmbeddedMidnaHost:
             self._sync_geometry()
             self._window.raise_()
             self._schedule_resize_sync()
+            if hasattr(self._window, "schedule_startup_onboarding"):
+                self._window.schedule_startup_onboarding()
             if self._qapp is not None:
                 self._qapp.processEvents()
 

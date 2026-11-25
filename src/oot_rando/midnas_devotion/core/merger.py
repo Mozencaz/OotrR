@@ -45,11 +45,13 @@ _LOG = logging.getLogger(__name__)
 
 
 def _remove_path(path: str) -> None:
-    """Remove a directory, file, or symlink (including broken symlinks) safely."""
-    if os.path.islink(path) or os.path.isfile(path):
-        os.unlink(path)
-    elif os.path.isdir(path):
-        shutil.rmtree(path)
+    "Remove a directory, file, or symlink (including broken symlinks) safely."
+    from oot_rando.path_safety import fs_path
+    fp = fs_path(path)
+    if os.path.islink(path) or os.path.islink(fp) or os.path.isfile(fp):
+        os.unlink(fp)
+    elif os.path.isdir(fp):
+        shutil.rmtree(fp)
 
 
 @dataclass

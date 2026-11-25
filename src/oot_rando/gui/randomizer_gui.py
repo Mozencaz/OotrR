@@ -352,6 +352,7 @@ class Application(PartiesPage):
         self._header = header
         self._midna_host = None
         self._chrome_hidden = False
+        self._startup_modal_open = False
         self.page_title, self.page_subtitle = tk.StringVar(), tk.StringVar()
         titles = ttk.Frame(header, style='Page.TFrame')
         titles.pack(side='left', fill='x', expand=True)
@@ -561,8 +562,8 @@ class Application(PartiesPage):
         self._set_full_bleed_chrome(is_midna)
         if self._midna_host is not None:
             if is_midna:
-                self._midna_host.show()
                 self._midna_host.sync_from_randomizer(self.mods.get())
+                self._midna_host.show()
             else:
                 self._midna_host.hide()
         self._sync_midna_sidebar_theme(is_midna)
@@ -1266,8 +1267,12 @@ class Application(PartiesPage):
             dlg.geometry(f"+{rx}+{ry}")
         except Exception:
             pass
-        dlg.grab_set()
-        self.root.wait_window(dlg)
+        self._startup_modal_open = True
+        try:
+            dlg.grab_set()
+            self.root.wait_window(dlg)
+        finally:
+            self._startup_modal_open = False
         return chosen["value"]
 
     def _normalize_chosen_mods_dir(self, raw_path):
@@ -1403,11 +1408,12 @@ class Application(PartiesPage):
         last = self.app_state.get('last_artifact')
         if not last or self.artifact or not (Path(last) / 'manifest.json').is_file():
             return
+        prefix = (ls_notice + "  ") if ls_notice else ""
         try:
             self.use_artifact(last)
-            self.status.set('Last seed reloaded: ' + Path(last).name)
+            self.status.set(prefix + "Last seed reloaded: " + Path(last).name)
         except Exception as error:
-            self.status.set('Last seed not reloaded: ' + str(error))
+            self.status.set(prefix + "Last seed not reloaded: " + str(error))
 
     # ---------------------------------------------------------- saves
     def hookshot_root(self):
@@ -1787,7 +1793,10 @@ class Application(PartiesPage):
             settings.validate_supported()
             nup = Path(self.nup.get())
             if not nup.is_file():
-                raise ValueError('Select the local NUP file.')
+                raise ValueError("Select the local NUP file.")
+            if self._using_real_generator():
+                from oot_rando.randomizer.randomizer_services import validate_nup_file
+                validate_nup_file(nup)
             mods = validate_mod_directory(self.mods.get())
             self.start_generation(nup, mods, settings)
         except Exception as error:
@@ -1798,10 +1807,14 @@ class Application(PartiesPage):
         try:
             settings = self.regen_settings
             if settings is None or self.artifact is None:
-                raise ValueError('This seed is already up to date.')
+                raise ValueError("This seed is already up to date.")
+            settings.validate_supported()
             nup = Path(self.nup.get())
             if not nup.is_file():
-                raise ValueError('Select the local NUP file.')
+                raise ValueError("Select the local NUP file.")
+            if self._using_real_generator():
+                from oot_rando.randomizer.randomizer_services import validate_nup_file
+                validate_nup_file(nup)
             mods = validate_mod_directory(self.artifact.parent)
             if not messagebox.askyesno(
                     'Regenerate the seed',
@@ -1826,7 +1839,16 @@ class Application(PartiesPage):
         the player agrees, and each save is backed up first (tracker/save_patch.py)."""
         from oot_rando.tracker import save_patch
         try:
-            paths = (list(Path(self.party_context['saves']).glob('slot_*/progress.sav')) if self.party_context
+            from oot_rando.tracker.auto_tracker import resolve_party_save_root
+            party_saves = None
+            if self.party_context:
+                rec_saves = Path(self.party_context["saves"])
+                party_saves = (
+                    rec_saves
+                    if rec_saves.is_dir()
+                    else resolve_party_save_root(rec_saves, mods=self.party_context.get("mods"))
+                )
+            paths = (list(party_saves.glob("slot_*/progress.sav")) if party_saves is not None
                      else find_save_slots(self.hookshot_root(), TITLE, self.mods.get() or None))
             candidates = save_patch.migration_candidates(paths, manifest, previous)
         except Exception as error:   # never block the installation on a save scan
@@ -2040,6 +2062,7 @@ class Application(PartiesPage):
             on_fallback_window=self.launch_mod_manager_external,
             on_theme_changed=_on_theme_changed,
             on_jump_to_setup=_jump_to_setup,
+            initial_mods_getter=lambda: self.mods.get(),
         )
 
     def launch_mod_manager(self) -> None:

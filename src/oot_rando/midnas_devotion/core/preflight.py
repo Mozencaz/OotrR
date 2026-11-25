@@ -672,12 +672,10 @@ def run_advanced_checks(
     return report
 
 
-def sanitize_mod_name(raw_name: str) -> str:
-    """Sanitize an archive-derived mod name into a safe folder name (defaulting to ``Imported_Mod``)."""
-    s = re.sub(r"\s+[-–—]\s+", "_", raw_name.strip())
-    s = re.sub(r"[^A-Za-z0-9._-]+", "_", s)
-    s = re.sub(r"_+", "_", s).strip("_.-")
-    return s or "Imported_Mod"
+def sanitize_mod_name(raw_name: str, *, max_len: int = 64) -> str:
+    "Sanitize an archive-derived mod name into a safe, bounded cross-platform folder name."
+    from oot_rando.path_safety import sanitize_portable_name
+    return sanitize_portable_name(raw_name, default="Imported_Mod", max_len=max_len)
 
 
 def install_archive_to_dir(
@@ -691,10 +689,12 @@ def install_archive_to_dir(
     Normalizes any ``RomFS/`` casing to lowercase ``romfs/`` (preventing split folders
     on case-sensitive Linux filesystems) and rejects archive path-traversal entries.
     """
+    from oot_rando.path_safety import MOD_ROMFS_HEADROOM, fs_path, validate_file_path, validate_path_headroom
     safe_name = sanitize_mod_name(mod_name)
+    validate_path_headroom(parent_dir, max_relative_len=MOD_ROMFS_HEADROOM, label="Mod destination folder", enforce_win_classic=False)
     dst_root = os.path.abspath(os.path.join(parent_dir, safe_name))
     _remove_path(dst_root)
-    os.makedirs(os.path.join(dst_root, "romfs"), exist_ok=True)
+    os.makedirs(fs_path(os.path.join(dst_root, "romfs")), exist_ok=True)
 
     prefix_with_slash = f"{variant_prefix}/" if variant_prefix else ""
     prefix_low = prefix_with_slash.lower()
@@ -718,8 +718,9 @@ def install_archive_to_dir(
         target = os.path.abspath(os.path.join(dst_root, *parts))
         if not _is_within_dir(dst_root, target):
             continue
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        with open(target, "wb") as f_out:
+        validate_file_path(target, label="Extracted mod file")
+        os.makedirs(fs_path(os.path.dirname(target)), exist_ok=True)
+        with open(fs_path(target), "wb") as f_out:
             f_out.write(archive.read_bytes(norm))
     return dst_root
 

@@ -333,6 +333,7 @@ class AppConfig:
         self.saved_state: Dict = {}
         self.rando_synced_keys: set[str] = set()
         self.migration_notices: List[str] = list(_STARTUP_MIGRATION_NOTICES)
+        self.longshot_relocation_info: Optional[Dict] = None
         _STARTUP_MIGRATION_NOTICES.clear()
         self._codec_cache: Tuple[str, Optional[CodecBundle]] = ("", None)
         self.load_settings()
@@ -399,6 +400,7 @@ class AppConfig:
         return self._codec_cache[1]
 
     def validate_paths(self) -> Tuple[bool, List[str]]:
+        from oot_rando.path_safety import MOD_ROMFS_HEADROOM, SEED_ROMFS_HEADROOM, validate_path_headroom
         issues: List[str] = []
         if not self.romfs_dir or not os.path.isdir(self.romfs_dir):
             issues.append("Base game romfs/ folder is not set or does not exist.")
@@ -408,6 +410,20 @@ class AppConfig:
             issues.append("Live mods/ folder is not set.")
         if not self.workspace_dir:
             issues.append("Manager workspace folder is not set.")
+        path_checks = []
+        if self.sandbox_mode and self.workspace_dir:
+            path_checks.append((self.sandbox_mods_dir, SEED_ROMFS_HEADROOM, "Test Mode mods folder", False))
+        elif not self.sandbox_mode and self.live_mods_dir:
+            path_checks.append((self.live_mods_dir, SEED_ROMFS_HEADROOM, "Live mods folder", True))
+        if self.workspace_dir:
+            path_checks.append((self.staged_mods_dir, MOD_ROMFS_HEADROOM, "Workspace staged mods folder", False))
+        if self.backup_dir:
+            path_checks.append((self.backup_dir, MOD_ROMFS_HEADROOM, "User Mod Library folder", False))
+        for p_val, headroom, lbl, win_classic in path_checks:
+            try:
+                validate_path_headroom(p_val, max_relative_len=headroom, label=lbl, enforce_win_classic=win_classic)
+            except ValueError as exc:
+                issues.append(str(exc))
         return (len(issues) == 0), issues
 
     def load_settings(self) -> None:
@@ -563,12 +579,57 @@ class AppConfig:
             self.uninstalled_seeds_dir = det_seeds
             changed = True
 
-        # Rewrite saved mod paths from old port folder to new port folder when target exists.
+        # Rewrite saved mod paths from old port folder to new port folder when target exists,
+        # and detect any standalone mods / UserModLibrary left in the previous Longshot version folder.
         if prev_port and new_port and os.path.normcase(prev_port) != os.path.normcase(new_port):
             rewritten = self._rewrite_path_prefix(self.saved_state, prev_port, new_port)
             if rewritten != self.saved_state:
                 self.saved_state = rewritten
                 changed = True
+            same_root = False
+            try:
+                from oot_rando.pc_port import longshot_layout_root
+                prev_lay = longshot_layout_root(prev_port)
+                new_lay = longshot_layout_root(new_port)
+                if prev_lay is not None and new_lay is not None and prev_lay[0].resolve() == new_lay[0].resolve():
+                    same_root = True
+                else:
+                    prev_parent = Path(prev_port).resolve().parent
+                    new_parent = Path(new_port).resolve().parent
+                    if prev_parent == new_parent and prev_parent != prev_parent.parent:
+                        same_root = True
+            except Exception:
+                same_root = False
+            reloc_key = os.path.normcase(prev_port) + "->" + os.path.normcase(new_port)
+            handled_relocs = self.saved_state.get("handled_longshot_relocations")
+            handled_set = set(handled_relocs) if isinstance(handled_relocs, list) else set()
+            if same_root and reloc_key not in handled_set and os.path.isdir(prev_port):
+                leftover_mods: List[str] = []
+                if prev_mods and os.path.isdir(prev_mods):
+                    for entry in sorted(os.listdir(prev_mods)):
+                        if entry in MANAGED_MOD_NAMES or entry == "OoT_QoL" or entry.startswith("OoT_Randomizer_") or entry.startswith("."):
+                            continue
+                        old_m = os.path.join(prev_mods, entry)
+                        new_m = os.path.join(abs_mods, entry)
+                        if os.path.isdir(os.path.join(old_m, "romfs")) and not os.path.exists(new_m):
+                            leftover_mods.append(entry)
+                old_lib = os.path.join(prev_port, "UserModLibrary")
+                new_lib = os.path.join(new_port, "UserModLibrary")
+                has_old_lib = False
+                if os.path.isdir(old_lib) and not os.path.isdir(new_lib):
+                    with os.scandir(old_lib) as scan_it:
+                        has_old_lib = any(True for _ in scan_it)
+                if leftover_mods or has_old_lib:
+                    self.longshot_relocation_info = {
+                        "key": reloc_key,
+                        "old_port": prev_port,
+                        "new_port": new_port,
+                        "old_mods": prev_mods,
+                        "new_mods": abs_mods,
+                        "standalone_mods": leftover_mods,
+                        "old_library": old_lib if has_old_lib else "",
+                        "new_library": new_lib if has_old_lib else "",
+                    }
 
         if persist and changed:
             self.save_settings()
@@ -585,8 +646,8 @@ class AppConfig:
 
     def save_preset(self, name: str, preset_data: Dict) -> None:
         key = str(name).strip()
-        if not key:
-            raise ValueError("Preset name cannot be empty.")
+        if not key or len(key) > 80:
+            raise ValueError("Preset name must be 1–80 characters.")
         presets = self.list_presets()
         presets[key] = dict(preset_data)
         self.save_settings({"mod_presets": presets})

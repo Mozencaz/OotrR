@@ -1,6 +1,7 @@
 """Local artifact verification, conservative installation and manual tracker storage."""
 import hashlib
 import json
+import os
 import shutil
 from pathlib import Path, PurePosixPath
 
@@ -183,13 +184,70 @@ def conflicting_mods(title_directory, manifest, skip):
 
 
 def _move_to_archive(directory, archive, suffix):
-    archive.mkdir(parents=True, exist_ok=True)
-    target, index = archive / (directory.name + suffix), 1
-    while target.exists():
-        index += 1
-        target = archive / f'{directory.name}{suffix}-{index}'
-    shutil.move(str(directory), str(target))
+    from oot_rando.path_safety import fs_path, safe_archive_target
+    archive = Path(archive)
+    os.makedirs(fs_path(archive), exist_ok=True)
+    target = safe_archive_target(archive, Path(directory).name, suffix)
+    shutil.move(fs_path(directory), fs_path(target))
     return target
+
+
+def validate_nup_file(nup_path):
+    "Verify that nup_path exists and passes check_supported_game before seed generation starts."
+    from oot_rando.formats.inspect_nup import Nup
+    from oot_rando.patching.randomize_kokiri import check_supported_game
+    p = Path(nup_path)
+    if not p.is_file():
+        raise ValueError("Select the local NUP file.")
+    nup = Nup(p)
+    try:
+        check_supported_game(nup)
+    finally:
+        close_fn = getattr(nup, "close", None)
+        if callable(close_fn):
+            close_fn()
+    return p
+
+
+def preflight_plain_generation(nup, title_directory, settings, archive=None, *, check_nup=True, check_game_closed=False):
+    "Run upfront sanity checks for plain (My Games off) seed generation before spawning a worker."
+    from oot_rando.path_safety import ARCHIVE_HEADROOM, SEED_ROMFS_HEADROOM, validate_path_headroom
+    from oot_rando.party_health import preflight_mods_operation
+    settings.validate_supported()
+    title_directory = validate_mod_directory(title_directory)
+    validate_path_headroom(title_directory, max_relative_len=SEED_ROMFS_HEADROOM, label="Mods folder")
+    if archive is not None:
+        validate_path_headroom(Path(archive), max_relative_len=ARCHIVE_HEADROOM, label="Seed archive folder", enforce_win_classic=False)
+    if check_game_closed:
+        import subprocess
+        from oot_rando.tracker.live_memory import GameRunning, running_game
+        processes = None
+        if os.name != "nt":
+            try:
+                processes = subprocess.check_output(["ps", "-axo", "comm="], text=True).splitlines()
+            except (OSError, subprocess.SubprocessError):
+                processes = []
+        game = running_game(processes)
+        if game:
+            raise GameRunning(f"Save and close the game / emulator first ({game} is running).")
+    if check_nup:
+        validate_nup_file(nup)
+    name = "OoT_Randomizer_" + settings_identity(settings)[:16]
+    destination = title_directory / name
+    if destination.exists() and (archive is None or not is_randomizer_seed(destination)):
+        raise ValueError("Folder " + name + " already exists in the mods.")
+    pf = preflight_mods_operation(
+        title_directory,
+        source_paths=[nup] if (check_nup and Path(nup).exists()) else (),
+        allow_missing_parents=True,
+    )
+    if not pf["ok"]:
+        raise ValueError("; ".join(pf["errors"]))
+    if archive is not None:
+        pf_arch = preflight_mods_operation(Path(archive), allow_missing_parents=True)
+        if not pf_arch["ok"]:
+            raise ValueError("; ".join(pf_arch["errors"]))
+    return title_directory
 
 
 def continued_save(title_directory, settings):
@@ -258,20 +316,46 @@ def generate_in_mods(nup, title_directory, settings, progress=None, archive=None
     stops. An Archipelago seed keeps the saves of the seed of the same slot it
     replaces (:func:`continued_save`). Returns the seed folder.
     """
-    if generate is None:
+    real_generate = generate is None
+    if real_generate:
         from oot_rando.randomizer.randomizer_core import generate
+    from oot_rando.path_safety import SEED_ROMFS_HEADROOM, fs_path, validate_path_headroom
+    settings.validate_supported()
     report = progress or (lambda message: None)
     title_directory = validate_mod_directory(title_directory)
-    name = 'OoT_Randomizer_' + settings_identity(settings)[:16]
+    validate_path_headroom(title_directory, max_relative_len=SEED_ROMFS_HEADROOM, label="Mods folder", enforce_win_classic=False)
+    name = "OoT_Randomizer_" + settings_identity(settings)[:16]
     destination = title_directory / name
+    if destination.exists() and (archive is None or not is_randomizer_seed(destination)):
+        raise ValueError("Folder " + name + " already exists in the mods.")
+    if real_generate:
+        validate_nup_file(nup)
     save_seed_id = continued_save(title_directory, settings)
     origin = saves_origin(title_directory, destination, settings)
-    options = {'saves_from': origin} if origin else {}
+    options = {"saves_from": origin} if origin else {}
     if destination.exists():
-        if archive is None or not is_randomizer_seed(destination):
-            raise ValueError('Folder ' + name + ' already exists in the mods.')
-        report('Same seed already installed: old copy archived, generating again…')
-        _move_to_archive(destination, Path(archive), '-replaced')
+        report("Same seed already installed: old copy archived, generating again…")
+        _move_to_archive(destination, Path(archive), "-replaced")
+    if real_generate and title_directory.is_dir():
+        from oot_rando.patching.randomize_kokiri import RESTBL
+        from oot_rando.paths import data_dir as _data_dir
+        pre_conflicts = [
+            other.name for other in sorted(title_directory.iterdir())
+            if other.is_dir() and other.name != name and not is_randomizer_seed(other) and not is_qol_install(other)
+            and (other.name == "Merged_Zelda_Rando" or (other / "romfs" / RESTBL).exists())
+        ]
+        if pre_conflicts:
+            stage_root = (Path(archive).parent if archive is not None else _data_dir()) / "staged_for_generation"
+            os.makedirs(fs_path(stage_root), exist_ok=True)
+            for mod_name in pre_conflicts:
+                src_mod = title_directory / mod_name
+                dst_mod = stage_root / mod_name
+                if dst_mod.is_symlink() or dst_mod.is_file():
+                    dst_mod.unlink()
+                elif dst_mod.exists():
+                    shutil.rmtree(fs_path(dst_mod))
+                shutil.move(fs_path(src_mod), fs_path(dst_mod))
+            report("Moved conflicting mods out of mods folder to staging: " + ", ".join(pre_conflicts))
     title_directory.mkdir(parents=True, exist_ok=True)
     if save_seed_id:
         report('Same Archipelago slot already installed: its saves carry over.')

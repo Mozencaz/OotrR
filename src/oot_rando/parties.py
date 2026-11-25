@@ -49,14 +49,17 @@ def _plain_tree(path):
 
 
 def _copy(source, destination):
+    from oot_rando.path_safety import fs_path, validate_file_path
     _plain_tree(source)
-    shutil.copytree(source, destination)
-    # Verify all files, including the save's ancillary files and AP delivery state.
-    for original in Path(source).rglob('*'):
+    shutil.copytree(fs_path(source), fs_path(destination))
+    # Verify all files, including ancillary save files and AP delivery state.
+    for original in Path(source).rglob("*"):
         if original.is_file():
-            copied = destination / original.relative_to(source)
-            if hashlib.sha256(original.read_bytes()).digest() != hashlib.sha256(copied.read_bytes()).digest():
-                raise OSError('Copy verification failed: ' + str(original))
+            copied = Path(destination) / original.relative_to(source)
+            validate_file_path(copied, label="Party file")
+            with open(fs_path(original), "rb") as f_orig, open(fs_path(copied), "rb") as f_copy:
+                if hashlib.sha256(f_orig.read()).digest() != hashlib.sha256(f_copy.read()).digest():
+                    raise OSError("Copy verification failed: " + str(original))
 
 
 def _hashes(directory):
@@ -171,19 +174,82 @@ class PartyLibrary:
 
     def _closed(self):
         processes = None
-        if os.name != 'nt':
-            processes = subprocess.check_output(['ps', '-axo', 'comm='], text=True).splitlines()
+        if os.name != "nt":
+            try:
+                processes = subprocess.check_output(["ps", "-axo", "comm="], text=True).splitlines()
+            except (OSError, subprocess.SubprocessError):
+                processes = []
         game = running_game(processes)
         if game:
-            raise GameRunning(f'Save and close the game / emulator first ({game} is running).')
+            raise GameRunning(f"Save and close the game / emulator first ({game} is running).")
 
     def _targets(self, mods, saves):
+        from oot_rando.path_safety import SAVE_ACCOUNT_HEADROOM, SEED_ROMFS_HEADROOM, validate_path_headroom
         _plain_tree(mods)
         mods = validate_mod_directory(mods)
         saves = validate_save_root(saves)
+        validate_path_headroom(mods, max_relative_len=SEED_ROMFS_HEADROOM, label="Mods folder")
+        validate_path_headroom(saves, max_relative_len=SAVE_ACCOUNT_HEADROOM, label="Save account folder")
+        validate_path_headroom(self.root, max_relative_len=195, label="Parties library folder", enforce_win_classic=False)
         for a, b in ((mods, saves), (mods, self.root), (saves, self.root)):
             if a == b or a in b.parents or b in a.parents:
-                raise ValueError('The library, mods and save folders must be separate.')
+                raise ValueError("The library, mods and save folders must be separate.")
+        return mods, saves
+
+    @_operation
+    def preflight_generation(self, name, mods, saves, settings, *, continuing=False):
+        "Run every party creation & activation sanity check BEFORE generating a seed."
+        from oot_rando.randomizer.randomizer_core import Settings, settings_identity
+        from oot_rando.randomizer.randomizer_services import qol_seed_warning
+        self._closed()
+        self._name(name)
+        mods, saves = self._targets(mods, saves)
+        outgoing = self.get(self.active_id) if self.active_id else None
+        if continuing:
+            if not self.active_id or outgoing is None:
+                raise ValueError("There is no active party to continue.")
+            old_manifest, _ = read_artifact(self.bundle(outgoing) / "seed")
+            if (Path(outgoing["mods"]) != mods or Path(outgoing["saves"]) != saves
+                    or Settings.from_dict(old_manifest["settings"]).to_dict() != Settings.from_dict(settings.to_dict()).to_dict()):
+                raise ValueError("Only a regeneration with the same settings can continue the active save.")
+        if outgoing and Path(outgoing["mods"]).exists():
+            out_seed = Path(outgoing["mods"]) / outgoing["mod_name"]
+            if out_seed.exists():
+                out_manifest, _ = read_artifact(out_seed)
+                if out_manifest.get("seed_id") != outgoing["seed_id"]:
+                    raise ValueError("The installed seed changed outside My Games. Restore it before switching.")
+            else:
+                snap_seed = self.bundle(outgoing) / "seed"
+                snap_manifest, _ = read_artifact(snap_seed)
+                if snap_manifest.get("seed_id") != outgoing["seed_id"]:
+                    raise ValueError("The stored seed belongs to another party.")
+        owned_mod = Path(outgoing["mods"]) / outgoing["mod_name"] if outgoing else None
+        if mods.exists():
+            for path in mods.iterdir():
+                if is_randomizer_seed(path) and path != owned_mod:
+                    raise ValueError("An unmanaged seed is installed here. Preserve it as a party first.")
+        owns_save = bool(outgoing and Path(outgoing["saves"]) == saves)
+        if saves.exists() and any(saves.iterdir()) and not owns_save:
+            raise ValueError(
+                "This destination already contains saves. Preserve its installed game first "
+                "or choose an empty save account folder."
+            )
+        if qol_seed_warning(mods):
+            raise ValueError("Move OoT_QoL out of this mods folder before activating a randomizer party.")
+        target_mod = mods / ("OoT_Randomizer_" + settings_identity(settings)[:16])
+        if target_mod.exists() and target_mod != owned_mod:
+            raise ValueError("The target mod folder already exists and is not managed by this party.")
+        repl_paths = []
+        if outgoing:
+            if Path(outgoing["mods"]).exists() and owned_mod is not None:
+                repl_paths.append(owned_mod)
+            if Path(outgoing["saves"]).exists():
+                repl_paths.append(Path(outgoing["saves"]))
+        for p in (target_mod, saves):
+            if p not in repl_paths:
+                repl_paths.append(p)
+        if any(a in b.parents or b in a.parents for i, a in enumerate(repl_paths) for b in repl_paths[i + 1:]):
+            raise ValueError("Party destinations overlap. Choose separate save accounts and mods folders.")
         return mods, saves
 
     def _name(self, name, ident=None):
@@ -210,7 +276,8 @@ class PartyLibrary:
                            updated=datetime.now(timezone.utc).isoformat())
             _write(self.folder(party['id']) / 'party.json', updated)
         except Exception:
-            shutil.rmtree(destination)
+            from oot_rando.path_safety import fs_path
+            shutil.rmtree(fs_path(destination))
             raise
         # Once the pointer is committed, cleanup must never remove that snapshot.
         previous = party.get('revision')
@@ -360,9 +427,9 @@ class PartyLibrary:
             raise ValueError('Activate another party before deleting this one.')
         self.get(ident)
         # Reversible removal: retained beside the library, outside the displayed list.
-        trash = self.root / '.deleted'
+        trash = self.root / ".deleted"
         trash.mkdir(exist_ok=True)
-        self.folder(ident).rename(trash / (ident + '-' + uuid.uuid4().hex))
+        self.folder(ident).rename(trash / (ident + "-" + uuid.uuid4().hex[:8]))
 
     @_operation
     def activate(self, ident, ap_address=None):

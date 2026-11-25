@@ -17,14 +17,21 @@ def preflight_mods_operation(
     required_bytes=256 * 1024 * 1024,
     min_error_bytes=32 * 1024 * 1024,
     source_paths=(),
+    allow_missing_parents=False,
 ):
-    """Verify write access, free disk space, source archives, and read-only locks before modifying mods/."""
+    "Verify write access, free disk space, source archives, and read-only locks before modifying mods/."
     target = Path(target_mods)
     warnings = []
     errors = []
     free_bytes = None
 
     check_dir = target if target.exists() else target.parent
+    if allow_missing_parents and not check_dir.exists():
+        probe_anc = check_dir
+        while probe_anc != probe_anc.parent and not probe_anc.exists():
+            probe_anc = probe_anc.parent
+        if probe_anc.exists():
+            check_dir = probe_anc
     if not check_dir.exists():
         errors.append("Target directory does not exist: " + str(target))
     else:
@@ -137,6 +144,12 @@ def check_party_health(library, ident, *, stage_root=None):
             else:
                 add("warn", "live_missing", "Neither Merged_Zelda_Rando nor raw seed folder is in mods/.")
 
+    from oot_rando.path_safety import SAVE_ACCOUNT_HEADROOM, SEED_ROMFS_HEADROOM, validate_path_headroom
+    for p_val, p_lbl, p_head in ((mods_dir, "Mods folder", SEED_ROMFS_HEADROOM), (Path(party["saves"]), "Save folder", SAVE_ACCOUNT_HEADROOM)):
+        try:
+            validate_path_headroom(p_val, max_relative_len=p_head, label=p_lbl)
+        except ValueError as exc:
+            add("warn", "path_length", str(exc))
     live_saves = Path(party["saves"])
     snap_saves = library.bundle(party) / "save"
     if active:

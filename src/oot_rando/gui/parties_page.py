@@ -255,9 +255,9 @@ class PartiesPage:
             return Path(active['saves'])
         initial = Path(self.save_path.get()).parent.parent if self.save_path.get() else None
         if not initial or not initial.is_dir():
-            from oot_rando.tracker.auto_tracker import save_roots
+            from oot_rando.tracker.auto_tracker import default_port_save_roots, save_roots
             hookshot_root = mods.parent if mods.name.lower() == "mods" else None
-            for cand in save_roots(hookshot_root, mods):
+            for cand in list(save_roots(hookshot_root, mods)) + list(default_port_save_roots()):
                 if cand.is_dir():
                     initial = cand
                     break
@@ -666,6 +666,15 @@ class PartiesPage:
         except Exception as error:
             self.error(error)
 
+    def _using_real_generator(self) -> bool:
+        from oot_rando.gui import generation_worker as _gw
+        from oot_rando.randomizer import randomizer_core as _rc
+        for fn in (generate_isolated, _gw.generate_isolated, _gw.run_in_process, _rc.generate):
+            mod = getattr(fn, "__module__", "") or ""
+            if not mod.startswith("oot_rando."):
+                return False
+        return True
+
     def generate_party(self, nup, mods, settings, continuing=None):
         if not self.parties_enabled.get():
             return self.generate_plain(nup, mods, settings)
@@ -676,11 +685,29 @@ class PartiesPage:
             self.party_name.get().strip() or self.party_display_name(initial))
         if not name:
             return
+        settings.validate_supported()
         self.party_library._name(name)
+        real_gen = self._using_real_generator()
+        if real_gen:
+            from oot_rando.randomizer.randomizer_services import validate_nup_file
+            validate_nup_file(nup)
         saves = self.party_destination(mods)
         if saves is None:
             return
-        self.party_library._closed()
+        mods, saves = self.party_library.preflight_generation(
+            name, mods, saves, settings, continuing=bool(continuing),
+        )
+        from oot_rando.party_health import preflight_mods_operation
+        pf_mods = preflight_mods_operation(
+            mods,
+            source_paths=[nup] if (real_gen and Path(nup).exists()) else (),
+            allow_missing_parents=True,
+        )
+        if not pf_mods["ok"]:
+            raise ValueError("; ".join(pf_mods["errors"]))
+        pf_stage = preflight_mods_operation(data_dir() / "party-generation", allow_missing_parents=True)
+        if not pf_stage["ok"]:
+            raise ValueError("; ".join(pf_stage["errors"]))
         self.party_name.set(name)
         address = self.ap_address.get()
         outgoing_address = address if self.party_context else None
@@ -692,7 +719,8 @@ class PartiesPage:
             staging.mkdir(parents=True, exist_ok=True)
             # Generate away from installed files: even a generator crash leaves the
             # current seed/save pair intact. Failed activation leaves a selectable party.
-            with tempfile.TemporaryDirectory(dir=staging) as temporary:
+            from oot_rando.path_safety import fs_path
+            with tempfile.TemporaryDirectory(prefix="g-", dir=fs_path(staging)) as temporary:
                 temporary = Path(temporary)
                 staging_mods = temporary / TITLE
                 if continuing:
@@ -714,9 +742,14 @@ class PartiesPage:
         self.run_job(job, done)
 
     def generate_plain(self, nup, mods, settings):
-        """Install the seed straight into the mods folder (My Games off)."""
+        "Install the seed straight into the mods folder (My Games off)."
         from oot_rando.gui.randomizer_gui import ARCHIVE
-        from oot_rando.randomizer.randomizer_services import qol_seed_warning
+        from oot_rando.randomizer.randomizer_services import preflight_plain_generation, qol_seed_warning
+        real_gen = self._using_real_generator()
+        mods = preflight_plain_generation(
+            nup, mods, settings, archive=ARCHIVE,
+            check_nup=real_gen, check_game_closed=real_gen,
+        )
         def job(progress):
             installed = generate_isolated(nup, mods, settings, ARCHIVE, progress)
             return installed, installed

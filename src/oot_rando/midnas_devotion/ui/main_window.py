@@ -409,16 +409,15 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
         self._build_ui()
         self.apply_ui_theme(self.cfg.effective_ui_theme, persist=False)
-        if getattr(self.cfg, "migration_notices", None):
-            QTimer.singleShot(300, self._show_migration_notice)
+        self._onboarding_running: bool = False
+        self._onboarding_scheduled: bool = False
+        self._migration_notice_shown: bool = False
+        self._initial_setup_prompted: bool = False
+        self._relocation_prompted: bool = False
         self.refresh_all()
 
-        if not self.cfg.has_ui_theme_choice:
-            QTimer.singleShot(180, self._prompt_first_launch)
-        elif not self.cfg.is_configured:
-            QTimer.singleShot(250, self._prompt_initial_setup)
-        else:
-            QTimer.singleShot(300, self._prompt_missing_folders_if_needed)
+        if not getattr(self.cfg, "embedded_in_randomizer", False):
+            self.schedule_startup_onboarding(delay_ms=200)
 
     def _build_ui(self) -> None:
         central = BackdropWidget(_find_asset("backdrop.png"))
@@ -1430,23 +1429,136 @@ class MainWindow(QMainWindow):
             if callable(cb):
                 cb(chosen)
 
-    def _prompt_first_launch(self) -> None:
+    def _modal_parent(self):
+        return self if self.isVisible() else None
+
+    def schedule_startup_onboarding(self, delay_ms: int = 180) -> None:
+        "Schedule the non-overlapping startup onboarding pipeline once visible."
+        if getattr(self, "_onboarding_running", False) or getattr(self, "_onboarding_scheduled", False):
+            return
+        self._onboarding_scheduled = True
+
+        def _fire() -> None:
+            self._onboarding_scheduled = False
+            self.run_startup_onboarding()
+
+        QTimer.singleShot(delay_ms, _fire)
+
+    def run_startup_onboarding(self, *, force_headless: bool = False) -> None:
+        "Execute theme picker, migration/Longshot relocation notices, folder setup, and missing-folder checks strictly in sequence."
+        if getattr(self, "_onboarding_running", False):
+            return
+        if getattr(self.cfg, "embedded_in_randomizer", False) and not force_headless and not self.isVisible():
+            return
+        self._onboarding_running = True
+        try:
+            if not self.cfg.has_ui_theme_choice and not getattr(self, "_first_launch_done", False):
+                self._prompt_first_launch(_chain=False)
+
+            if getattr(self.cfg, "migration_notices", None) and not getattr(self, "_migration_notice_shown", False):
+                self._migration_notice_shown = True
+                self._show_migration_notice()
+                self.cfg.migration_notices.clear()
+
+            if getattr(self.cfg, "longshot_relocation_info", None) and not getattr(self, "_relocation_prompted", False):
+                self._relocation_prompted = True
+                self._prompt_longshot_relocation_if_needed()
+
+            if not self.cfg.is_configured and not getattr(self, "_initial_setup_prompted", False):
+                self._initial_setup_prompted = True
+                self._prompt_initial_setup()
+
+            if (self.cfg.is_configured or self.cfg.romfs_dir or self.cfg.live_mods_dir) and not getattr(self, "_missing_folders_prompted", False):
+                self._prompt_missing_folders_if_needed()
+        finally:
+            self._onboarding_running = False
+
+    def _prompt_longshot_relocation_if_needed(self) -> None:
+        info = getattr(self.cfg, "longshot_relocation_info", None)
+        if not isinstance(info, dict):
+            return
+        mods_list = list(info.get("standalone_mods") or [])
+        old_lib = str(info.get("old_library") or "")
+        new_lib = str(info.get("new_library") or "")
+        if not mods_list and not old_lib:
+            self.cfg.longshot_relocation_info = None
+            return
+        bullets = []
+        if mods_list:
+            old_mods_val = info.get("old_mods")
+            extra_dots = "…" if len(mods_list) > 5 else ""
+            bullets.append(f"{len(mods_list)} standalone mod(s) in {old_mods_val}: " + ", ".join(mods_list[:5]) + extra_dots)
+        if old_lib:
+            bullets.append(f"UserModLibrary in {old_lib}")
+        msg = (
+            "Longshot updated to a newer folder:" + chr(10)
+            + str(info.get("new_port", "")) + chr(10) + chr(10)
+            + "Found mod folders still in your previous Longshot folder:" + chr(10) + "• "
+            + (chr(10) + "• ").join(bullets) + chr(10) + chr(10)
+            + "Copy them into the updated Longshot installation now? (Originals stay untouched as backup.)"
+        )
+        ans = QMessageBox.question(
+            self._modal_parent(),
+            "Carry Over Mods to Updated Longshot?",
+            msg,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        handled = list(self.cfg.saved_state.get("handled_longshot_relocations") or [])
+        reloc_key = str(info.get("key") or "")
+        if reloc_key and reloc_key not in handled:
+            handled.append(reloc_key)
+        if ans == QMessageBox.StandardButton.Yes:
+            from oot_rando.path_safety import fs_path
+            copied_count = 0
+            try:
+                new_mods_dir = str(info.get("new_mods") or "")
+                old_mods_dir = str(info.get("old_mods") or "")
+                if mods_list and new_mods_dir and old_mods_dir:
+                    os.makedirs(fs_path(new_mods_dir), exist_ok=True)
+                    for m_name in mods_list:
+                        src_m = os.path.join(old_mods_dir, m_name)
+                        dst_m = os.path.join(new_mods_dir, m_name)
+                        if os.path.isdir(src_m) and not os.path.exists(dst_m):
+                            shutil.copytree(fs_path(src_m), fs_path(dst_m))
+                            copied_count += 1
+                if old_lib and new_lib and os.path.isdir(old_lib) and not os.path.exists(new_lib):
+                    shutil.copytree(fs_path(old_lib), fs_path(new_lib))
+                    self.cfg.backup_dir = new_lib
+                    copied_count += 1
+            except OSError as exc:
+                QMessageBox.warning(self._modal_parent(), "Could Not Copy All Mods", str(exc))
+            self.cfg.longshot_relocation_info = None
+            try:
+                self.cfg.save_settings({"handled_longshot_relocations": handled})
+            except OSError:
+                pass
+            self.refresh_all()
+            if copied_count:
+                self._set_status_style("ok")
+                self.status_lbl.setText(f"✓  Carried over {copied_count} item(s) into updated Longshot folder.")
+        else:
+            self.cfg.longshot_relocation_info = None
+            try:
+                self.cfg.save_settings({"handled_longshot_relocations": handled})
+            except OSError:
+                pass
+
+    def _prompt_first_launch(self, *, _chain: bool = True) -> None:
         if getattr(self, "_first_launch_done", False):
             return
         self._first_launch_done = True
         dlg = UiExperienceDialog(
             current_theme=self.cfg.ui_theme,
             first_launch=True,
-            parent=None,
+            parent=self._modal_parent(),
         )
         if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected_theme:
             self.apply_ui_theme(dlg.selected_theme, persist=True)
         else:
             self.apply_ui_theme(self.cfg.effective_ui_theme, persist=True)
-        if not self.cfg.is_configured:
-            QTimer.singleShot(80, self._prompt_initial_setup)
-        else:
-            QTimer.singleShot(120, self._prompt_missing_folders_if_needed)
+        if _chain:
+            self.run_startup_onboarding(force_headless=True)
 
     def _prompt_text_input(self, title: str, label: str, initial_text: str = "") -> Tuple[str, bool]:
         dlg = QDialog(self)
@@ -1523,7 +1635,7 @@ class MainWindow(QMainWindow):
         if not find_missing_creatable_folders(paths):
             return
         created = prompt_create_missing_folders(
-            None,
+            self._modal_parent(),
             paths,
             synced_keys=getattr(self.cfg, "rando_synced_keys", set()),
             skip_label="Not Now",
@@ -1543,7 +1655,7 @@ class MainWindow(QMainWindow):
         self.status_lbl.setText(f"✓  Created {len(created)} missing folder(s) for Midna's Devotion.")
 
     def _open_settings(self) -> None:
-        dlg = SettingsDialog(self.cfg, None, on_jump_to_setup=getattr(self, "_on_jump_to_setup", None))
+        dlg = SettingsDialog(self.cfg, self._modal_parent(), on_jump_to_setup=getattr(self, "_on_jump_to_setup", None))
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.refresh_all()
 
