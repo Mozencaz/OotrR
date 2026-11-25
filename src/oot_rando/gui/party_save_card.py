@@ -7,7 +7,7 @@ import math
 from pathlib import Path
 import tkinter as tk
 
-from oot_rando.paths import state_dir
+from oot_rando.paths import resource, state_dir
 from oot_rando.tracker.auto_tracker import TrackerSession
 from oot_rando.tracker import game_overlay
 from oot_rando.tracker.save_reader import load_snapshot
@@ -15,19 +15,19 @@ from oot_rando.tracker.save_reader import load_snapshot
 _SAVE_SUMMARY_CACHE = {}
 
 STONES = [
-    ("Kokiri Emerald", "KE", "#45b854"),
-    ("Goron Ruby", "GR", "#d13b47"),
-    ("Zora Sapphire", "ZS", "#3982d6"),
+    ("Kokiri Emerald", "KE", "#3fb950", "#1f6f31"),
+    ("Goron Ruby", "GR", "#d9434e", "#821f27"),
+    ("Zora Sapphire", "ZS", "#3b86e0", "#1c4d8c"),
 ]
 
-# Clockwise starting at top (12 o'clock) to match the OoT medallion ring
+# Clockwise starting at top (12 o-clock) to match the OoT medallion ring
 MEDALLIONS = [
-    ("Light Medallion", "Li", "#d8c448"),
-    ("Forest Medallion", "Fo", "#46b34f"),
-    ("Fire Medallion", "Fi", "#d45538"),
-    ("Water Medallion", "Wa", "#3b7ed6"),
-    ("Spirit Medallion", "Sp", "#d99436"),
-    ("Shadow Medallion", "Sh", "#8c56c4"),
+    ("Light Medallion", "Li", "#d9c241", "#8c7a1a"),
+    ("Forest Medallion", "Fo", "#44b54d", "#226b28"),
+    ("Fire Medallion", "Fi", "#d65238", "#822918"),
+    ("Water Medallion", "Wa", "#3b80d9", "#1d4b8a"),
+    ("Spirit Medallion", "Sp", "#de9331", "#8c5712"),
+    ("Shadow Medallion", "Sh", "#8e55c9", "#52287d"),
 ]
 
 SONGS_TOP = [
@@ -52,8 +52,6 @@ SONGS_EXTRA = [
     ("Scarecrows Song", "Sc", "#9a9588"),
 ]
 
-
-
 _STONE_TOKEN_MAP = {
     "Item_Stone_Forest": "Kokiri Emerald",
     "Item_Stone_Fire": "Goron Ruby",
@@ -61,6 +59,12 @@ _STONE_TOKEN_MAP = {
 }
 
 _MEDALLION_TOKEN_MAP = {
+    "Item_Medal_Forest": "Forest Medallion",
+    "Item_Medal_Fire": "Fire Medallion",
+    "Item_Medal_Water": "Water Medallion",
+    "Item_Medal_Spirit": "Spirit Medallion",
+    "Item_Medal_Shadow": "Shadow Medallion",
+    "Item_Medal_Light": "Light Medallion",
     "Item_Medallion_Forest": "Forest Medallion",
     "Item_Medallion_Fire": "Fire Medallion",
     "Item_Medallion_Water": "Water Medallion",
@@ -82,6 +86,30 @@ _SONG_TOKEN_MAP = {
     "Song_Requiem": "Requiem of Spirit",
     "Song_Nocturne": "Nocturne of Shadow",
     "Song_Prelude": "Prelude of Light",
+    "Song_Scarecrow": "Scarecrows Song",
+    "Item_Melody_Lullaby": "Zeldas Lullaby",
+    "Item_Melody_EponaSong": "Eponas Song",
+    "Item_Melody_SariaSong": "Sarias Song",
+    "Item_Melody_SunSong": "Suns Song",
+    "Item_Melody_TimeSong": "Song of Time",
+    "Item_Melody_StormSong": "Song of Storms",
+}
+
+_SONG_ICON_TOKENS = {
+    "Zeldas Lullaby": "Song_Lullaby",
+    "Eponas Song": "Song_Epona",
+    "Sarias Song": "Song_Saria",
+    "Suns Song": "Song_Sun",
+    "Song of Time": "Song_Time",
+    "Song of Storms": "Song_Storms",
+    "Minuet of Forest": "Song_Minuet",
+    "Bolero of Fire": "Song_Bolero",
+    "Serenade of Water": "Song_Serenade",
+    "Requiem of Spirit": "Song_Requiem",
+    "Nocturne of Shadow": "Song_Nocturne",
+    "Prelude of Light": "Song_Prelude",
+    "Scarecrows Song": "Song_Scarecrow",
+    "Scarecrow Song": "Song_Scarecrow",
 }
 
 
@@ -112,21 +140,57 @@ def _apply_string_snapshot_items(snapshot, counts):
             counts[sg_name] = max(int(counts.get(sg_name, 0)), 1)
 
 
-def _newest_party_save(saves_dir):
+def _list_party_saves(saves_dir):
     root = Path(saves_dir)
     if not root.is_dir():
-        return None
-    best = None
-    best_mtime = -1.0
+        return []
+    found = []
     for sav in root.rglob("progress.sav"):
         try:
-            mt = sav.stat().st_mtime
+            st = sav.stat()
         except OSError:
             continue
-        if mt > best_mtime:
-            best_mtime = mt
-            best = sav
-    return best
+        found.append((st.st_mtime_ns, st.st_size, sav))
+    found.sort(key=lambda item: item[0], reverse=True)
+    return found
+
+
+def _select_party_save(saves_dir, seed_marker=None):
+    """Pick the newest save matching seed_marker when available, else the newest save."""
+    candidates = _list_party_saves(saves_dir)
+    if not candidates:
+        return None, None, None
+    if seed_marker is not None:
+        try:
+            marker_int = int(seed_marker)
+        except (TypeError, ValueError):
+            marker_int = None
+        if marker_int is not None:
+            for mt_ns, sz, sav in candidates:
+                try:
+                    snap = load_snapshot(sav)
+                except Exception:
+                    continue
+                if isinstance(snap, dict) and snap.get("bool", {}).get(marker_int) is True:
+                    return sav, (mt_ns, sz), snap
+    mt_ns, sz, sav = candidates[0]
+    return sav, (mt_ns, sz), None
+
+
+def _load_tracking_metadata(seed_path):
+    """Prefer tracking.json (full inventory/check flags/seed_marker), falling back to checks.json."""
+    for fname in ("tracking.json", "checks.json"):
+        meta_path = seed_path / fname
+        if not meta_path.is_file():
+            continue
+        try:
+            raw = json.loads(meta_path.read_text(encoding="utf-8"))
+            meta = raw.get("tracker") if isinstance(raw.get("tracker"), dict) else raw
+            if isinstance(meta, dict):
+                return meta, meta_path
+        except Exception:
+            continue
+    return {}, seed_path / "tracking.json"
 
 
 def _build_grid_and_badges(counts, known, tracked):
@@ -141,20 +205,31 @@ def _build_grid_and_badges(counts, known, tracked):
                 "abbr": abbr,
                 "label": label,
                 "level": level,
+                "levels": levels,
                 "colour": colour,
                 "state": state,
                 "icon": game_overlay.icon_name(item, level),
             })
         items_grid.append(line)
 
-    stones = [{"item": it, "abbr": ab, "colour": col, "owned": bool(counts.get(it, 0))} for it, ab, col in STONES]
-    medallions = [{"item": it, "abbr": ab, "colour": col, "owned": bool(counts.get(it, 0))} for it, ab, col in MEDALLIONS]
+    stones = [
+        {"item": it, "abbr": ab, "colour": col, "border": brd, "owned": bool(counts.get(it, 0))}
+        for it, ab, col, brd in STONES
+    ]
+    medallions = [
+        {"item": it, "abbr": ab, "colour": col, "border": brd, "owned": bool(counts.get(it, 0))}
+        for it, ab, col, brd in MEDALLIONS
+    ]
 
     def _song_owned(name):
         if counts.get(name, 0):
             return True
         alt = name.replace("s ", chr(39) + "s ")
-        return bool(counts.get(alt, 0))
+        if counts.get(alt, 0):
+            return True
+        if name == "Scarecrows Song":
+            return bool(counts.get("Scarecrow Song", 0) or counts.get("Scarecrow" + chr(39) + "s Song", 0))
+        return False
 
     songs_top = [{"item": it, "abbr": ab, "colour": col, "owned": _song_owned(it)} for it, ab, col in SONGS_TOP]
     songs_warp = [{"item": it, "abbr": ab, "colour": col, "owned": _song_owned(it)} for it, ab, col in SONGS_WARP]
@@ -162,83 +237,56 @@ def _build_grid_and_badges(counts, known, tracked):
     return items_grid, stones, medallions, songs_top, songs_warp, songs_extra
 
 
+def _empty_summary(total, tracked):
+    items_grid, stones, medallions, songs_top, songs_warp, songs_extra = _build_grid_and_badges(Counter(), set(), tracked)
+    return {
+        "started": False,
+        "slot": "New File",
+        "hearts": 3,
+        "skulltulas": 0,
+        "rupees": 0,
+        "done": 0,
+        "total": total,
+        "stones": stones,
+        "medallions": medallions,
+        "items": items_grid,
+        "songs_top": songs_top,
+        "songs_warp": songs_warp,
+        "songs_extra": songs_extra,
+    }
+
+
 def summarize_party_save(seed_dir, saves_dir):
     """Return an OoT file-select summary dict for a party seed + save folder."""
     seed_path = Path(seed_dir)
-    checks_path = seed_path / "checks.json"
-    metadata = {}
-    if checks_path.is_file():
-        try:
-            data = json.loads(checks_path.read_text(encoding="utf-8"))
-            metadata = data.get("tracker") or data
-        except Exception:
-            metadata = {}
-
+    metadata, meta_path = _load_tracking_metadata(seed_path)
     checks_map = metadata.get("checks") if isinstance(metadata.get("checks"), dict) else {}
     total = len(checks_map)
-    tracked = {r.get("item") for r in metadata.get("inventory", []) if r.get("item")}
+    tracked = {r.get("item") for r in metadata.get("inventory", []) if isinstance(r, dict) and r.get("item")}
+    seed_marker = metadata.get("seed_marker")
 
-    sav = _newest_party_save(saves_dir)
-    if sav is None:
-        items_grid, stones, medallions, songs_top, songs_warp, songs_extra = _build_grid_and_badges(Counter(), set(), tracked)
-        return {
-            "started": False,
-            "slot": "New File",
-            "hearts": 3,
-            "skulltulas": 0,
-            "done": 0,
-            "total": total,
-            "stones": stones,
-            "medallions": medallions,
-            "items": items_grid,
-            "songs_top": songs_top,
-            "songs_warp": songs_warp,
-            "songs_extra": songs_extra,
-        }
+    sav, stat_pair, preloaded_snap = _select_party_save(saves_dir, seed_marker=seed_marker)
+    if sav is None or stat_pair is None:
+        return _empty_summary(total, tracked)
 
+    mt_ns, sz = stat_pair
     try:
-        st = sav.stat()
-        ck_mtime = checks_path.stat().st_mtime_ns if checks_path.is_file() else 0
+        meta_mtime = meta_path.stat().st_mtime_ns if meta_path.is_file() else 0
     except OSError:
-        items_grid, stones, medallions, songs_top, songs_warp, songs_extra = _build_grid_and_badges(Counter(), set(), tracked)
-        return {
-            "started": False,
-            "slot": "New File",
-            "hearts": 3,
-            "skulltulas": 0,
-            "done": 0,
-            "total": total,
-            "stones": stones,
-            "medallions": medallions,
-            "items": items_grid,
-            "songs_top": songs_top,
-            "songs_warp": songs_warp,
-            "songs_extra": songs_extra,
-        }
+        meta_mtime = 0
 
-    cache_key = (str(sav), st.st_mtime_ns, st.st_size, str(checks_path), ck_mtime)
+    cache_key = (str(sav), mt_ns, sz, str(meta_path), meta_mtime)
     cached = _SAVE_SUMMARY_CACHE.get(cache_key)
     if cached is not None:
         return cached
 
-    try:
-        snapshot = load_snapshot(sav)
-    except Exception:
-        items_grid, stones, medallions, songs_top, songs_warp, songs_extra = _build_grid_and_badges(Counter(), set(), tracked)
-        return {
-            "started": False,
-            "slot": "New File",
-            "hearts": 3,
-            "skulltulas": 0,
-            "done": 0,
-            "total": total,
-            "stones": stones,
-            "medallions": medallions,
-            "items": items_grid,
-            "songs_top": songs_top,
-            "songs_warp": songs_warp,
-            "songs_extra": songs_extra,
-        }
+    if preloaded_snap is not None:
+        snapshot = preloaded_snap
+    else:
+        try:
+            snapshot = load_snapshot(sav)
+        except Exception:
+            return _empty_summary(total, tracked)
 
     counts, known = TrackerSession.observed_inventory(snapshot, metadata)
     _apply_string_snapshot_items(snapshot, counts)
@@ -251,10 +299,11 @@ def summarize_party_save(seed_dir, saves_dir):
             if row.get("item"):
                 observed_counts[row["item"]] += 1
 
+    song_names = {s[0] for s in SONGS_TOP + SONGS_WARP + SONGS_EXTRA}
     for item, amount in observed_counts.items():
         if item in ("Gold Skulltula Token", "Heart Container", "Piece of Heart"):
             counts[item] = max(counts[item], amount)
-        elif item in tracked or any(item == s[0] for s in SONGS_TOP + SONGS_WARP):
+        elif item in tracked or item in song_names:
             counts[item] = max(counts[item], amount)
 
     hearts = 3 + int(counts.get("Heart Container", 0)) + (int(counts.get("Piece of Heart", 0)) // 4)
@@ -268,10 +317,18 @@ def summarize_party_save(seed_dir, saves_dir):
         for i in range(5)
     ]
 
+    # Normalize remake Echo Gem alias alongside Stone of Agony without duplicating
+    # the 3x9 inventory grid slot in the UPGRADES panel.
+    echo_gem_lvl = max(int(counts.get("Echo Gem", 0)), int(counts.get("Stone of Agony", 0)))
+    if echo_gem_lvl:
+        counts["Stone of Agony"] = max(int(counts.get("Stone of Agony", 0)), echo_gem_lvl)
+
     str_lvl = int(counts.get("Progressive Strength Upgrade", 0))
     scl_lvl = int(counts.get("Progressive Scale", 0))
-    agony_lvl = 1 if counts.get("Stone of Agony", 0) else 0
-    letter_lvl = 1 if counts.get("Zeldas Letter", 0) else 0
+    z_letter_lvl = 1 if counts.get("Zeldas Letter", 0) else 0
+    r_letter_lvl = 1 if counts.get("Rutos Letter", 0) else 0
+    letter_lvl = 1 if (z_letter_lvl or r_letter_lvl) else 0
+    letter_item = "Rutos Letter" if (r_letter_lvl and not z_letter_lvl) else "Zeldas Letter"
 
     quest_items = [
         {
@@ -289,18 +346,11 @@ def summarize_party_save(seed_dir, saves_dir):
             "icon": game_overlay.icon_name("Progressive Scale", max(1, scl_lvl)),
         },
         {
-            "label": "Agony Stone",
-            "level": agony_lvl,
-            "max": 1,
-            "colour": "#a9814a",
-            "icon": game_overlay.icon_name("Stone of Agony", 1),
-        },
-        {
-            "label": "Zelda Letter",
+            "label": "Letter",
             "level": letter_lvl,
             "max": 1,
             "colour": "#a9814a",
-            "icon": game_overlay.icon_name("Zeldas Letter", 1),
+            "icon": game_overlay.icon_name(letter_item, 1),
         },
     ]
 
@@ -328,7 +378,7 @@ def summarize_party_save(seed_dir, saves_dir):
 
 
 def _load_tk_icon(icon_path: Path, size: int, owned: bool):
-    """Load a cached game icon PNG resized cleanly, dimmed when unowned."""
+    """Load a cached game icon PNG resized cleanly, desaturated & dimmed when unowned."""
     try:
         from PIL import Image, ImageEnhance
         img = Image.open(icon_path).convert("RGBA")
@@ -336,8 +386,8 @@ def _load_tk_icon(icon_path: Path, size: int, owned: bool):
         if not owned:
             r, g, b, a = img.split()
             gray = Image.merge("RGB", (r, g, b)).convert("L")
-            gray = ImageEnhance.Brightness(gray).enhance(0.45)
-            alpha = a.point(lambda px: int(px * 0.42))
+            gray = ImageEnhance.Brightness(gray).enhance(0.50)
+            alpha = a.point(lambda px: int(px * 0.36))
             img = Image.merge("RGBA", (gray, gray, gray, alpha))
         buf = io.BytesIO()
         img.save(buf, format="PNG")
@@ -351,22 +401,32 @@ def _load_tk_icon(icon_path: Path, size: int, owned: bool):
             return None
 
 
+def _is_dark_hex(hex_col: str) -> bool:
+    s = str(hex_col or "").lstrip("#")
+    if len(s) != 6:
+        return False
+    try:
+        r, g, b = int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16)
+        return (0.299 * r + 0.587 * g + 0.114 * b) < 128
+    except ValueError:
+        return False
 
-_SONG_ICON_TOKENS = {
-    "Zeldas Lullaby": "Song_Lullaby",
-    "Eponas Song": "Song_Epona",
-    "Sarias Song": "Song_Saria",
-    "Suns Song": "Song_Sun",
-    "Song of Time": "Song_Time",
-    "Song of Storms": "Song_Storms",
-    "Minuet of Forest": "Song_Minuet",
-    "Bolero of Fire": "Song_Bolero",
-    "Serenade of Water": "Song_Serenade",
-    "Requiem of Spirit": "Song_Requiem",
-    "Nocturne of Shadow": "Song_Nocturne",
-    "Prelude of Light": "Song_Prelude",
-    "Scarecrow Song": "Song_Scarecrow",
-}
+
+def _icon_search_dirs(icon_dir=None):
+    dirs = []
+    if icon_dir:
+        dirs.append(Path(icon_dir))
+    for cand in (
+        state_dir() / "icons",
+        resource("gui", "icons"),
+        Path(__file__).resolve().parent / "icons",
+        Path(__file__).resolve().parent.parent / "assets" / "icons",
+        Path(__file__).resolve().parent.parent / "tracker" / "icons",
+    ):
+        if cand and cand not in dirs:
+            dirs.append(cand)
+    return dirs
+
 
 def render_party_save_card(parent, summary, colors, icon_dir=None):
     bg = colors.get("panel_bg", "#f7f3e8")
@@ -374,37 +434,36 @@ def render_party_save_card(parent, summary, colors, icon_dir=None):
     line = colors.get("line", "#d7cfb8")
     ink = colors.get("ink", "#2b261d")
     muted = colors.get("muted", "#736a58")
+    dark = _is_dark_hex(bg)
 
+    slot_bg = "#252932" if dark else "#f2ede0"
+    slot_border = "#3d4452" if dark else "#d4cbb4"
+    unowned_fill = "#2d323d" if dark else "#ebe5d5"
+    unowned_outline = "#485060" if dark else "#c2b89f"
+    unowned_ink = "#7c8596" if dark else "#8c826e"
+    sep_col = "#363c48" if dark else line
+    ring_guide = "#3a404d" if dark else "#ded6c1"
+
+    W, H = 844, 206
     canvas = tk.Canvas(
         parent,
-        width=860,
-        height=204,
+        width=W,
+        height=H,
         background=bg,
         highlightthickness=1,
         highlightbackground=line,
         borderwidth=0,
     )
-    canvas.pack(anchor="w", pady=(2, 0))
+    canvas.pack(anchor="w", pady=(6, 0))
 
     icon_cache = {}
-    search_dirs = []
-    if icon_dir:
-        search_dirs.append(Path(icon_dir))
-    repo_root = Path(__file__).resolve().parents[3]
-    for cand in (
-        repo_root / "build" / "app" / "icons",
-        Path(__file__).resolve().parent / "icons",
-        Path(__file__).resolve().parent.parent / "assets" / "icons",
-        Path(__file__).resolve().parent.parent / "tracker" / "icons",
-        state_dir() / "icons",
-    ):
-        if cand not in search_dirs:
-            search_dirs.append(cand)
+    search_dirs = _icon_search_dirs(icon_dir)
 
     def _resolve_icon_file(token):
         if not token:
             return None
-        candidates = [token] if str(token).lower().endswith(".png") else [f"{token}.png", str(token)]
+        tok = str(token)
+        candidates = [tok] if tok.lower().endswith(".png") else [tok + ".png", tok]
         for base in search_dirs:
             if not base.is_dir():
                 continue
@@ -414,12 +473,12 @@ def render_party_save_card(parent, summary, colors, icon_dir=None):
                     return p
         return None
 
-    def get_icon(token, owned=True):
-        key = (token, bool(owned))
+    def get_icon(token, owned=True, size=24):
+        key = (token, bool(owned), int(size))
         if key in icon_cache:
             return icon_cache[key]
         icon_file = _resolve_icon_file(token)
-        img = _load_tk_icon(icon_file, size=24, owned=bool(owned)) if icon_file else None
+        img = _load_tk_icon(icon_file, size=size, owned=bool(owned)) if icon_file else None
         icon_cache[key] = img
         return img
 
@@ -427,8 +486,8 @@ def render_party_save_card(parent, summary, colors, icon_dir=None):
 
     if not summary or not summary.get("started"):
         canvas.create_text(
-            18,
-            92,
+            24,
+            H // 2,
             text="No save file detected yet — start a new game in the port and save.",
             anchor="w",
             fill=muted,
@@ -436,156 +495,231 @@ def render_party_save_card(parent, summary, colors, icon_dir=None):
         )
         return canvas
 
-    # Left column: Hearts, Skulls, Checks, Save slot
+    # =========================================================================
+    # COLUMN 1: VITAL STATS (x = 0 .. 110)
+    # =========================================================================
     done = int(summary.get("done", 0))
     total = int(summary.get("total", 0))
     chk_txt = f"{done}/{total}" if total > 0 else "—"
+    hearts_val = int(summary.get("hearts", 3))
+    skulls_val = int(summary.get("skulltulas", 0))
     rupee_val = int(summary.get("rupees", 0))
     rupee_owned = rupee_val > 0
-    grey_fill = "#ebe6d8"
-    grey_outline = "#bdb49f"
-    grey_ink = "#8a816e"
+    skull_owned = skulls_val > 0
 
-    canvas.create_text(14, 24, text="♥ " + str(summary.get("hearts", 3)), anchor="w", fill="#c93b3b", font=("TkDefaultFont", 11, "bold"))
-    canvas.create_text(14, 52, text="☠ " + str(summary.get("skulltulas", 0)), anchor="w", fill="#b5891e", font=("TkDefaultFont", 11, "bold"))
+    canvas.create_text(16, 16, text="PROGRESS", anchor="w", fill=muted, font=("TkDefaultFont", 7, "bold"))
 
-    rupee_img = get_icon("Item_Rupee_Green", rupee_owned) or get_icon("Rupee", rupee_owned)
-    if rupee_img is not None:
-        canvas.create_image(22, 80, image=rupee_img)
+    # Row 1: Hearts (y = 42)
+    canvas.create_text(24, 42, text="♥", anchor="center", fill="#d13b47", font=("TkDefaultFont", 12, "bold"))
+    canvas.create_text(40, 42, text=str(hearts_val), anchor="w", fill="#d13b47", font=("TkDefaultFont", 10, "bold"))
+
+    # Row 2: Gold Skulltulas (y = 74)
+    skull_img = get_icon("Item_Token_Gold", skull_owned, size=18)
+    if skull_img is not None:
+        canvas.create_image(24, 74, image=skull_img)
     else:
-        gem_pts = [22, 72, 28, 77, 26, 87, 18, 87, 16, 77]
-        gem_fill = "#2e8b57" if rupee_owned else grey_fill
-        gem_out = "#1f663e" if rupee_owned else grey_outline
-        canvas.create_polygon(gem_pts, fill=gem_fill, outline=gem_out, width=1.2)
-    canvas.create_text(35, 80, text=str(rupee_val), anchor="w", fill="#2e8b57" if rupee_owned else grey_ink, font=("TkDefaultFont", 10, "bold" if rupee_owned else "normal"))
+        canvas.create_text(24, 74, text="☠", anchor="center", fill="#c49421" if skull_owned else unowned_ink, font=("TkDefaultFont", 11, "bold"))
+    canvas.create_text(
+        40, 74, text=str(skulls_val), anchor="w",
+        fill="#c49421" if skull_owned else unowned_ink,
+        font=("TkDefaultFont", 10, "bold" if skull_owned else "normal"),
+    )
 
-    canvas.create_text(14, 108, text="✓ " + chk_txt, anchor="w", fill=ink, font=("TkDefaultFont", 10, "bold"))
-    canvas.create_text(14, 140, text=summary.get("slot", "New File"), anchor="w", fill=muted, font=("TkDefaultFont", 9, "bold"))
+    # Row 3: Rupees (y = 106)
+    rupee_img = (
+        get_icon("Obj_Rupee_Green", rupee_owned, size=18)
+        or get_icon("Item_Rupee_Green", rupee_owned, size=18)
+        or get_icon("Rupee", rupee_owned, size=18)
+    )
+    if rupee_img is not None:
+        canvas.create_image(24, 106, image=rupee_img)
+    else:
+        gem_pts = [24, 98, 29, 103, 27, 113, 21, 113, 19, 103]
+        canvas.create_polygon(
+            gem_pts,
+            fill="#2e9b5c" if rupee_owned else unowned_fill,
+            outline="#1e6b3f" if rupee_owned else unowned_outline,
+            width=1.2,
+        )
+    canvas.create_text(
+        40, 106, text=str(rupee_val), anchor="w",
+        fill="#2e9b5c" if rupee_owned else unowned_ink,
+        font=("TkDefaultFont", 10, "bold" if rupee_owned else "normal"),
+    )
 
-    canvas.create_line(94, 14, 94, 190, fill=line)
+    # Row 4: Checks (y = 138)
+    canvas.create_text(24, 138, text="✓", anchor="center", fill=ink, font=("TkDefaultFont", 10, "bold"))
+    canvas.create_text(40, 138, text=chk_txt, anchor="w", fill=ink, font=("TkDefaultFont", 9, "bold"))
 
-    # Medallion ring (clockwise from 12 o'clock) + 3 Spiritual Stones across center
-    cx, cy, ring_r = 150, 92, 46
+    # Bottom: Save Slot Badge (y = 164 .. 188)
+    canvas.create_rectangle(14, 164, 96, 188, fill=slot_bg, outline=slot_border, width=1)
+    canvas.create_text(55, 176, text=str(summary.get("slot", "New File")), anchor="center", fill=muted, font=("TkDefaultFont", 8, "bold"))
+
+    canvas.create_line(110, 14, 110, H - 14, fill=sep_col)
+
+    # =========================================================================
+    # COLUMN 2: MEDALLION RING & SPIRITUAL STONES (x = 110 .. 250, cx = 180)
+    # =========================================================================
+    cx = 180
+    canvas.create_text(cx, 16, text="QUEST STATUS", anchor="center", fill=muted, font=("TkDefaultFont", 7, "bold"))
+
+    # Medallion Ring (cy = 82, r = 40 -> outer bounds y = 30 .. 134, x = 128 .. 232)
+    cy, ring_r = 82, 40
+    canvas.create_oval(cx - ring_r, cy - ring_r, cx + ring_r, cy + ring_r, outline=ring_guide, width=1.2)
     for idx, med in enumerate(summary.get("medallions") or []):
         angle = math.radians(-90 + idx * 60)
         mx = cx + ring_r * math.cos(angle)
         my = cy + ring_r * math.sin(angle)
         owned = bool(med.get("owned"))
         m_item = med.get("item") or ""
-        m_name = med.get("name") or med.get("label") or m_item or med.get("abbr") or ""
-        m_icon = get_icon(med.get("icon"), owned) or get_icon(m_item.replace(" ", "_"), owned) or get_icon("Item_" + m_item.replace(" ", "_"), owned)
+        m_icon = (
+            get_icon(med.get("icon"), owned, size=22)
+            or get_icon(m_item.replace(" ", "_"), owned, size=22)
+            or get_icon("Item_" + m_item.replace(" ", "_"), owned, size=22)
+        )
         if m_icon is not None:
             canvas.create_image(mx, my, image=m_icon)
         else:
-            fill = med["colour"] if owned else grey_fill
-            outline = med["colour"] if owned else grey_outline
-            canvas.create_oval(mx - 12, my - 12, mx + 12, my + 12, fill=fill, outline=outline, width=1.5)
-            canvas.create_text(mx, my, text=med["abbr"], fill="#ffffff" if owned else grey_ink, font=("TkDefaultFont", 8, "bold"))
+            fill = med["colour"] if owned else unowned_fill
+            outline = med.get("border", med["colour"]) if owned else unowned_outline
+            canvas.create_oval(mx - 12, my - 12, mx + 12, my + 12, fill=fill, outline=outline, width=1.6)
+            if owned:
+                canvas.create_oval(mx - 9, my - 9, mx + 9, my + 9, outline="#ffffff", width=0.8)
+            canvas.create_text(mx, my, text=med["abbr"], fill="#ffffff" if owned else unowned_ink, font=("TkDefaultFont", 7, "bold"))
 
-    stone_xs = [122, 150, 178]
-    sy = cy
+    # Subtle separator between Medallion ring and Spiritual Stones
+    canvas.create_line(132, 144, 228, 144, fill=ring_guide)
+
+    # 3 Spiritual Stones cleanly centered below the ring (y = 170)
+    stone_xs = [142, 180, 218]
+    sy = 170
     for sx, st in zip(stone_xs, summary.get("stones") or []):
         owned = bool(st.get("owned"))
         s_item = st.get("item") or ""
-        s_name = st.get("name") or st.get("label") or s_item or st.get("abbr") or ""
-        s_icon = get_icon(st.get("icon"), owned) or get_icon(s_item.replace(" ", "_"), owned) or get_icon("Item_" + s_item.replace(" ", "_"), owned)
+        s_icon = (
+            get_icon(st.get("icon"), owned, size=22)
+            or get_icon(s_item.replace(" ", "_"), owned, size=22)
+            or get_icon("Item_" + s_item.replace(" ", "_"), owned, size=22)
+        )
         if s_icon is not None:
             canvas.create_image(sx, sy, image=s_icon)
         else:
-            fill = st["colour"] if owned else grey_fill
-            outline = st["colour"] if owned else grey_outline
-            pts = [sx, sy - 10, sx + 10, sy, sx, sy + 10, sx - 10, sy]
+            fill = st["colour"] if owned else unowned_fill
+            outline = st.get("border", st["colour"]) if owned else unowned_outline
+            pts = [sx, sy - 12, sx + 11, sy - 2, sx + 7, sy + 11, sx - 7, sy + 11, sx - 11, sy - 2]
             canvas.create_polygon(pts, fill=fill, outline=outline, width=1.5)
-            canvas.create_text(sx, sy, text=st["abbr"], fill="#ffffff" if owned else grey_ink, font=("TkDefaultFont", 7, "bold"))
+            canvas.create_text(sx, sy + 1, text=st["abbr"], fill="#ffffff" if owned else unowned_ink, font=("TkDefaultFont", 7, "bold"))
 
-    canvas.create_line(238, 14, 238, 190, fill=line)
+    canvas.create_line(250, 14, 250, H - 14, fill=sep_col)
 
-    # Center: 3x9 Item & Equipment grid
-    grid_x0, grid_y0 = 254, 14
-    cell_w, cell_h = 35, 35
+    # =========================================================================
+    # COLUMN 3: 3x9 INVENTORY GRID & OCARINA SONGS (x = 250 .. 614)
+    # =========================================================================
+    grid_x0, grid_y0 = 266, 14
+    cell_box = 32
+    cell_pitch = 37
     for r_idx, row in enumerate(summary.get("items") or []):
         for c_idx, cell in enumerate(row):
-            x = grid_x0 + c_idx * cell_w
-            y = grid_y0 + r_idx * cell_h
+            x = grid_x0 + c_idx * cell_pitch
+            y = grid_y0 + r_idx * cell_pitch
             owned = cell.get("state") == "owned"
-            box_fill = card_bg
-            box_out = cell.get("colour", line) if owned else line
-            canvas.create_rectangle(x, y, x + 30, y + 30, fill=box_fill, outline=box_out, width=1.5 if owned else 1)
-            img = get_icon(cell.get("icon"), owned)
+            box_fill = card_bg if owned else slot_bg
+            box_out = cell.get("colour", line) if owned else slot_border
+            canvas.create_rectangle(x, y, x + cell_box, y + cell_box, fill=box_fill, outline=box_out, width=1.5 if owned else 1)
+            img = get_icon(cell.get("icon"), owned, size=24)
             if img is not None:
-                canvas.create_image(x + 15, y + 15, image=img)
-                if cell.get("level", 0) > 1:
-                    canvas.create_text(
-                        x + 26,
-                        y + 25,
-                        text=str(cell["level"]),
-                        anchor="se",
-                        fill=ink if owned else muted,
-                        font=("TkDefaultFont", 7, "bold"),
-                    )
+                canvas.create_image(x + cell_box // 2, y + cell_box // 2, image=img)
+                lvl = int(cell.get("level", 0))
+                if lvl > 1:
+                    bx2, by2 = x + cell_box - 1, y + cell_box - 1
+                    canvas.create_rectangle(bx2 - 10, by2 - 10, bx2, by2, fill=cell.get("colour", ink), outline="")
+                    canvas.create_text(bx2 - 5, by2 - 5, text=str(lvl), anchor="center", fill="#ffffff", font=("TkDefaultFont", 7, "bold"))
             else:
                 canvas.create_text(
-                    x + 15,
-                    y + 15,
+                    x + cell_box // 2,
+                    y + cell_box // 2,
                     text=cell.get("abbr", ""),
-                    fill=box_out if owned else muted,
+                    fill=box_out if owned else unowned_ink,
                     font=("TkDefaultFont", 8, "bold" if owned else "normal"),
                 )
 
-    # Bottom center: 2 rows of 6 Song PNG icons only + 13th Scarecrow's Song badge
-    song_x0 = 254
+    # Horizontal divider separating Inventory Grid and Songs
+    canvas.create_line(266, 130, 598, 130, fill=sep_col)
+
+    # 2 rows of 6 Song PNG icons + Scarecrow Song PNG on right
+    song_x0 = 278
+    song_pitch = 50
     for s_row_idx, s_row in enumerate((summary.get("songs_top") or [], summary.get("songs_warp") or [])):
-        sy_row = 132 + s_row_idx * 30
+        sy_row = 149 + s_row_idx * 30
         for idx, song in enumerate(s_row):
-            sx = song_x0 + idx * 55
+            sx = song_x0 + idx * song_pitch
             owned = bool(song.get("owned"))
-            col = song["colour"] if owned else muted
+            col = song["colour"] if owned else unowned_ink
             song_name = song.get("item", "")
-            token = _SONG_ICON_TOKENS.get(song_name) or _SONG_ICON_TOKENS.get(song_name.replace("'", ""))
-            icon_img = get_icon(token, owned=owned) if token else None
+            token = _SONG_ICON_TOKENS.get(song_name) or _SONG_ICON_TOKENS.get(song_name.replace(chr(39), ""))
+            icon_img = get_icon(token, owned=owned, size=24) if token else None
             if icon_img is not None:
-                canvas.create_image(sx + 12, sy_row, image=icon_img, anchor="center")
+                canvas.create_image(sx, sy_row, image=icon_img, anchor="center")
             else:
-                canvas.create_oval(sx + 2, sy_row - 10, sx + 22, sy_row + 10, fill=card_bg, outline=col if owned else line, width=1.5 if owned else 1)
+                canvas.create_oval(sx - 11, sy_row - 11, sx + 11, sy_row + 11, fill=card_bg if owned else slot_bg, outline=col if owned else slot_border, width=1.4 if owned else 1)
+                canvas.create_text(sx, sy_row, text=song.get("abbr", ""), fill=col, font=("TkDefaultFont", 7, "bold" if owned else "normal"))
 
     extra_songs = summary.get("songs_extra") or []
     for idx, song in enumerate(extra_songs):
-        sx = song_x0 + 6 * 55 + 6 + idx * 24
-        col = song["colour"] if song["owned"] else muted
-        canvas.create_oval(sx - 9, 138, sx + 9, 156, fill=card_bg, outline=col if song["owned"] else line, width=1.5 if song["owned"] else 1)
-        canvas.create_text(sx, 147, text=song["abbr"], fill=col, font=("TkDefaultFont", 7, "bold" if song["owned"] else "normal"))
-    canvas.create_line(618, 14, 618, 190, fill=line)
-
-    # Right column: 5 Bottle slots (B1..B5) + Quest upgrades
-    bx0, by0 = 630, 14
-    canvas.create_text(bx0, by0 + 8, text="Bottles (5)", anchor="w", fill=muted, font=("TkDefaultFont", 8, "bold"))
-    for b_idx, b in enumerate(summary.get("bottles") or []):
-        bx = bx0 + (b_idx % 3) * 66
-        by = by0 + 22 + (b_idx // 3) * 28
-        owned = bool(b.get("owned"))
-        b_col = "#a9814a" if owned else line
-        canvas.create_rectangle(bx, by, bx + 58, by + 24, fill=card_bg, outline=b_col, width=1.5 if owned else 1)
-        b_img = get_icon(b.get("icon"), owned)
-        if b_img is not None:
-            canvas.create_image(bx + 13, by + 12, image=b_img)
-            canvas.create_text(bx + 39, by + 12, text=b["slot"], fill="#a9814a" if owned else muted, font=("TkDefaultFont", 8, "bold" if owned else "normal"))
+        sx = 582 + idx * 28
+        sy_ex = 164
+        owned = bool(song.get("owned"))
+        col = song["colour"] if owned else unowned_ink
+        ex_tok = "Song_Scarecrow" if owned else ("Song_Scarecrow_Empty" if _resolve_icon_file("Song_Scarecrow_Empty") else "Song_Scarecrow")
+        ex_img = get_icon(ex_tok, owned=owned, size=24)
+        if ex_img is not None:
+            canvas.create_image(sx, sy_ex, image=ex_img, anchor="center")
         else:
-            canvas.create_text(bx + 29, by + 12, text=b["slot"], fill="#a9814a" if owned else muted, font=("TkDefaultFont", 8, "bold" if owned else "normal"))
+            canvas.create_oval(sx - 11, sy_ex - 11, sx + 11, sy_ex + 11, fill=card_bg if owned else slot_bg, outline=col if owned else slot_border, width=1.4 if owned else 1)
+            canvas.create_text(sx, sy_ex, text=song.get("abbr", "Sc"), fill=col, font=("TkDefaultFont", 7, "bold" if owned else "normal"))
 
-    qx0, qy0 = 630, 96
-    canvas.create_text(qx0, qy0 + 7, text="Quest", anchor="w", fill=muted, font=("TkDefaultFont", 8, "bold"))
+    canvas.create_line(614, 14, 614, H - 14, fill=sep_col)
+
+    # =========================================================================
+    # COLUMN 4: BOTTLES (1 ROW OF 5) & KEY UPGRADES (x = 614 .. 844)
+    # =========================================================================
+    rx0 = 628
+    bottles_list = summary.get("bottles") or []
+    b_owned_cnt = sum(1 for b in bottles_list if b.get("owned"))
+    canvas.create_text(rx0, 16, text=f"BOTTLES ({b_owned_cnt}/5)", anchor="w", fill=muted, font=("TkDefaultFont", 7, "bold"))
+
+    b_w, b_h, b_gap = 36, 48, 5
+    for b_idx, b in enumerate(bottles_list):
+        bx = rx0 + b_idx * (b_w + b_gap)
+        by = 30
+        owned = bool(b.get("owned"))
+        b_out = "#a9814a" if owned else slot_border
+        canvas.create_rectangle(bx, by, bx + b_w, by + b_h, fill=card_bg if owned else slot_bg, outline=b_out, width=1.5 if owned else 1)
+        b_img = get_icon(b.get("icon"), owned, size=22)
+        if b_img is not None:
+            canvas.create_image(bx + b_w // 2, by + 16, image=b_img)
+            canvas.create_text(bx + b_w // 2, by + 38, text=b["slot"], fill="#a9814a" if owned else unowned_ink, font=("TkDefaultFont", 7, "bold" if owned else "normal"))
+        else:
+            canvas.create_text(bx + b_w // 2, by + b_h // 2, text=b["slot"], fill="#a9814a" if owned else unowned_ink, font=("TkDefaultFont", 8, "bold" if owned else "normal"))
+
+    canvas.create_line(rx0, 92, 828, 92, fill=sep_col)
+
+    canvas.create_text(rx0, 106, text="UPGRADES", anchor="w", fill=muted, font=("TkDefaultFont", 7, "bold"))
+    q_w, q_h, q_gx, q_gy = 97, 34, 6, 8
     for q_idx, q in enumerate(summary.get("quest_items") or []):
-        qx = qx0 + (q_idx % 2) * 102
-        qy = qy0 + 28 + (q_idx // 2) * 28
+        qx = rx0 + (q_idx % 2) * (q_w + q_gx)
+        qy = 118 + (q_idx // 2) * (q_h + q_gy)
         lvl = int(q.get("level", 0))
         owned = lvl > 0
-        q_col = q.get("colour", ink) if owned else muted
-        q_img = get_icon(q.get("icon"), owned)
-        txt_x = qx
+        q_col = q.get("colour", ink) if owned else unowned_ink
+        q_out = q.get("colour", line) if owned else slot_border
+        canvas.create_rectangle(qx, qy, qx + q_w, qy + q_h, fill=card_bg if owned else slot_bg, outline=q_out, width=1.4 if owned else 1)
+        q_img = get_icon(q.get("icon"), owned, size=20)
+        txt_x = qx + 8
         if q_img is not None:
-            canvas.create_image(qx + 10, qy, image=q_img)
-            txt_x = qx + 24
-        lbl = f"{q['label']} ({lvl}/{q.get('max', 1)})" if q.get("max", 1) > 1 else q["label"]
-        canvas.create_text(txt_x, qy, text=lbl, anchor="w", fill=q_col, font=("TkDefaultFont", 7, "bold" if owned else "normal"))
+            canvas.create_image(qx + 15, qy + q_h // 2, image=q_img)
+            txt_x = qx + 29
+        lbl = f"{q["label"]} {lvl}/{q.get("max", 1)}" if q.get("max", 1) > 1 else q["label"]
+        canvas.create_text(txt_x, qy + q_h // 2, text=lbl, anchor="w", fill=q_col, font=("TkDefaultFont", 7, "bold" if owned else "normal"))
 
     return canvas

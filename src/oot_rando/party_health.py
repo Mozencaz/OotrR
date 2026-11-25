@@ -113,10 +113,12 @@ def check_party_health(library, ident, *, stage_root=None):
                 add("ok", "manifest", "Manifest verified (" + str(party.get("seed_id"))[:12] + ").")
         except Exception as exc:
             add("error", "manifest_invalid", "Invalid seed manifest: " + str(exc))
-        if (seed_dir / "checks.json").is_file():
+        if (seed_dir / "tracking.json").is_file():
+            add("ok", "tracking_file", "tracking.json present.")
+        elif (seed_dir / "checks.json").is_file():
             add("ok", "checks_file", "checks.json present.")
         else:
-            add("warn", "checks_missing", "checks.json missing from seed snapshot.")
+            add("warn", "checks_missing", "tracking.json / checks.json missing from seed snapshot.")
 
     mods_dir = Path(party["mods"])
     if not mods_dir.is_dir():
@@ -135,15 +137,28 @@ def check_party_health(library, ident, *, stage_root=None):
             else:
                 add("warn", "live_missing", "Neither Merged_Zelda_Rando nor raw seed folder is in mods/.")
 
-    saves_dir = Path(party["saves"])
-    if not saves_dir.is_dir():
-        add("warn", "saves_missing", "Save folder not found: " + str(saves_dir))
-    else:
-        sav_files = list(saves_dir.rglob("*.sav"))
-        if sav_files:
-            add("ok", "saves_present", "Found " + str(len(sav_files)) + " save file(s).")
+    live_saves = Path(party["saves"])
+    snap_saves = library.bundle(party) / "save"
+    if active:
+        if not live_saves.is_dir():
+            add("warn", "saves_missing", "Active save folder not found: " + str(live_saves))
         else:
-            add("ok", "saves_empty", "Save folder exists (no .sav written yet).")
+            sav_files = list(live_saves.rglob("*.sav"))
+            if sav_files:
+                add("ok", "saves_present", "Found " + str(len(sav_files)) + " live save file(s).")
+            elif snap_saves.is_dir() and list(snap_saves.rglob("*.sav")):
+                add("warn", "saves_snapshot_only", "Live save folder is empty (snapshot backup still has saves).")
+            else:
+                add("ok", "saves_empty", "Live save folder exists (no .sav written yet).")
+    else:
+        if not snap_saves.is_dir():
+            add("warn", "saves_missing", "Party snapshot save folder missing.")
+        else:
+            sav_files = list(snap_saves.rglob("*.sav"))
+            if sav_files:
+                add("ok", "saves_present", "Found " + str(len(sav_files)) + " archived save file(s).")
+            else:
+                add("ok", "saves_empty", "Archived save folder exists (not started yet).")
 
     arch_root = library.folder(ident) / "midna_merged"
     arch_merged = arch_root / "Merged_Zelda_Rando"

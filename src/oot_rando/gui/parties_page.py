@@ -190,11 +190,16 @@ class PartiesPage:
             return
         try:
             from oot_rando.paths import state_dir
-            from oot_rando.pc_port import port_root
+            from oot_rando.pc_port import is_port_folder
             from oot_rando.tracker.game_overlay import IconCache
             mods_val = self.mods.get().strip() if hasattr(self, "mods") else ""
             nup_val = self.nup.get().strip() if hasattr(self, "nup") else ""
-            port = port_root(mods_val) if mods_val else None
+            port = None
+            if mods_val:
+                mp = Path(mods_val)
+                cand = mp.parent if mp.name.lower() == "mods" else mp
+                if is_port_folder(cand):
+                    port = cand
             romfs = (port / "romfs") if port else None
             cache = IconCache(state_dir() / "icons", romfs, nup_val or None)
             if not cache.missing():
@@ -248,6 +253,13 @@ class PartiesPage:
         if active and Path(active['mods']) == mods:
             return Path(active['saves'])
         initial = Path(self.save_path.get()).parent.parent if self.save_path.get() else None
+        if not initial or not initial.is_dir():
+            from oot_rando.tracker.auto_tracker import save_roots
+            hookshot_root = mods.parent if mods.name.lower() == "mods" else None
+            for cand in save_roots(hookshot_root, mods):
+                if cand.is_dir():
+                    initial = cand
+                    break
         chosen = filedialog.askdirectory(parent=self.root,
                     title='Save account folder: the one directly containing slot_00, slot_01…',
                     initialdir=str(initial) if initial and initial.is_dir() else str(mods.parent))
@@ -600,8 +612,9 @@ class PartiesPage:
         if self.parties_enabled.get() and self.party_library and self.party_library.active_id:
             party = self.party_library.get(self.party_library.active_id)
             resolved = Path(directory).resolve()
-            candidates = {(Path(party["mods"]) / party["mod_name"]).resolve()}
-            if (Path(party["mods"]) / "Merged_Zelda_Rando").is_dir():
+            live_seed = Path(party["mods"]) / party["mod_name"]
+            candidates = {live_seed.resolve()}
+            if (Path(party["mods"]) / "Merged_Zelda_Rando").is_dir() or not live_seed.is_dir():
                 candidates.add((self.party_library.bundle(party) / "seed").resolve())
             if resolved in candidates:
                 self.party_context = party

@@ -109,5 +109,53 @@ class Phase4SaveCardPathsAndLifecycleTests(unittest.TestCase):
         self.assertEqual(fired, [])
 
 
+    def test_summarize_party_save_prefers_tracking_json_and_seed_marker(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            seed_dir = base / "seed"
+            seed_dir.mkdir()
+            saves_dir = base / "saves"
+            s0 = saves_dir / "slot_00" / "progress.sav"
+            s1 = saves_dir / "slot_01" / "progress.sav"
+            for p in (s0, s1):
+                p.parent.mkdir(parents=True)
+                p.write_bytes(b"sav")
+            import os
+            os.utime(s0, (1000, 1000))
+            os.utime(s1, (2000, 2000))
+            (seed_dir / "checks.json").write_text(json.dumps({"schema_version": 1, "checks": {}}), encoding="utf-8")
+            tracking_data = {
+                "seed_marker": 9999,
+                "inventory": [
+                    {"hash": "301", "item": "Fire Medallion", "count": 1},
+                    {"hash": "302", "item": "Bow", "count": 1},
+                ],
+                "checks": {
+                    "c1": {"item": "Bow", "collection": {"type": "bool", "hash": "401"}},
+                },
+            }
+            (seed_dir / "tracking.json").write_text(json.dumps(tracking_data), encoding="utf-8")
+            snap_match = {"bool": {9999: True, 301: True, 302: True, 401: True}, "bool64": {}, "bool64_complete": True}
+            snap_other = {"bool": {9999: False}, "bool64": {}, "bool64_complete": True}
+            def fake_load(path):
+                return snap_match if Path(path).parent.name == "slot_00" else snap_other
+            with mock.patch("oot_rando.gui.party_save_card.load_snapshot", side_effect=fake_load):
+                summary = summarize_party_save(seed_dir, saves_dir)
+            self.assertTrue(summary["started"])
+            self.assertEqual(summary["slot"], "slot_00")
+            self.assertEqual(summary["done"], 1)
+            self.assertEqual(summary["total"], 1)
+            self.assertTrue(any(m["item"] == "Fire Medallion" and m["owned"] for m in summary["medallions"]))
+
+    def test_party_library_list_skips_corrupt_folder_without_nameerror(self):
+        from oot_rando.parties import PartyLibrary
+        with tempfile.TemporaryDirectory() as td:
+            lib = PartyLibrary(Path(td) / "Parties")
+            bad = lib.root / "not_valid_id"
+            bad.mkdir()
+            (bad / "party.json").write_text("{broken json", encoding="utf-8")
+            self.assertEqual(lib.list(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

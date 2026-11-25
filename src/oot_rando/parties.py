@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from functools import wraps
 import hashlib
 import json
+import logging
 from pathlib import Path
 import os
 import shutil
@@ -18,6 +19,8 @@ import uuid
 from oot_rando.paths import app_dir
 from oot_rando.randomizer.randomizer_services import read_artifact, validate_mod_directory, is_randomizer_seed
 from oot_rando.tracker.save_patch import GameRunning, running_game
+
+_LOG = logging.getLogger(__name__)
 
 
 def _write(path, value):

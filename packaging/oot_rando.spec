@@ -19,6 +19,7 @@ datas = [
     (str(PKG / 'tracker' / 'icon_extract.py'), 'oot_rando/tracker'),
     (str(ROOT / 'README.md'), '.'),
     (str(PKG / 'midnas_devotion' / 'assets'), 'oot_rando/midnas_devotion/assets'),
+    (str(PKG / 'gui' / 'icons'), 'oot_rando/gui/icons'),
 ]
 # Bundle 7-Zip CLI (7z.exe + 7z.dll) on Windows for zero-install .7z / .rar extraction.
 _vendor_7z = PKG / 'midnas_devotion' / 'vendor' / '7zip'

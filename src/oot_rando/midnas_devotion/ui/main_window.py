@@ -977,7 +977,7 @@ class MainWindow(QMainWindow):
         if not merged_dir and active_mods:
             merged_dir = os.path.join(active_mods, "Merged_Zelda_Rando")
 
-        stage_dir = self._party_stage_dir or str(data_dir() / "party-midna-staging")
+        stage_dir = self._party_stage_dir or getattr(self.cfg, "staged_mods_dir", "") or str(data_dir() / "staged_for_generation")
         return [
             ("UserModLibrary", getattr(self.cfg, "backup_dir", "") or "", True),
             ("ArchivedSeeds", getattr(self.cfg, "uninstalled_seeds_dir", "") or "", True),
@@ -2068,13 +2068,7 @@ class MainWindow(QMainWindow):
 
         mapping: Dict[str, str] = {}
         roots = []
-        try:
-            from oot_rando.parties import PartyLibrary as _PartyLibrary
-            pr = _Path(_PartyLibrary().root)
-            if pr not in roots:
-                roots.append(pr)
-        except Exception:
-            pass
+        # Read-only lookup: never instantiate PartyLibrary() here (it acquires .lock and runs recover()).
         for fn_name in ("app_dir", "state_dir", "data_dir"):
             fn = getattr(_paths, fn_name, None)
             if callable(fn):
@@ -2165,7 +2159,12 @@ class MainWindow(QMainWindow):
             for i in range(self.mod_list.count())
             if self.mod_list.item(i).data(Qt.ItemDataRole.UserRole) != "__step1_character__"
         ]
+        party_name = ""
+        seed_path = self.seed_combo.currentData()
+        if seed_path:
+            party_name = self._party_title_for_seed(str(seed_path))
         return {
+            "party_name": party_name,
             "selected_char_path": self.char_combo.currentData(),
             "prefer_rando_logo": bool(self.cb_prefer_rando_logo.isChecked()),
             "enabled_standalone": enabled_names,
@@ -2210,7 +2209,10 @@ class MainWindow(QMainWindow):
             apply_menu = menu.addMenu("Apply Loadout")
             del_menu = menu.addMenu("Delete Loadout")
             for pname in sorted(presets.keys(), key=str.casefold):
-                a = apply_menu.addAction(pname)
+                pdata = presets.get(pname) or {}
+                linked_party = str(pdata.get("party_name") or "").strip()
+                menu_lbl = f"{pname}  ·  Party: {linked_party}" if linked_party else pname
+                a = apply_menu.addAction(menu_lbl)
                 a.triggered.connect(lambda _c=False, n=pname: self._apply_loadout_preset(n))
                 d = del_menu.addAction(pname)
                 def _do_del(_c=False, n=pname):
@@ -2507,6 +2509,8 @@ class MainWindow(QMainWindow):
             self._pending_refresh = True
             return
         self._pending_refresh = False
+        if hasattr(self, "midna_dancer") and getattr(self.midna_dancer, "state", "idle") == "idle":
+            self.midna_dancer.set_state("scanning")
         # 1. Refresh Playable Character dropdown
         prev_char = self.char_combo.currentData()
         self.char_mods = self.cfg.find_core_mods("character")
@@ -2580,6 +2584,8 @@ class MainWindow(QMainWindow):
         self._on_step1_changed()
         self._update_mode_ui()
         self.launch_btn.setEnabled(bool(self.cfg.longshot_binary and os.path.isfile(self.cfg.longshot_binary)))
+        if hasattr(self, "midna_dancer") and getattr(self.midna_dancer, "state", "") == "scanning" and not (self.worker and self.worker.isRunning()):
+            self.midna_dancer.set_state("idle")
 
     def _on_mod_toggled(self) -> None:
         self._update_overlap_panel()

@@ -345,6 +345,18 @@ def resolve_stale_port_subpath(stale_path, old_mods, new_mods):
                 return cand
         except ValueError:
             pass
+    # Also relocate portable emulator load/<title> or nand/user/save paths if the emulator moved.
+    for anc in (Path(new_mods), *Path(new_mods).parents):
+        if anc.name.lower() == "load" and (anc.parent / "nand").is_dir():
+            emu_user = anc.parent
+            for marker in ("load", "nand"):
+                parts_low = [x.lower() for x in p.parts]
+                if marker in parts_low:
+                    idx = parts_low.index(marker)
+                    rel_emu = Path(*p.parts[idx:])
+                    cand = emu_user / rel_emu
+                    if cand.exists():
+                        return cand
     return None
 
 

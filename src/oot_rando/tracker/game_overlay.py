@@ -76,7 +76,7 @@ def icon_name(item, level):
 
 
 def all_icon_names():
-    return sorted({name for names in ICONS.values() for name in names} | {BOSS_KEY_ICON})
+    return sorted({name for names in ICONS.values() for name in names} | {BOSS_KEY_ICON, 'Obj_Rupee_Green', 'Item_Token_Gold'})
 
 
 def overlay_model(inventory, readable, tracked, checks, states, keys=()):
