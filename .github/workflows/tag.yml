@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (e.g. 0.8.1 or v0.8.1). Empty = pyproject.toml version'
+        description: 'Version (e.g. 0.8.1 or v0.8.1). Empty = version of src/oot_rando/__init__.py'
         required: false
         default: ''
   workflow_call:

@@ -5,7 +5,7 @@ import unittest
 
 from oot_rando.formats.inspect_nup import Nup
 from oot_rando.formats.inspect_resources import decompress, dictionaries
-from oot_rando.patching.event_patch import _flow, _snapshot
+from oot_rando.formats.evfl_tools import params_by_event, parse_flow
 from oot_rando.patching import story_fixes as s
 
 NUP = os.environ.get('OOT_NUP')
@@ -35,7 +35,7 @@ class KingZoraGift(unittest.TestCase):
         return result
 
     def replay(self, resources, entry, completed, given):
-        charts = {p.split('/')[-1].split('.')[0]: _flow(raw).flowchart
+        charts = {p.split('/')[-1].split('.')[0]: parse_flow(raw).flowchart
                   for p, raw in resources.items()}
         flags = {GIVEN: given}
         rewards = []
@@ -105,10 +105,10 @@ class KingZoraGift(unittest.TestCase):
     def test_native_reward_site_and_parameters_are_preserved(self):
         resources = self.patched()
         for path, original in self.sources.items():
-            before, after = _snapshot(_flow(original)), _snapshot(_flow(resources[path]))
+            before, after = params_by_event(parse_flow(original)), params_by_event(parse_flow(resources[path]))
             # Serenade's existing patch adds guards but preserves native parameters.
             self.assertEqual({k: v for k, v in after.items() if k in before}, before)
-        water = _flow(resources[WATER]).flowchart
+        water = parse_flow(resources[WATER]).flowchart
         gifts = [e.name for e in water.events
                  if (getattr(getattr(e.data, 'params', None), 'data', None) or {}).get('ActorName')
                  == 'Obj_Armor_Zora']

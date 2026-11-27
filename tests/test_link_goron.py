@@ -6,6 +6,7 @@ import unittest
 
 from oot_rando.formats import byml_codec
 from oot_rando.formats.inspect_resources import sarc
+from oot_rando.formats.evfl_tools import parse_flow
 
 NUP = os.environ.get('OOT_NUP')
 MODULE = 'Logic/GoronCity_Adult_Prefab_118a.logic.module.ainb'
@@ -72,8 +73,7 @@ class DaruniaJr(unittest.TestCase):
                          {p: b for p, b in original.items() if p != READY})
 
     def test_late_intro_does_not_reset_stun_talk_or_later_quest_progress(self):
-        from oot_rando.patching.event_patch import _flow
-        chart = _flow(self.patch(FLOW, self.read(FLOW))).flowchart
+        chart = parse_flow(self.patch(FLOW, self.read(FLOW))).flowchart
         requests = {e.name: e for e in chart.events}
         entries = {e.name: e for e in chart.entry_points}
         for name in ('SageOfFire_CityIn', 'SageOfFire_CityIn_CrackWall'):

@@ -7,10 +7,12 @@ import os
 import unittest
 from collections import Counter
 
+from oot_rando.archipelago.bridge import to_ap_yaml
 from oot_rando.logic import rando_options
 from oot_rando.patching.key_adapter import (BOSS_KEY_DUNGEONS, MAP_DUNGEONS, RING_DUNGEONS,
                                             start_dungeon_values, start_logic_items)
 from oot_rando.randomizer.full_randomizer import apply_item_pool, covered_by_start_values
+from oot_rando.formats.evfl_tools import parse_flow
 
 NUP = os.environ.get('OOT_NUP')
 OPENING = 'Event/EventFlow/OpeningEvent.bfevfl.zs'
@@ -41,7 +43,7 @@ class OptionTests(unittest.TestCase):
     def test_ap_yaml_round_trip(self):
         values = rando_options.validate({'start_inventory_from_pool': {'Hover Boots': 1, 'Bow': 2},
                                          'item_pool_value': 'scarce'})
-        text = rando_options.to_ap_yaml(values)
+        text = to_ap_yaml(values)
         self.assertIn('game: OoT Remake', text)
         self.assertIn("  item_pool_value: 'scarce'", text.split('OoT Remake application:')[0])
         imported, ignored = rando_options.from_ap_yaml(text)
@@ -77,7 +79,7 @@ class OptionTests(unittest.TestCase):
             rando_options.validate({'spiritual_stones': 'emerald'})
         spec = next(s for s in ap_option_specs() if s['name'] == 'spiritual_stones')
         self.assertEqual((spec['values'], spec['default']), (['door', 'all', 'vanilla'], 'all'))
-        imported, ignored = rando_options.from_ap_yaml(rando_options.to_ap_yaml(
+        imported, ignored = rando_options.from_ap_yaml(to_ap_yaml(
             rando_options.validate({'spiritual_stones': 'vanilla'})))
         self.assertEqual((imported['spiritual_stones'], ignored), ('vanilla', []))
         older, _ = rando_options.from_ap_yaml('game: OoT Remake\nOoT Remake:\n  open_kakariko: open\n')
@@ -223,13 +225,13 @@ class Integration(unittest.TestCase):
         from oot_rando.logic.world import World
         from oot_rando.formats.inspect_nup import Nup
         from oot_rando.formats.inspect_resources import decompress, dictionaries
-        from oot_rando.game.remake_world import scan_maps
         from oot_rando.game.world_maps import effective_members
+        from game_fixture import scan_maps
         cls.data = World()
+        _, cls.groups, cls.enemies = scan_maps()
         nup = Nup(NUP)
         try:
             dic, members = dictionaries(nup), effective_members(nup)
-            _, cls.groups, cls.enemies = scan_maps(nup, dic, members)
             cls.opening = decompress(nup.read(members[OPENING]), dic)
             cls.gamedata = decompress(nup.read(members['GameData/GameDataList.Product.110.byml.zs']), dic)
         finally:
@@ -241,8 +243,7 @@ class Integration(unittest.TestCase):
         return full_randomizer.plan(self.data, options, self.groups, self.enemies, seed, True)
 
     def test_start_values_written_after_the_seed_marker(self):
-        from oot_rando.patching.event_patch import (_flow, add_collection_markers, add_pouch_items,
-                                                    add_start_values, start_value_events)
+        from oot_rando.patching.event_patch import add_collection_markers, add_pouch_items, add_start_values, start_value_events
         from oot_rando.patching.key_adapter import check_start_values
         values = start_dungeon_values(dict(rando_options.defaults(), shuffle_mapcompass='startwith',
                                            shuffle_smallkeys='remove', shuffle_bosskeys='remove'))
@@ -250,7 +251,7 @@ class Integration(unittest.TestCase):
         marked, _ = add_collection_markers(self.opening, {'Event3': 'RandoSeed.test'})
         marked = add_pouch_items(marked, 'RandoCollected_Event3', ('Item_BulletBag_Small',))
         patched = add_start_values(marked, 'RandoCollected_Event3', values)
-        events = {e.name: e for e in _flow(patched).flowchart.events}
+        events = {e.name: e for e in parse_flow(patched).flowchart.events}
         event = events['RandoCollected_Event3']
         for name in start_value_events(values):
             event = event.data.nxt.v
@@ -336,7 +337,7 @@ class KeyRingChoiceTests(unittest.TestCase):
         from oot_rando.archipelago.bridge import ap_option_specs, player_yaml
         values = rando_options.validate(dict(rando_options.defaults(), shuffle_smallkeys='keysanity',
                                              key_rings='choose', key_rings_list=['Spirit Temple']))
-        imported, ignored = rando_options.from_ap_yaml(rando_options.to_ap_yaml(values))
+        imported, ignored = rando_options.from_ap_yaml(to_ap_yaml(values))
         self.assertEqual(imported['key_rings_list'], ('Spirit Temple',))
         self.assertEqual(ignored, [])
         spec = next(s for s in ap_option_specs() if s['name'] == 'key_rings_list')

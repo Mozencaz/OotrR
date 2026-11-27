@@ -4,6 +4,7 @@ import itertools
 import json
 import unittest
 
+from oot_rando.archipelago.bridge import to_ap_yaml
 from oot_rando.archipelago.bridge import ap_option_specs
 from oot_rando.gui import randomizer_gui as gui
 from oot_rando.logic import rando_options
@@ -101,7 +102,7 @@ class DoorRequirementsTests(unittest.TestCase):
         self.assertEqual((spec['values'], spec['default']), (['all', 'vanilla', 'song'], 'song'))
         for value in option.allowed():
             values = rando_options.validate({NAME: value}, supported_only=True)
-            imported, ignored = rando_options.from_ap_yaml(rando_options.to_ap_yaml(values))
+            imported, ignored = rando_options.from_ap_yaml(to_ap_yaml(values))
             self.assertEqual((imported[NAME], ignored), (value, []))
         with self.assertRaises(ValueError):
             rando_options.validate({NAME: 'emerald'})

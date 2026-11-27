@@ -14,159 +14,39 @@ Kokiri Forest Deku Babas...) reads a new GameData BoolExp instead: its soul AND 
 vanilla condition (:func:`soul_expression`). They used to stay soul-independent,
 so they appeared without their soul (Discord 17/11).
 
-Logic (conservative): entering a dungeon requires the souls of every family
-patched in that dungeon, entering a boss room requires the boss soul, chests
-that appear on a condition require the souls of their map, and named overworld
-enemy checks require their family soul.
+Logic (conservative): entering a dungeon requires its mechanical and combat
+souls, entering a boss room requires the boss soul. Native AI defeat outputs,
+counter locks and scripted rewards count even when a shutter is hidden by the
+patch. Overworld passage fights gate their AP region; physical rewards get
+the souls of the native AI group controlling them.
 """
 from collections import defaultdict
 
 from oot_rando.game.remake_world import FOLDER_AP_DUNGEON
 
-# (family id, French label, Gyaml prefixes, boss room AP region or None)
-FAMILIES = [
-    ('Stalfos', 'Stalfos', ('Enemy_Stalfos',), None),
-    ('Octorok', 'Octorok', ('Enemy_Octorok',), None),
-    ('BigOcto', 'Gros Octorok', ('Enemy_MiddleBoss_BigOcto',), None),
-    ('Wallmaster', 'Main Mortelle', ('Enemy_Wallmaster',), None),
-    ('Floormaster', 'Main Mortelle au sol', ('Enemy_Floormaster',), None),
-    ('Dodongo', 'Dodongo', ('Enemy_Dodongo',), None),
-    ('BabyDodongo', 'Bébé Dodongo', ('Enemy_BabyDodongo',), None),
-    ('Keese', 'Keese', ('Enemy_Keese',), None),
-    ('Tektite', 'Araknon', ('Enemy_Tektite',), None),
-    ('Peahat', 'Pihat', ('Enemy_Peahat',), None),
-    ('Lizalfos', 'Lézalfos et Dinolfos', ('Enemy_Lizalfos', 'Enemy_MiddleBoss_Lizalfos', 'Enemy_Dinolfos'), None),
-    ('GohmaLarva', 'Larves de Gohma', ('Enemy_Gohma_Larva', 'Enemy_Gohma_Egg'), None),
-    ('Shabom', 'Shabom', ('Enemy_Shabom',), None),
-    ('BiriBari', 'Biri et Bari', ('Enemy_Biri', 'Enemy_Bari'), None),
-    ('Tailpasaran', 'Tailpasaran', ('Enemy_Tailpasaran',), None),
-    ('TorchSlug', 'Limace de feu', ('Enemy_TorchSlug',), None),
-    ('Skulltula', 'Skulltula', ('Enemy_Skulltula',), None),
-    ('Skullwalltula', 'Skullwalltula', ('Enemy_Skullwalltula',), None),
-    ('Moblin', 'Moblin', ('Enemy_Moblin',), None),
-    ('Armos', 'Armos', ('Enemy_Amos',), None),
-    ('Beamos', 'Beamos', ('Enemy_Beamos',), None),
-    ('DekuBaba', 'Baba Mojo', ('Enemy_Dekubaba',), None),
-    ('DekuScrub', 'Peste Mojo', ('Enemy_Scrub_Deku', 'Enemy_Scrub_Mad'), None),
-    ('Bubble', 'Bubble', ('Enemy_Bubble',), None),
-    ('ReDead', 'ReDead et Gibdo', ('Enemy_ReDead', 'Enemy_Gibdo'), None),
-    ('DeadHand', 'Main Morte', ('Enemy_DeadHand',), None),
-    ('FlareDancer', 'Danse-Flamme', ('Enemy_MiddleBoss_FlareDancer',), None),
-    ('ShellBlade', 'Coquillame', ('Enemy_ShellBlade',), None),
-    ('LikeLike', 'Like Like', ('Enemy_LikeLike',), None),
-    ('Spike', 'Hérisson', ('Enemy_Spike',), None),
-    ('Anubis', 'Anubis', ('Enemy_Anubis',), None),
-    ('IronKnuckle', 'Hache-Viande', ('Enemy_IronKnuckle',), None),
-    ('FlyingPot', 'Jarre volante', ('Enemy_FlyingPot',), None),
-    ('Freezard', 'Freezard', ('Enemy_Freezard',), None),
-    ('Stinger', 'Raie', ('Enemy_Stinger',), None),
-    ('Wolfos', 'Wolfos', ('Enemy_Wolfos',), None),
-    ('Guay', 'Guay', ('Enemy_Guay', 'Enemy_FlockGuayManager'), None),
-    ('JabuTentacle', 'Tentacules de Jabu', ('Enemy_Tentacle',), None),
-    ('DarkLink', 'Link Noir', ('Enemy_MiddleBoss_DarkLink',), None),
-    ('Gohma', 'Reine Gohma', ('Enemy_DungeonBoss_Gohma',), 'Queen Gohma Boss Room'),
-    ('KingDodongo', 'King Dodongo', ('Enemy_DungeonBoss_Dodongo',), 'King Dodongo Boss Room'),
-    ('Barinade', 'Barinade', ('Enemy_DungeonBoss_Barinade',), 'Barinade Boss Room'),
-    ('PhantomGanon', 'Ganon Spectral', ('Enemy_DungeonBoss_PhantomGanon',), 'Phantom Ganon Boss Room'),
-    ('Volvagia', 'Volvagia', ('Enemy_DungeonBoss_Volvagia',), 'Volvagia Boss Room'),
-    ('Morpha', 'Morpha', ('Enemy_DungeonBoss_Morpha',), 'Morpha Boss Room'),
-    ('BongoBongo', 'Bongo Bongo', ('Enemy_DungeonBoss_BongoBongo',), 'Bongo Bongo Boss Room'),
-    ('Twinrova', 'Twinrova', ('Enemy_DungeonBoss_Twinrova', 'Enemy_DungeonBoss_Kotake',
-                              'Enemy_DungeonBoss_Koume', 'Enemy_KotakeKoumeBattleManager'), 'Twinrova Boss Room'),
-]
-BY_ID = {family: (label, prefixes, boss) for family, label, prefixes, boss in FAMILIES}
-EXCLUDED_MARKERS = ('_Dictionary', 'Haribote', 'ClimaxOnly', 'GhostPicturePerformer', 'Skulltula_Gold',
-                    'Scrub_Business', 'Scrub_ForestStage', 'IronKnuckle_Nabooru', 'SkullKid', 'Poe',
-                    'Stalchild', 'Leever', 'GerudoThief', 'Ganon', 'CrazyFloorTile', 'TrickyDoor')
-EXCLUDED_FOLDERS = ('DreamWorld', 'GanonCastle')
-# French in-game names (EUfr / CAfr message files); FAMILIES labels are French too.
-REGION_LABELS = {
-    'InsideTheDekuTree': 'Arbre Mojo', 'DodongoCavern': 'Caverne Dodongo', 'InsideJabuJabuBelly': 'Jabu-Jabu',
-    'ForestTemple': 'Temple de la Forêt', 'FireTemple': 'Temple du Feu', 'WaterTemple': 'Temple de l’Eau',
-    'ShadowTemple': 'Temple de l’Ombre', 'SpiritTemple': 'Temple de l’Esprit', 'BottomOfTheWell': 'Puits',
-    'IceCavern': 'Caverne Polaire', 'GerudoTrainingGround': 'Gymnase Gerudo', 'InsideGanonCastle': 'Château de Ganon',
-    'KokiriForest': 'Forêt Kokiri', 'LostWood': 'Bois Perdus', 'SacredForestMeadow': 'Bosquet sacré',
-    'HyruleField': 'Plaine d’Hyrule', 'Market': 'Bourg', 'HyruleCastle': 'Château d’Hyrule',
-    'Graveyard': 'Cimetière', 'DeathMountainTrail': 'Mont du Péril', 'DeathMountainCrater': 'Cratère',
-    'ZoraRiver': 'Rivière Zora', 'ZoraFountain': 'Fontaine Zora', 'GerudoValley': 'Vallée Gerudo',
-    'GerudoFortress': 'Forteresse Gerudo', 'HountedWasteland': 'Désert hanté', 'DesertColossus': 'Colosse',
-    'LakeHylia': 'Lac Hylia', 'KakarikoVillage': 'Cocorico', 'GoronCity': 'Village Goron', 'ZoraDomain': 'Domaine Zora',
-}
-LOCATION_KEYWORDS = {'Wolfos': 'Wolfos', 'Redead': 'ReDead', 'Moblin': 'Moblin', 'Octorok': 'Octorok',
-                     'Tektite': 'Tektite', 'Deku Baba': 'DekuBaba', 'Dodongo': 'Dodongo', 'Peahat': 'Peahat'}
-FLAG_PREFIX = 'IsGet.'
-
-
-# Exceptions to EXCLUDED_MARKERS: Phantom Ganon himself carries the 'Ganon' marker
-# that keeps Ganondorf and Ganon (the final fights) out. His painting performers
-# (``GhostPicturePerformer``) and dictionaries stay excluded.
-EXCLUDED_EXCEPTIONS = ('Enemy_DungeonBoss_PhantomGanon',)
-
-
-def family_of(actor):
-    if actor not in EXCLUDED_EXCEPTIONS and any(marker in actor for marker in EXCLUDED_MARKERS):
-        return None
-    best = None
-    for family, _, prefixes, _ in FAMILIES:
-        for prefix in prefixes:
-            if (actor == prefix or actor.startswith(prefix + '_')) and (best is None or len(prefix) > best[1]):
-                best = (family, len(prefix))
-    return best[0] if best else None
-
-
-def soul_item(key):
-    return f'Soul ({key})'
-
-
-# Generated actor names stay within the length seen working in game (13/11: 25
-# characters handed over, 30 and 33 crashed the item get): regional souls use a
-# short region code.
-MAX_ACTOR_NAME = 25
-REGION_CODES = {'BottomOfTheWell': 'Well', 'DeathMountainCrater': 'DMCrater', 'DeathMountainTrail': 'DMTrail',
-                'DesertColossus': 'Colossus', 'GerudoFortress': 'GFortress', 'GerudoTrainingGround': 'GTG',
-                'InsideGanonCastle': 'GanonCastle', 'InsideJabuJabuBelly': 'JabuJabu',
-                'InsideTheDekuTree': 'DekuTree', 'SacredForestMeadow': 'SFMeadow',
-                'KakarikoVillage': 'Kakariko', 'HountedWasteland': 'Wasteland'}
-
-
-def soul_actor(item):
-    key = item[len('Soul ('):-1]
-    if key.startswith('Region:'):
-        folder = key[len('Region:'):]
-        return 'Item_Soul_R_' + REGION_CODES.get(folder, folder)
-    return 'Item_Soul_' + key
-
-
-def soul_label(item):
-    return 'Soul: ' + soul_name(item, False)
-
-
-def _spaced(name):
-    return ''.join(' ' + c if c.isupper() and i else c for i, c in enumerate(name))
-
-
-def soul_name(item, french=True):
-    """Display name of the soul (without the "Soul" prefix)."""
-    key = item[len('Soul ('):-1]
-    if key.startswith('Region:'):
-        folder = key[7:]
-        return REGION_LABELS.get(folder, folder) if french else ENGLISH_REGIONS.get(folder, _spaced(folder))
-    return BY_ID[key][0] if french else ENGLISH_FAMILIES.get(key, _spaced(key))
-
-
-ENGLISH_FAMILIES = {'BigOcto': 'Big Octo', 'Wallmaster': 'Wallmaster', 'Floormaster': 'Floormaster',
-                    'BabyDodongo': 'Baby Dodongo', 'Lizalfos': 'Lizalfos and Dinolfos',
-                    'GohmaLarva': 'Gohma Larva', 'BiriBari': 'Biri and Bari', 'TorchSlug': 'Torch Slug',
-                    'DekuBaba': 'Deku Baba', 'DekuScrub': 'Deku Scrub', 'ReDead': 'ReDead and Gibdo',
-                    'DeadHand': 'Dead Hand', 'FlareDancer': 'Flare Dancer', 'ShellBlade': 'Shell Blade',
-                    'LikeLike': 'Like Like', 'IronKnuckle': 'Iron Knuckle', 'FlyingPot': 'Flying Pot',
-                    'JabuTentacle': 'Jabu-Jabu Tentacles', 'DarkLink': 'Dark Link', 'Gohma': 'Queen Gohma',
-                    'KingDodongo': 'King Dodongo', 'PhantomGanon': 'Phantom Ganon', 'BongoBongo': 'Bongo Bongo'}
-ENGLISH_REGIONS = {'InsideTheDekuTree': 'Deku Tree', 'DodongoCavern': "Dodongo's Cavern",
-                   'InsideJabuJabuBelly': "Jabu-Jabu's Belly", 'BottomOfTheWell': 'Bottom of the Well',
-                   'InsideGanonCastle': "Ganon's Castle", 'LostWood': 'Lost Woods',
-                   'HountedWasteland': 'Haunted Wasteland', 'Market': 'Market', 'ZoraRiver': "Zora's River",
-                   'ZoraFountain': "Zora's Fountain", 'ZoraDomain': "Zora's Domain"}
+from oot_rando.catalog.souls import (  # noqa: F401  (moved to oot_rando.catalog.souls, re-exported)
+    FAMILIES,
+    BY_ID,
+    EXCLUDED_MARKERS,
+    EXCLUDED_FOLDERS,
+    REGION_LABELS,
+    LOCATION_KEYWORDS,
+    FLAG_PREFIX,
+    EXCLUDED_EXCEPTIONS,
+    family_of,
+    soul_item,
+    MAX_ACTOR_NAME,
+    REGION_CODES,
+    soul_actor,
+    soul_label,
+    _spaced,
+    soul_name,
+    ENGLISH_FAMILIES,
+    ENGLISH_REGIONS,
+    soul_event_name,
+    soul_event_member,
+    soul_event_ain,
+)
 
 
 def resolve_room_locks(candidates):
@@ -223,7 +103,7 @@ ALWAYS_MECHANICAL = ('BigOcto', 'DarkLink', 'FlareDancer', 'JabuTentacle')
 def is_mechanical(enemy):
     if 'mechanics' not in enemy:
         return True
-    return bool(enemy['mechanics']) or family_of(enemy['actor']) in ALWAYS_MECHANICAL
+    return bool(enemy['mechanics'] or enemy.get('locks') or enemy.get('combat')) or family_of(enemy['actor']) in ALWAYS_MECHANICAL
 
 
 def plan_souls(mode, enemies, logic_regions):
@@ -237,6 +117,9 @@ def plan_souls(mode, enemies, logic_regions):
     per_folder = defaultdict(set)       # folder -> soul keys (non-boss)
     boss_rooms = {}
     per_map = defaultdict(set)
+    combat_targets = defaultdict(set)
+    combat_regions = defaultdict(set)
+    scripted_locations = defaultdict(set)
     edits = []
     candidates = []
     for enemy in enemies:
@@ -253,6 +136,21 @@ def plan_souls(mode, enemies, logic_regions):
     candidates, door_edits = resolve_room_locks(candidates)
     for enemy, key, boss in candidates:
         patched[key].add(enemy['folder'])
+        if enemy['folder'] == 'KokiriForest' and family_of(enemy['actor']) == 'DekuBaba':
+            for location in ('Deku Baba Sticks', 'Deku Baba Nuts'):
+                scripted_locations[location].add(soul_item(key))
+        if 'NPC_Scrub_Deku_TargetPractice' in enemy.get('mechanics', ()):
+            scripted_locations['LW Target in Woods'].add(soul_item(key))
+        for combat in enemy.get('combat', ()):
+            for target in combat['targets']:
+                combat_targets[enemy['folder'] + '#' + target].add(soul_item(key))
+            for region in combat['regions']:
+                combat_regions[region].add(soul_item(key))
+        # Old catalogs do not carry AI evidence, but their native room locks
+        # already identify the Royal Tomb battle. Never assume hidden shutters
+        # remove the script-controlled collision or make its reward reachable.
+        if enemy['folder'] == 'Graveyard' and family_of(enemy['actor']) == 'Keese' and enemy.get('locks'):
+            combat_regions['Graveyard Royal Familys Tomb'].add(soul_item(key))
         if boss and mode != 'regional':
             boss_rooms[boss] = key
         else:
@@ -283,16 +181,21 @@ def plan_souls(mode, enemies, logic_regions):
                         requirement |= {soul_item(k) for k in per_folder.get(folder, ())}
             if target in boss_rooms and not region.get('is_boss_room'):
                 requirement.add(soul_item(boss_rooms[target]))
+            requirement.update(combat_regions.get(target, ()))
             if requirement:
                 exit_requirements[(name, target)] = requirement
-    location_requirements = {}
-    if mode == 'all' and 'DekuBaba' in patched:
-        for location in ('Deku Baba Sticks', 'Deku Baba Nuts'):
-            location_requirements[location] = {soul_item('DekuBaba')}
+    location_requirements = {k: set(v) for k, v in scripted_locations.items()}
+    for region in logic_regions:
+        required = combat_regions.get(region['region_name'])
+        if required:
+            for location in region.get('locations', {}):
+                location_requirements.setdefault(location, set()).update(required)
     return {'items': sorted(soul_item(k) for k in patched), 'edits': edits, 'door_edits': door_edits,
             'exit_requirements': exit_requirements,
             'location_requirements': location_requirements, 'per_map': {k: sorted(v) for k, v in per_map.items()},
-            'families': {k: sorted(v) for k, v in patched.items()}, 'mode': mode}
+            'families': {k: sorted(v) for k, v in patched.items()}, 'mode': mode,
+            'combat_targets': {k: sorted(v) for k, v in combat_targets.items()},
+            'combat_regions': {k: sorted(v) for k, v in combat_regions.items()}}
 
 
 def chest_requirements(plan, group, ap_locations):
@@ -300,7 +203,10 @@ def chest_requirements(plan, group, ap_locations):
     if not plan['items']:
         return set()
     required = set()
+    required.update(plan.get('combat_targets', {}).get(group.get('id'), ()))
     for variant in group['variants']:
+        required.update(plan.get('combat_targets', {}).get(
+            group['folder'] + '#' + str(variant.get('hash')), ()))
         if variant.get('dynamic', {}).get('SpawnType') == 1:
             required |= {soul_item(k) for k in plan['per_map'].get(variant['resource'], ())}
     if plan['mode'] != 'regional':
@@ -326,46 +232,12 @@ RSDB_FILES = {'ActorInfo': 'RSDB/ActorInfo.Product.111.rstbl.byml.zs',
               'PouchActorInfo': 'RSDB/PouchActorInfo.Product.111.rstbl.byml.zs'}
 
 
-def murmur3(text, seed=0):
-    data = text.encode('utf-8')
-    h, c1, c2, n = seed, 0xcc9e2d51, 0x1b873593, len(data)
-    for i in range(0, n // 4 * 4, 4):
-        k = int.from_bytes(data[i:i + 4], 'little')
-        k = (k * c1) & 0xffffffff
-        k = ((k << 15) | (k >> 17)) & 0xffffffff
-        h ^= (k * c2) & 0xffffffff
-        h = ((h << 13) | (h >> 19)) & 0xffffffff
-        h = (h * 5 + 0xe6546b64) & 0xffffffff
-    tail, k = data[n // 4 * 4:], 0
-    for i, byte in enumerate(tail):
-        k |= byte << (8 * i)
-    if tail:
-        k = (k * c1) & 0xffffffff
-        k = ((k << 15) | (k >> 17)) & 0xffffffff
-        h ^= (k * c2) & 0xffffffff
-    h ^= n
-    h ^= h >> 16
-    h = (h * 0x85ebca6b) & 0xffffffff
-    h ^= h >> 13
-    h = (h * 0xc2b2ae35) & 0xffffffff
-    h ^= h >> 16
-    return h
+from oot_rando.catalog.hashing import (  # noqa: F401  (moved to oot_rando.catalog.hashing, re-exported)
+    murmur3,
+)
 
 
 MESSAGE_FILE = 'ActorMsg/PouchContent.msbt'
-
-
-def soul_event_name(actor):
-    return 'RandoSoul_' + actor[len('Item_Soul_'):] + '.event.root'
-
-
-def soul_event_member(actor):
-    """Pack member of the soul's get event (beside its actor parameters)."""
-    return 'AI/' + soul_event_name(actor) + '.ainb'
-
-
-def soul_event_ain(actor):
-    return 'Work/AI/Root/Event/' + soul_event_name(actor) + '.ain'
 
 
 def soul_messages(item, language):
@@ -650,7 +522,6 @@ def add_soul_expressions(gamedata_raw, edits):
                                 'Values': [[byml_codec.U64(v) for v in step] for step in program]})
         known.add(murmur3(name))
     return byml_codec.dump(document)
-
 
 
 def presence_changes(edits, roots):

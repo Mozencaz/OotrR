@@ -1,5 +1,6 @@
 """Remove shop opening hours without changing the world clock or NPC schedules."""
 from functools import partial
+from oot_rando.formats.evfl_tools import case_target, event_params_of
 
 
 def module(name):
@@ -27,7 +28,7 @@ GATES = {
 
 
 def doors_all_hours(raw, name):
-    from oot_rando.patching.story_fixes import _module_edit
+    from oot_rando.patching.story_fixes import edit_ainb_module
 
     def check(nodes):
         for index, kind, param, source, output in DOORS.get(name, ()):
@@ -68,7 +69,7 @@ def doors_all_hours(raw, name):
 
     if name not in DOORS and name not in GATES:
         raise ValueError('Unknown shop door: ' + name)
-    return _module_edit(raw, check, edit), {'module': module(name), 'all_hours': True}
+    return edit_ainb_module(raw, check, edit), {'module': module(name), 'all_hours': True}
 
 
 def bombchu_from_start(raw):
@@ -97,15 +98,15 @@ SERVICES = (
 
 def service_all_hours(raw, spec):
     from evfl.util import make_index
-    from oot_rando.patching.story_fixes import _Chart, _params, _case
+    from oot_rando.patching.story_fixes import _Chart
     name, event, query, params, normal, target, closed = spec
     flow = _Chart(raw)
     gate = flow.event(event, 'SwitchEvent')
-    if (gate.data.actor_query.v.v != query or _params(gate) != params
+    if (gate.data.actor_query.v.v != query or event_params_of(gate) != params
             or set(gate.data.cases) != {0, 1}
-            or _case(gate, normal).name != target or _case(gate, 1 - normal).name != closed):
+            or case_target(gate, normal).name != target or case_target(gate, 1 - normal).name != closed):
         raise ValueError('Unexpected shop service gate: ' + name)
-    gate.data.cases[1 - normal] = make_index(_case(gate, normal))
+    gate.data.cases[1 - normal] = make_index(case_target(gate, normal))
     raw, _ = flow.write()
     return raw, {'flow': 'Event/EventFlow/' + name + '.bfevfl.zs', 'all_hours': True}
 

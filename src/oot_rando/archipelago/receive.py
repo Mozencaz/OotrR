@@ -14,6 +14,9 @@ loaded). Memory access: ``tracker.live_memory`` (Hookshot or a yuzu-family emula
 import time
 
 from oot_rando.patching.ap_mailbox import record_key
+from oot_rando.patching.soul_adapter import murmur3
+from oot_rando.pc_port import game_folder
+from oot_rando.randomizer.randomizer_core import save_marker
 
 RETRY_SECONDS = 8.0
 # One item that never arrives must not hold back the ones after it: after this many
@@ -110,7 +113,6 @@ def received_keys(entries, slot, player_name, location_name):
 def running_game_hint(live):
     """`` (running game: <folder>)`` for a PC port, so that a seed installed in another build's
     mods folder shows (Longshot keeps one folder per version), else ''."""
-    from oot_rando.pc_port import game_folder
     image = getattr(getattr(live, 'memory', None), 'image', '')
     folder = game_folder(image) if image else None
     return f' (running game: {folder})' if folder else ''
@@ -120,11 +122,9 @@ class LiveDelivery:
     """Deliverer bound to the running game (``set`` and ``snapshot`` from live_memory)."""
 
     def __init__(self, manifest, live=None, clock=time.monotonic):
-        from oot_rando.patching.soul_adapter import murmur3
         mailbox = ((manifest.get('skips') or {}).get('ap_mailbox') or {})
         self.records = mailbox.get('items', [])
         self.signal = murmur3(mailbox['signal']) if mailbox.get('signal') else None
-        from oot_rando.randomizer.randomizer_core import save_marker
         self.marker = murmur3(save_marker(manifest))
         self.deliverer = Deliverer(self.records, murmur3)
         self.live, self.clock = live, clock

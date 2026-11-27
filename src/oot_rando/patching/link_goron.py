@@ -22,7 +22,7 @@ STEPS = ('Ready', 'StopDaruniaJr', 'TalkDaruniaJr', 'MoveStatue', 'EnterCrater',
 
 
 def spawn_from_first_entry(raw):
-    from oot_rando.patching.story_fixes import _module_edit
+    from oot_rando.patching.story_fixes import edit_ainb_module
 
     def check(nodes):
         create = nodes[0]['Parameters']['Inputs']['Bool'][4]
@@ -51,7 +51,7 @@ def spawn_from_first_entry(raw):
             if not node['Plugs']['Generic']:
                 del node['Plugs']['Generic']
 
-    return _module_edit(raw, check, edit), {'module': MODULE, 'spawn': 'first_entry'}
+    return edit_ainb_module(raw, check, edit), {'module': MODULE, 'spawn': 'first_entry'}
 
 
 def stunnable_before_intro(raw):

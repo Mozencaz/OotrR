@@ -7,7 +7,8 @@ from oot_rando.game.extra_sources import NPC_GIFTS, scan_event_sources
 from oot_rando.game.item_forms import can_take, form_actor
 from oot_rando.game.remake_world import item_actor
 from oot_rando.patching import story_fixes as s
-from oot_rando.patching.event_patch import _flow, patch_event_params, add_collection_markers
+from oot_rando.patching.event_patch import patch_event_params, add_collection_markers
+from oot_rando.formats.evfl_tools import parse_flow
 
 NUP = os.environ.get('OOT_NUP')
 GIFTS = {'goron': ('GC Rolling Goron as Adult', 'SageOfFire', 'Event18', 'Obj_Armor_Goron'),
@@ -53,12 +54,12 @@ class NativeGifts(unittest.TestCase):
         for path, _, fix in s.flow_fixes(s.STONE_SETS['all'], config):
             if path in raw:
                 raw[path] = fix(raw[path])[0]
-        return {p: _flow(b).flowchart for p, b in raw.items()}, config
+        return {p: parse_flow(b).flowchart for p, b in raw.items()}, config
 
     def test_native_scanner_matches_both_reward_sites(self):
         gifts = [('npc', (loc,), (), ((stem, event, actor),))
                  for loc, stem, event, actor in GIFTS.values()]
-        entries = scan_event_sources(self.raw, lambda p: _flow(self.raw[p]), gifts)
+        entries = scan_event_sources(self.raw, lambda p: parse_flow(self.raw[p]), gifts)
         for location, _, _, actor in GIFTS.values():
             entry = entries['npc#' + location]
             self.assertIsNone(entry['reason'])

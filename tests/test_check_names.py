@@ -1,6 +1,8 @@
 """Readable check names (game/check_names.py), on small hand-made maps."""
 import _src_path  # noqa: F401  (src on sys.path)
+import json
 import unittest
+from unittest import mock
 
 from oot_rando.game import check_names as cn
 from oot_rando.randomizer.full_randomizer import check_name, covered_locations
@@ -11,6 +13,14 @@ def actor(gyaml, position, **extra):
 
 
 class Names(unittest.TestCase):
+    """Labelling rules, independent of label_overrides.json: renaming a check there
+    must never break these tests, so the overrides are emptied for each test."""
+
+    def setUp(self):
+        patcher = mock.patch.object(cn, '_LABEL_OVERRIDES', {})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_snake_and_entrances(self):
         self.assertEqual(cn.snake('DodongoCavernSide'), 'dodongo_cavern_side')
         self.assertEqual(cn._entrance_label('MountainTrail_DodongoCavernSide'), 'dodongo_cavern_entrance')
@@ -51,6 +61,39 @@ class Names(unittest.TestCase):
         self.assertEqual(check_name(npc, 'npc#Kak 10 Gold Skulltula Reward'), 'Kak 10 Gold Skulltula Reward')
         self.assertEqual(covered_locations(npc, 'npc#Kak 10 Gold Skulltula Reward'), {'Kak 10 Gold Skulltula Reward'})
         self.assertEqual(covered_locations(area, 'x'), {'KF Links House Pot'})
+
+
+class Overrides(unittest.TestCase):
+    """label_overrides.json renames checks; tested with a fake table, not the real one."""
+
+    FAKE = {'KF_pot_3': 'Pot Renamed', 'KF_gs_1 (child)': 'GS Renamed',
+            'KF Midos Top Left Chest': 'Chest Renamed'}
+
+    def setUp(self):
+        patcher = mock.patch.object(cn, '_LABEL_OVERRIDES', dict(self.FAKE))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_entry_label_override(self):
+        self.assertEqual(cn.entry_label({'variants': [{'label': 'KF_pot_3'}]}), 'Pot Renamed')
+        self.assertEqual(cn.entry_label({'variants': [{'label': 'KF_gs_1'}]}), 'GS Renamed')  # age suffix key
+        self.assertEqual(cn.entry_label({'variants': [{'label': 'KF_pot_9'}]}), 'KF_pot_9')   # no override
+        self.assertIsNone(cn.entry_label({'variants': []}))
+
+    def test_check_name_override(self):
+        exact = {'kind': 'exact', 'ap': ['KF Midos Top Left Chest'], 'variants': []}
+        self.assertEqual(check_name(exact, 'x'), 'Chest Renamed')
+        area = {'kind': 'area', 'ap': ['KF Links House Pot'], 'variants': [{'label': 'KF_pot_3'}]}
+        self.assertEqual(check_name(area, 'x'), 'Pot Renamed')
+
+    def test_real_file_is_well_formed(self):
+        from oot_rando.paths import resource
+        table = json.loads(resource('game', 'label_overrides.json').read_text(encoding='utf-8'))
+        self.assertIsInstance(table, dict)
+        for key, value in table.items():
+            self.assertIsInstance(key, str)
+            self.assertIsInstance(value, str)
+            self.assertTrue(value.strip(), key)
 
 
 if __name__ == '__main__':

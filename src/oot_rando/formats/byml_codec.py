@@ -23,6 +23,15 @@ class F64(float):
     pass
 
 
+def c_string(data, start):
+    """NUL-terminated string at ``start`` (to the end of ``data`` without a terminator).
+
+    Never slices the rest of the buffer first: string tables hold thousands of
+    entries and a copy per entry made large files quadratic to load."""
+    end = data.find(b'\0', start)
+    return data[start:end if end >= 0 else len(data)].decode()
+
+
 def load(data):
     if data[:2] not in (b'YB', b'BY'):
         raise ValueError('BYML attendu.')
@@ -39,7 +48,7 @@ def load(data):
     def table(off):
         if not off:
             return []
-        return [data[off + u32(off + 4 + i * 4):].split(b'\0', 1)[0].decode() for i in range(u24(off + 1))]
+        return [c_string(data, off + u32(off + 4 + i * 4)) for i in range(u24(off + 1))]
 
     keys, strings = table(u32(4)), table(u32(8))
 

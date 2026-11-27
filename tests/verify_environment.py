@@ -11,7 +11,7 @@ from pathlib import Path
 from oot_rando.formats.inspect_nup import Nup
 from oot_rando.formats.inspect_resources import Byml, decompress, dictionaries
 from oot_rando.randomizer.randomizer_core import Settings, generate
-from oot_rando.randomizer.randomizer_services import read_artifact
+from oot_rando.randomizer.artifact import read_artifact
 from oot_rando.game.world_maps import build_world, effective_members, NATIVE_POOL
 
 

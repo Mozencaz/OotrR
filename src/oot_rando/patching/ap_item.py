@@ -26,11 +26,16 @@ common item animation (``AS/Item_Common``, ``Item_Common_Animation``).
 Each foreign item gets its own pouch actor (``Item_AP_<hash>``) built like the
 monster souls, with get-item texts naming the item and the player it belongs to.
 """
-import hashlib
 import struct
 
-PREFIX = 'Archipelago: '
-ACTOR_PREFIX = 'Item_AP_'
+from oot_rando.catalog.ap_items import (  # noqa: F401  (moved to oot_rando.catalog.ap_items, re-exported)
+    PREFIX,
+    ACTOR_PREFIX,
+    is_ap_item,
+    ap_item,
+    ap_actor,
+    is_ap_actor,
+)
 MODEL_ACTOR = 'Item_Medal_Fire'
 MODEL_FILE = 'Model/Item_Medal_Fire.Item_Medal_Fire.bfres.zs'
 PROJECT = 'Item_Medal_Arch'           # same length as Item_Medal_Fire
@@ -65,25 +70,6 @@ ASTC_BLOCKS = {0x2d: (4, 4), 0x2e: (5, 4), 0x2f: (5, 5), 0x30: (6, 5), 0x31: (6,
                0x34: (8, 8), 0x35: (10, 5), 0x36: (10, 6), 0x37: (10, 8), 0x38: (10, 10), 0x39: (12, 10),
                0x3a: (12, 12)}
 BC1, BC4 = 0x1a, 0x1d
-
-
-# ------------------------------------------------------------------ items and actors
-def is_ap_item(item):
-    return item.startswith(PREFIX)
-
-
-def ap_item(label):
-    """Planner item name of another player's item (``label``: "Sword (Ami)")."""
-    return PREFIX + label
-
-
-def ap_actor(item):
-    """Pouch actor of an Archipelago item: stable, independent of the order of the items."""
-    return ACTOR_PREFIX + hashlib.sha256(item.encode('utf-8')).hexdigest()[:12]
-
-
-def is_ap_actor(actor):
-    return actor.startswith(ACTOR_PREFIX)
 
 
 def ap_messages(item, player, language):
@@ -187,7 +173,7 @@ def bc1_block(texels):
 
 
 # ------------------------------------------------------------------ BNTX
-def _block_address(x, y, gob_height, width_gobs, bpe=16):
+def block_address(x, y, gob_height, width_gobs, bpe=16):
     """Byte address of element (x, y) in Tegra block-linear layout (see icon_extract.deblock_linear).
 
     Inside a 64-byte x 8-row GOB, address bits 4..8 are y0, y1, xb4, y2, xb5 where
@@ -255,7 +241,7 @@ def paint_bntx(data, block):
                     continue
                 if len(encoded) != bpe:
                     raise ValueError('Encoded block of the wrong size.')
-                address = start + _block_address(x, y, 1, width_gobs, bpe)
+                address = start + block_address(x, y, 1, width_gobs, bpe)
                 if address + bpe > end:
                     raise ValueError('Texture block outside the image data.')
                 out[address:address + bpe] = encoded

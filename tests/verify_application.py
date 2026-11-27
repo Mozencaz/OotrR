@@ -11,7 +11,8 @@ from pathlib import Path
 from oot_rando.formats.inspect_nup import Nup
 from oot_rando.formats.inspect_resources import Byml, decompress, dictionaries
 from oot_rando.randomizer.randomizer_core import Settings, generate, placements_for, ADULT_MAP
-from oot_rando.randomizer.randomizer_services import read_artifact, ManualTracker
+from oot_rando.randomizer.artifact import read_artifact
+from oot_rando.tracker.manual_tracker import ManualTracker
 from oot_rando.patching.randomize_kokiri import MAP, RESTBL, CHESTS
 from oot_rando.patching.qol_patches import (STATIC, INTRO, PHYSICS, EVENT_SETTINGS, LOCKED_CUTSCENES, list_path,
                          AREA_PRESENTATIONS, flow_path)

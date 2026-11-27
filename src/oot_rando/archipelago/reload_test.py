@@ -24,13 +24,14 @@ from oot_rando.game.resource_allocations import allocation, grow_resources
 from oot_rando.game.world_maps import effective_members
 from oot_rando.patching.event_patch import add_pouch_items
 from oot_rando.patching.randomize_kokiri import RESTBL
+from oot_rando.randomizer.artifact import RELOAD_TEST_STATE as STATE, seed_original  # noqa: F401
+from oot_rando.patching.event_patch import starting_item_events
 
 FLOW = 'Event/EventFlow/Obj_Kokiri_MessageBoard_A_01.bfevfl.zs'
 ANCHOR = 'Event1'            # Talk: Event0 (the board's text) → Event1 (action guide) → end
 ITEM = 'Item_DekuNut'
 VARIANTS = {'a': 1, 'b': -1}  # nuts added / removed (the only Num values of the vanilla flows)
 LEVEL = 15                   # zstd level giving both variants the same file size (556 bytes)
-STATE = 'reload_test.json'   # beside the seed's manifest: what to restore
 
 
 def _compress(raw, original, dicts, level=10):
@@ -46,29 +47,10 @@ def _compress(raw, original, dicts, level=10):
     return encoded
 
 
-def seed_original(seed, name, data):
-    """The seed's own bytes of resource ``name`` while the test is installed (else ``data``).
-
-    Only the very table the test installed (its SHA-256 is in the state file) stands for
-    the backup: any other change of the seed's RESTBL is still reported as a modification.
-    """
-    state_path, backup = Path(seed) / STATE, Path(seed) / (STATE + '.restbl')
-    if name != RESTBL or not state_path.is_file() or not backup.is_file():
-        return data
-    try:
-        installed = json.loads(state_path.read_text(encoding='utf-8')).get('restbl_sha256')
-    except (OSError, ValueError, AttributeError):
-        return data
-    if installed and hashlib.sha256(data).hexdigest() == installed:
-        return backup.read_bytes()
-    return data
-
-
 def variant_flow(vanilla_raw, variant):
     """Board flow of a variant (decompressed bytes)."""
     import io
     import evfl
-    from oot_rando.patching.event_patch import starting_item_events
     raw = add_pouch_items(vanilla_raw, ANCHOR, [ITEM])
     if VARIANTS[variant] == 1:
         return raw

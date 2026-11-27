@@ -34,8 +34,8 @@ Always on. Two mechanisms, chosen per presentation from what its first visit doe
 
 Not validated in game.
 """
-from oot_rando.patching.qol_patches import (AREA_PRESENTATIONS, SKIP_FADE_OUT_ACTIONS, _successors,
-                                            add_skip_window, flow_path, skip_action_class)
+from oot_rando.patching.qol_patches import AREA_PRESENTATIONS, SKIP_FADE_OUT_ACTIONS, add_skip_window, flow_path, skip_action_class
+from oot_rando.formats.evfl_tools import next_events, params_by_event, parse_flow
 
 # presentation -> (gating HavePlayedEvent flag, IsVisitLocation flag of its name frame)
 PREMARKED = {
@@ -66,6 +66,27 @@ LOADING_WAIT = 'RandoLoadingWait_'
 LOADING_ACTOR, LOADING_ACTION = 'UISystemActor', 'EventWaitCloseLoadingFade'
 
 
+# Every scene that marks an area visited: its area name frame
+# (``EventTriggerOpenLocationUI``) sets ``IsVisitLocation.<area>`` (scan of 1.1.1, 27/11).
+LOCATION_FRAMES = {
+    'Dm_DeathMtCrater_0000': 'DeathMountainCrater', 'Dm_DeathMtTrail_0000': 'DeathMountainTrail',
+    'Dm_Deku_0000': 'InsideTheDekuTree', 'Dm_DesertColossus_0000': 'DesertColossus',
+    'Dm_DodongoCave_0000': 'DodongoCavern', 'Dm_ForestTemple_0000': 'ForestTemple',
+    'Dm_GanonCastle_0000': 'GanonCastle', 'Dm_GerudoValley_0000': 'GerudoValley',
+    'Dm_Gerudo_0000': 'GerudoFortress', 'Dm_Goron_0000': 'GoronCity', 'Dm_Graveyard_0000': 'Graveyard',
+    'Dm_HrlCastle_0000': 'HyruleCastle', 'Dm_HrlCastle_0005': 'Market', 'Dm_HrlField_0000': 'HyruleField',
+    'Dm_InsideGanonCastle_0003': 'InsideGanonCastle', 'Dm_InsideJabu_Jabu_0000': 'InsideJabuJabuBelly',
+    'Dm_Kakariko_0000': 'KakarikoVillage', 'Dm_Kokiri_0045': 'KokiriForest', 'Dm_LakeHrl_0000': 'LakeHylia',
+    'Dm_LakeHrl_0003': 'LakeHylia', 'Dm_LakeHrl_0005': 'LakeHylia', 'Dm_LonLon_0010': 'LonLonRanch',
+    'Dm_TimeTemple_0000': 'TimeTemple', 'Dm_TimeTemple_0065': 'Market', 'Dm_ZoraFountain_0000': 'ZoraFountain',
+    'Dm_Zora_0000': 'ZoraDomain', 'Goto_FireTemple': 'FireTemple',
+    'Goto_GerudoTrainingGround': 'GerudoTrainingGround', 'Goto_IceCave': 'IceCavern',
+    'Goto_KakarikoWells': 'BottomOfTheWell', 'Goto_SacredForest': 'SacredForestMeadow',
+    'Goto_ShadowTemple': 'ShadowTemple', 'Goto_SpiritTemple': 'SpiritTemple', 'Goto_WaterTemple': 'WaterTemple',
+    'Goto_ZoraRiver': 'ZoraRiver', 'Npc_Dream': 'DreamWorld',
+}
+
+
 def start_values():
     """GameData values written at the end of the new-game opening (full mode)."""
     values = {}
@@ -73,6 +94,19 @@ def start_values():
         values[played] = True
         values[visit] = True
     return values
+
+
+def with_area_visits(values):
+    """``values`` plus the area visited by each scene it marks played without playing it.
+
+    A scene marked played at the start never runs, so neither does its area name frame:
+    the map menu then showed "???" there for the whole game (Hyrule Field and Hyrule
+    Castle, marked played for Kaepora's first arrival, 27/11)."""
+    out = dict(values)
+    for scene, area in LOCATION_FRAMES.items():
+        if out.get('HavePlayedEvent.' + scene) is True:
+            out.setdefault('IsVisitLocation.' + area, True)
+    return out
 
 
 def auto_skip_presentation(raw, fade_in=True):
@@ -91,13 +125,12 @@ def auto_skip_presentation(raw, fade_in=True):
     from evfl.container import Container
     from evfl.event import ActionEvent, Event, SubFlowEvent
     from evfl.util import make_index
-    from oot_rando.patching.event_patch import _flow, _snapshot
     windowed, records = add_skip_window(raw, fade_in)
-    flow = _flow(windowed)
+    flow = parse_flow(windowed)
     chart = flow.flowchart
     events = {e.name: e for e in chart.events}
     entries = {e.name: e for e in chart.entry_points}
-    expected = _snapshot(flow)
+    expected = params_by_event(flow)
 
     def reachable(starts, stops=()):
         seen, stack, order = set(), list(starts), []
@@ -110,7 +143,7 @@ def auto_skip_presentation(raw, fade_in=True):
             if isinstance(event.data, SubFlowEvent) and not event.data.res_flowchart_name:
                 sub = entries.get(event.data.entry_point_name)
                 stack.append(sub.main_event.v if sub is not None else None)
-            stack.extend(_successors(event))
+            stack.extend(next_events(event))
         return order
 
     roots = lambda: [e.main_event.v for e in chart.entry_points]
@@ -167,8 +200,8 @@ def auto_skip_presentation(raw, fade_in=True):
     stream = io.BytesIO()
     flow.write(stream)
     result = stream.getvalue()
-    checked = _flow(result)
-    if _snapshot(checked) != expected:
+    checked = parse_flow(result)
+    if params_by_event(checked) != expected:
         raise ValueError('The presentation auto-skip changed other parameters.')
     checked_entries = {e.name: e for e in checked.flowchart.entry_points}
     checked_events = {e.name: e for e in checked.flowchart.events}
@@ -194,10 +227,10 @@ def add_loading_wait(raw, records):
     from evfl.container import Container
     from evfl.event import ActionEvent, Event
     from evfl.util import make_index, make_rindex
-    from oot_rando.patching.event_patch import _flow, _snapshot, GAMEDATA_ACTOR_PARAMS
-    flow = _flow(raw)
+    from oot_rando.patching.event_patch import GAMEDATA_ACTOR_PARAMS
+    flow = parse_flow(raw)
     chart = flow.flowchart
-    expected = _snapshot(flow)
+    expected = params_by_event(flow)
     actor = next((a for a in chart.actors if a.identifier.name == LOADING_ACTOR
                   and a.identifier.sub_name == ''), None)
     if actor is None:
@@ -231,8 +264,8 @@ def add_loading_wait(raw, records):
     stream = io.BytesIO()
     flow.write(stream)
     result = stream.getvalue()
-    checked = _flow(result)
-    if _snapshot(checked) != expected:
+    checked = parse_flow(result)
+    if params_by_event(checked) != expected:
         raise ValueError('The loading wait changed other parameters.')
     checked_entries = {e.name: e for e in checked.flowchart.entry_points}
     for record in records:

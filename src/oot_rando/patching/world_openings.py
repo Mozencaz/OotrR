@@ -32,6 +32,7 @@ and Door of Time quests are untouched: Zelda's Letter and the Song of Time keep
 their own checks. Not validated in game.
 """
 from oot_rando.patching import game_defaults, quest_guard
+from oot_rando.logic.rando_options import escape_requirement
 
 ZORA_QUEST = 'Get_StoneOfWater'
 ZORA_STEP = 'Step_Get_StoneOfWater'
@@ -273,13 +274,15 @@ def gerudo_fortress_fast(read_flow, gamedata_raw, challenges_raw, read_module=No
     the fortress at peace) once it passes 3; ``…_Helped_02`` counts the carpenters
     left. A new game starts with three helped and one left, so the first rescue,
     whichever cell, ends the fortress. Completion releases the other carpenters
-    and opens all cell locks so their jars remain reachable."""
+    and opens all cell locks so their jars remain reachable; their thieves
+    count as defeated so that each key (a check) lies in its cell."""
     from oot_rando.patching import gerudo_fortress as g
     values = {CARPENTERS_HELPED: 3, CARPENTERS_LEFT: 1}
     flow, freed = g.free_remaining_carpenters(read_flow(g.SPIRIT_FLOW))
-    files = {g.SPIRIT_FLOW: flow, g.CELL_MODULE: g.open_completed_cells((read_module or read_flow)(g.CELL_MODULE))}
+    unlock, _ = g.skip_completed_unlocks(read_flow(g.UNLOCK_FLOW))
+    files = {g.SPIRIT_FLOW: flow, g.UNLOCK_FLOW: unlock, g.CELL_MODULE: g.open_completed_cells((read_module or read_flow)(g.CELL_MODULE))}
     return game_defaults.set_new_game_defaults(gamedata_raw, values), files, {
-        'defaults': values, 'guarded': {}, 'freed': freed, 'modules': [g.CELL_MODULE]}
+        'defaults': values, 'guarded': {}, 'freed': freed, 'modules': [g.CELL_MODULE], 'unlock_flow': g.UNLOCK_FLOW}
 
 
 BRIDGE_MODULE = 'Logic/GerudoValley_Adult_Prefab_9e43.logic.module.ainb'
@@ -355,7 +358,6 @@ def apply_openings(options, read_flow, gamedata_raw, challenges_raw, read_module
                  if opening in (door_of_time_open, gerudo_valley_bridge, gerudo_fortress_fast) else ())
         gamedata, edited, reports[option] = opening(current, gamedata, challenges_raw, *extra)
         files.update(edited)
-    from oot_rando.logic.rando_options import escape_requirement
     if escape_requirement(options) == 'song':
         current = lambda p: files.get(p) or read_flow(p)
         gamedata, edited, reports['zelda_escape'] = zelda_escape_ready(current, gamedata, challenges_raw)

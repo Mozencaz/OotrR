@@ -4,6 +4,7 @@ import os
 import unittest
 
 from oot_rando.patching import big_poes
+from oot_rando.formats.evfl_tools import parse_flow
 
 NUP = os.environ.get('OOT_NUP')
 
@@ -26,7 +27,6 @@ class WithGame(unittest.TestCase):
         from oot_rando.formats.inspect_resources import decompress, dictionaries
         from oot_rando.game.extra_sources import event_paths
         from oot_rando.game.world_maps import effective_members
-        from oot_rando.patching.event_patch import _flow
         nup = Nup(NUP)
         try:
             d, m = dictionaries(nup), effective_members(nup)
@@ -35,7 +35,7 @@ class WithGame(unittest.TestCase):
             for path in paths:
                 raw = decompress(nup.read(m[path]), d)
                 self.assertIs(big_poes.patch_flow(raw, 10), raw)
-                events = {e.name: e for e in _flow(big_poes.patch_flow(raw, 4)).flowchart.events}
+                events = {e.name: e for e in parse_flow(big_poes.patch_flow(raw, 4)).flowchart.events}
                 self.assertEqual(events['Event70'].data.params.data['Value'], 300)
                 self.assertEqual(events['Event265'].data.params.data['Value'], 200)
         finally:

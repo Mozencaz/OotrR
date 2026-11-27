@@ -9,7 +9,7 @@ import copy
 
 from oot_rando.formats import byml_codec as codec
 from oot_rando.formats.inspect_resources import sarc
-from oot_rando.game.item_forms import _copy_ref, _pack_path, resolve_components
+from oot_rando.game.item_forms import copy_ref, pack_path, resolve_components
 
 MASTER_SWORD_ACTOR = 'Item_Rando_MasterSword'
 WEAPON = 'Weapon_Sword_Master'
@@ -55,7 +55,7 @@ def build_pack(read_pack):
     edited = document['root']['Components']
     for key in ('ModelInfoRef', 'ActorNameRef'):
         edited[key] = native[key]
-        _copy_ref(source, native[key], files, codec)
+        copy_ref(source, native[key], files, codec)
 
     animation = _resource('Component/AnimationParam', 'engine__component__AnimationParam')
     # The Master model has no weapon animation resource. Biggoron/Kokiri's
@@ -63,8 +63,8 @@ def build_pack(read_pack):
     files[animation] = _document({'AnimationResources': copy.deepcopy(ANIMATIONS)})
     edited['AnimationRef'] = '?' + animation
     pouch = _resource('Component/PouchContentParam', 'game__component__PouchContentParam')
-    parent = _pack_path(components['PouchContentRef'])
-    _copy_ref(template, components['PouchContentRef'], files, codec)
+    parent = pack_path(components['PouchContentRef'])
+    copy_ref(template, components['PouchContentRef'], files, codec)
     files[pouch] = _document({
         '$parent': 'Work/' + parent[:-len('.bgyml')] + '.gyml',
         'PouchActor': f'Work/Actor/{WEAPON}.engine__actor__ActorParam.gyml',

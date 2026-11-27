@@ -5,6 +5,7 @@ import unittest
 
 from oot_rando.patching import minigame_rewards as m
 from oot_rando.patching import story_fixes
+from oot_rando.formats.evfl_tools import params_by_event, parse_flow
 
 NUP = os.environ.get('OOT_NUP')
 
@@ -28,12 +29,10 @@ class MinigameRewards(unittest.TestCase):
 
     @staticmethod
     def chart(raw):
-        from oot_rando.patching.event_patch import _flow
-        return {e.name: e for e in _flow(raw).flowchart.events}
+        return {e.name: e for e in parse_flow(raw).flowchart.events}
 
     def check_kept(self, source, raw, changed=()):
-        from oot_rando.patching.event_patch import _flow, _snapshot
-        before, after = _snapshot(_flow(source)), _snapshot(_flow(raw))
+        before, after = params_by_event(parse_flow(source)), params_by_event(parse_flow(raw))
         for name in changed:
             before[name] = after[name]
         self.assertEqual({k: v for k, v in after.items() if k in before}, before)

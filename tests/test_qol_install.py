@@ -11,9 +11,8 @@ from pathlib import Path
 from oot_rando.patching.qol_patches import INTRO
 from oot_rando.patching.randomize_kokiri import BUILD, TITLE
 from oot_rando.randomizer import qol_install
-from oot_rando.randomizer.randomizer_services import (QOL_FOLDER, archive_previous_seeds, conflicting_mods,
-                                                      generate_in_mods, is_qol_install, is_randomizer_seed,
-                                                      qol_seed_warning, read_artifact)
+from oot_rando.randomizer.artifact import QOL_FOLDER, is_qol_install, is_randomizer_seed, read_artifact
+from oot_rando.randomizer.mods_folder import archive_previous_seeds, conflicting_mods, generate_in_mods, qol_seed_warning
 
 NUP = os.environ.get('OOT_NUP')
 SEED_ID = 'a' * 64
@@ -94,7 +93,7 @@ class SeedInstallWarningTests(unittest.TestCase):
         (qol / 'romfs' / 'shared.bin').write_bytes(b'x')
         messages = []
         manifest = {'files': {'shared.bin': {}}}
-        with mock.patch('oot_rando.randomizer.randomizer_services.read_artifact', return_value=(manifest, {})):
+        with mock.patch('oot_rando.randomizer.mods_folder.read_artifact', return_value=(manifest, {})):
             folder = generate_in_mods('game.nup', self.mods, Settings('warn'), messages.append,
                                       generate=fake_generate)
         self.assertTrue(folder.is_dir() and qol.is_dir())

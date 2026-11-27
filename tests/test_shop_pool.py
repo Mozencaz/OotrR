@@ -1,4 +1,4 @@
-import _src_path
+import _src_path  # noqa: F401
 import unittest
 from collections import Counter
 from oot_rando.game.extra_sources import scan_map_sources

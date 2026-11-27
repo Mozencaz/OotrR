@@ -19,8 +19,8 @@ from oot_rando.patching.qol_patches import (CHEST_FLOW, INTRO, INTRO_PARENT, SMA
 from oot_rando.patching.randomize_kokiri import BUILD, TITLE, check_supported_game
 from oot_rando.randomizer.randomizer_core import (GENERATOR_VERSION, compress_changed, complete_event_info,
                                                   grow_resource_table, json_document, publish_mod, source_reader)
-from oot_rando.randomizer.randomizer_services import (QOL_FOLDER, QOL_KIND, conflicting_mods, is_qol_install,
-                                                      is_randomizer_seed, validate_mod_directory)
+from oot_rando.randomizer.artifact import QOL_FOLDER, QOL_KIND, is_qol_install, is_randomizer_seed
+from oot_rando.randomizer.mods_folder import conflicting_mods, validate_mod_directory
 
 CREDIT = 'Patches from OotrR by Mozencaz, reused with his permission.'
 NO_OPTION = 'Choose at least one option: the intro skip or the fast chests.'
@@ -63,7 +63,7 @@ def generate_qol_files(nup_path, intro_skip=True, fast_chests=True, progress=Non
                 'title_id': TITLE, 'build_id': BUILD,
                 'options': {'intro_skip': intro_skip, 'fast_chests': fast_chests},
                 'files': {p: {'size': len(v), 'sha256': sha256(v)} for p, v in sorted(files.items())},
-                'source_files': sources, 'resource_allocations': allocations, 'skips': skips,
+                'source_files': dict(sorted(sources.items())), 'resource_allocations': allocations, 'skips': skips,
                 'credit': CREDIT}
     return files, manifest
 

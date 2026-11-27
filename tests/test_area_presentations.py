@@ -5,6 +5,7 @@ import unittest
 
 from oot_rando.patching import area_presentations as ap
 from oot_rando.patching.qol_patches import AREA_PRESENTATIONS
+from oot_rando.formats.evfl_tools import next_events, parse_flow
 
 NUP = os.environ.get('OOT_NUP')
 # First arrivals whose own event moves a quest: their flag must never be pre-set.
@@ -32,9 +33,48 @@ class Tables(unittest.TestCase):
             self.assertTrue(visit.startswith('IsVisitLocation.'))
         self.assertIn('HavePlayedEvent.Goto_SpritTemple', values)   # the game's spelling
 
+    def test_premarked_visits_match_the_frames(self):
+        for scene, (_, visit) in ap.PREMARKED.items():
+            if scene in ap.LOCATION_FRAMES:
+                self.assertEqual(visit, 'IsVisitLocation.' + ap.LOCATION_FRAMES[scene])
+
+    def test_scenes_marked_played_mark_their_area_visited(self):
+        # Kaepora's first field arrival marks the Hyrule Field and castle scenes played:
+        # without the visits the map showed "???" for both areas (27/11).
+        from oot_rando.patching.story_fixes import story_start_values
+        from oot_rando.patching import child_castle_skip
+        values = dict(story_start_values(), **ap.start_values(), **child_castle_skip.START_VALUES)
+        visited = ap.with_area_visits(values)
+        self.assertIs(visited['IsVisitLocation.HyruleField'], True)
+        self.assertIs(visited['IsVisitLocation.HyruleCastle'], True)
+        for scene, area in ap.LOCATION_FRAMES.items():
+            if values.get('HavePlayedEvent.' + scene) is True:
+                self.assertIs(visited['IsVisitLocation.' + area], True, scene)
+        self.assertEqual({k: v for k, v in visited.items() if k in values}, values)
+        # Played false, or not set: nothing added.
+        self.assertEqual(ap.with_area_visits({'HavePlayedEvent.Dm_Kakariko_0000': False}),
+                         {'HavePlayedEvent.Dm_Kakariko_0000': False})
+
 
 @unittest.skipUnless(NUP, 'OOT_NUP not set')
 class NativePresentations(unittest.TestCase):
+    def test_location_frames_cover_every_area_name_frame(self):
+        from oot_rando.formats.evfl_tools import parse_flow
+        from evfl.event import ActionEvent
+        found = {}
+        for path in self.members:
+            if not (path.startswith('Event/EventFlow/') and path.endswith('.bfevfl.zs')):
+                continue
+            raw = self.read(path)
+            if b'EventTriggerOpenLocationUI' not in raw:
+                continue
+            names = {e.data.params.data['LocationName'] for e in parse_flow(raw).flowchart.events
+                     if isinstance(e.data, ActionEvent) and e.data.actor_action.v.v == 'EventTriggerOpenLocationUI'}
+            self.assertEqual(len(names), 1, path)
+            found[path[len('Event/EventFlow/'):-len('.bfevfl.zs')]] = \
+                names.pop()[len('Work/Location/'):].split('.')[0]
+        self.assertEqual(found, ap.LOCATION_FRAMES)
+
     @classmethod
     def setUpClass(cls):
         from oot_rando.formats.inspect_nup import Nup
@@ -78,11 +118,10 @@ class NativePresentations(unittest.TestCase):
             self.assertEqual({r['location_ui']['visit'] for r in records if 'location_ui' in r}, {visit}, name)
 
     def test_premarked_flags_gate_an_entrance_or_an_arrival_switch(self):
-        from oot_rando.patching.event_patch import _flow
         from oot_rando.patching.qol_patches import flow_path
         from evfl.event import SwitchEvent
         entrances = self.banc_entrances()
-        arrive = _flow(self.read(flow_path('Dm_SY_BancChangeArrive'))).flowchart
+        arrive = parse_flow(self.read(flow_path('Dm_SY_BancChangeArrive'))).flowchart
         switches = {e.data.params.data.get('EventName') for e in arrive.events if isinstance(e.data, SwitchEvent)
                     and e.data.actor_query.v.v == 'EventQueryHavePlayedEvent' and e.data.params is not None}
         for name, (played, _) in ap.PREMARKED.items():
@@ -90,12 +129,11 @@ class NativePresentations(unittest.TestCase):
             self.assertTrue(gated, name)
 
     def test_auto_skip_jumps_to_the_window_end(self):
-        from oot_rando.patching.event_patch import _flow
-        from oot_rando.patching.qol_patches import _successors, flow_path
+        from oot_rando.patching.qol_patches import flow_path
         files, report = ap.presentation_files(self.read)
         self.assertEqual(set(files), {flow_path(n) for n in AREA_PRESENTATIONS})
         for name in ap.AUTO_SKIPPED:
-            chart = _flow(files[flow_path(name)]).flowchart
+            chart = parse_flow(files[flow_path(name)]).flowchart
             entries = {e.name: e for e in chart.entry_points}
             for record in report[name]:
                 # Waits for the loading screen first, else the screen stays black (19/11).
@@ -122,14 +160,14 @@ class NativePresentations(unittest.TestCase):
                     if event is None or event.name in reached:
                         continue
                     reached.add(event.name)
-                    stack.extend(_successors(event))
+                    stack.extend(next_events(event))
                     self.assertNotIn(getattr(getattr(event.data, 'actor_action', None), 'v', None) and
                                      event.data.actor_action.v.v,
                                      ('EventTriggerSkipAcceptStart', 'EventTriggerSkipEnd'), name)
         for name in ap.PREMARKED:
             self.assertFalse(any(r.get('auto') for r in report[name]))
             # The + windows wait for the loading screen too.
-            chart = _flow(files[flow_path(name)]).flowchart
+            chart = parse_flow(files[flow_path(name)]).flowchart
             entries = {e.name: e for e in chart.entry_points}
             for record in report[name]:
                 wait = entries[record['entry']].main_event.v

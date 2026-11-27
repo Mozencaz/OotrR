@@ -11,6 +11,7 @@ PKG = SRC / 'oot_rando'
 
 datas = [
     (str(PKG / 'logic' / 'world'), 'oot_rando/logic/world'),
+    (str(PKG / 'game' / 'label_overrides.json'), 'oot_rando/game'),
     # Title screen badge image (patching/title_badge.py).
     (str(PKG / 'patching' / 'title_badge.rgba.zlib'), 'oot_rando/patching'),
     (str(PKG / 'patching' / 'source_textures'), 'oot_rando/patching/source_textures'),
@@ -18,6 +19,7 @@ datas = [
     # HookshotBuilder's Python.
     (str(PKG / 'tracker' / 'icon_extract.py'), 'oot_rando/tracker'),
     (str(ROOT / 'README.md'), '.'),
+    (str(PKG / 'gui' / 'icons'), 'oot_rando/gui/icons'),
 ]
 # Sources copied into the Archipelago .apworld (``python -m oot_rando apworld``).
 sys.path.insert(0, str(SRC))
@@ -26,6 +28,7 @@ for _name in VENDORED + (TEMPLATE,):
     _parent = Path(_name).parent.as_posix()
     datas.append((str(PKG / _name), 'oot_rando' + ('' if _parent == '.' else '/' + _parent)))
 datas += collect_data_files('ainb')
+datas += collect_data_files('certifi')
 hiddenimports = (collect_submodules('oot_rando') + collect_submodules('ainb') + collect_submodules('evfl')
                  + collect_submodules('websockets'))
 

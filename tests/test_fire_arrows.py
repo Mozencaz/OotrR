@@ -4,6 +4,7 @@ import os
 import unittest
 
 from oot_rando.patching import fire_arrows
+from oot_rando.formats.evfl_tools import parse_flow
 
 NUP = os.environ.get('OOT_NUP')
 
@@ -23,9 +24,8 @@ class WithGame(unittest.TestCase):
             nup.stream.close()
 
     def test_cutscene_binds_the_new_pickup(self):
-        from oot_rando.patching.event_patch import _flow
         result = fire_arrows.retarget_cutscene(self.raw, 'Obj_Rando_Item_Hookshot')
-        actors = {(a.identifier.name, a.identifier.sub_name) for a in _flow(result).flowchart.actors}
+        actors = {(a.identifier.name, a.identifier.sub_name) for a in parse_flow(result).flowchart.actors}
         self.assertIn(('Obj_Rando_Item_Hookshot', 'Item'), actors)
         self.assertNotIn(('Obj_Arrow_Fire', 'Item'), actors)
         with self.assertRaises(ValueError):

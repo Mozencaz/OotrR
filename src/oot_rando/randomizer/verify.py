@@ -1,8 +1,15 @@
-"""Independent static verification of a complete-randomizer seed (no game launch).
+"""Static verification of a complete-randomizer seed (no game launch).
 
 Usage: python -m oot_rando verify GAME.nup SEED_FOLDER
 
-Checks, from the produced files only (the generator's plan is not reused):
+The generator's plan is not reused: placements are read back from the spoiler and the
+produced files. Checks 1, 2 and 5 rebuild the expected files with the same patch
+functions as the generator, and check 6 uses the same ``Logic``: they prove that the
+seed is exactly what this version produces from its spoiler (reproducibility, scope of
+every diff), not that a patch or a rule is right. ``output_invariants`` adds checks that
+call no patch and no rule (RESTBL allocations, GameData names used by the flows).
+
+Checks:
 1. every map differs from the original NUP only by the spoiled rewards
    (``Drop__DropActor`` of chests, skulltulas and environment objects, ``Gyaml``
    of freestanding items and shop shelves), ``Presence`` blocks of soul enemies
@@ -13,7 +20,8 @@ Checks, from the produced files only (the generator's plan is not reused):
    every generated actor has its RSDB rows and RESTBL entry (souls: saved flag);
 5. every progressive copy, and every native source of a fixed level, gives its own
    token, converted to the next level by the item-get flow (or right after its gift);
-6. a fresh sweep of the remake logic over the spoiled placements is beatable.
+6. a fresh sweep of the remake logic over the spoiled placements is beatable;
+7. the output invariants (:func:`output_invariants`).
 """
 from collections import Counter, defaultdict
 import copy
@@ -26,17 +34,37 @@ from pathlib import Path
 from oot_rando.formats.inspect_nup import Nup
 from oot_rando.formats.inspect_resources import Byml, decompress, dictionaries, sarc
 from oot_rando.game.world_maps import effective_members
-from oot_rando.randomizer.randomizer_services import read_artifact
+from oot_rando.randomizer.artifact import read_artifact
 from oot_rando.patching.randomize_kokiri import RESTBL, MAP
-from oot_rando.patching.qol_patches import (STATIC, KOKIRI_SHOP_MAPS, KOKIRI_SHOP_FLAG, _shop_actor,
+from oot_rando.patching.qol_patches import (STATIC, KOKIRI_SHOP_MAPS, KOKIRI_SHOP_FLAG, shop_actor,
                                             NOCTURNAL_FIELD, is_nocturnal_skulltula)
 from oot_rando.formats import byml_codec
+from oot_rando.game.resource_allocations import allocation
 from oot_rando.patching.soul_adapter import murmur3, RSDB_FILES, GAMEDATA, FLAG_PREFIX
-from oot_rando.game.remake_world import PROGRESSIVE, item_actor
+from oot_rando.game.remake_world import PROGRESSIVE, item_actor, TREASURE_GAME_REWARD
 from oot_rando.game.item_forms import is_derived, canonical_of
 from oot_rando.patching.key_adapter import is_key_actor
 from oot_rando.patching.progressive import applied_flag, is_token
 from oot_rando.randomizer.randomizer_core import save_marker
+from oot_rando.formats.evfl_tools import links_to, params_by_event, parse_flow
+from oot_rando.game.extra_sources import scan_world
+from oot_rando.logic.world import World
+from oot_rando.patching import blue_fire_arrows
+from oot_rando.patching import bomb_refills
+from oot_rando.patching import cuccos
+from oot_rando.patching import elemental_arrows
+from oot_rando.patching import game_defaults
+from oot_rando.patching import gerudo_fortress
+from oot_rando.patching import link_goron
+from oot_rando.patching import magic_capacity
+from oot_rando.patching import special_item_shuffle
+from oot_rando.patching.event_info import flow_path as event_flow_path
+from oot_rando.patching.master_sword_item import MASTER_SWORD_ACTOR
+from oot_rando.patching.progressive import ACTION_GUIDE
+from oot_rando.patching.progressive import AFTER_PREFIX
+from oot_rando.patching.progressive import CONVERTER_ENTRY
+from oot_rando.patching.progressive import hook_sites
+from oot_rando.patching.story_fixes import escape_stones
 
 QOL_MAPS = {MAP, STATIC}
 
@@ -49,17 +77,77 @@ def _seed_lazy(actor):
 
 
 def _flow_events(raw):
-    from oot_rando.patching.event_patch import _flow
-    return _flow(raw).flowchart.events
+    return parse_flow(raw).flowchart.events
 
 
 def _event_snapshot(raw):
-    from oot_rando.patching.event_patch import _flow, _snapshot
-    return _snapshot(_flow(raw))
+    return params_by_event(parse_flow(raw))
+
+
+def output_invariants(nup, members, seed_dir, d):
+    """Checks read from the produced files and the game only: no patch function and no
+    logic is called, so a bug shared by the generator and the replay above cannot hide here.
+
+    * every resource that grew has an allocation grown at least as much in the seed's
+      RESTBL, and every new resource has an entry (a short allocation crashes the game);
+      so does every grown file of a pack that has an entry of its own (a short one is not
+      loaded: the actor is missing);
+    * every GameData name that a changed event flow starts to use (``GameDataName``
+      parameters absent from the game's flow) exists in the seed's GameData.
+    """
+    manifest = json.loads((Path(seed_dir) / 'manifest.json').read_text(encoding='utf-8'))
+    romfs = Path(seed_dir) / 'romfs'
+
+    def unpack(path, raw):
+        return decompress(raw, d) if path.endswith('.zs') else raw
+
+    seed_table, game_table = unpack(RESTBL, (romfs / RESTBL).read_bytes()), unpack(RESTBL, nup.read(members[RESTBL]))
+    grown = new = 0
+    for path in sorted(manifest['files']):
+        if path == RESTBL:
+            continue
+        size, after = len(unpack(path, (romfs / path).read_bytes())), allocation(seed_table, path)
+        if path not in members:
+            new += 1
+            if after is None:
+                raise ValueError('New resource without a RESTBL entry: ' + path)
+            continue
+        source = unpack(path, nup.read(members[path]))
+        checked = {path: size - len(source)}
+        if path.endswith('.pack.zs'):   # each file of a pack has its own allocation
+            produced = sarc(unpack(path, (romfs / path).read_bytes()))
+            for member, raw in sarc(source).items():
+                if member in produced:
+                    checked[member] = max(checked.get(member, 0), len(produced[member]) - len(raw))
+        for name, growth in checked.items():
+            before = allocation(game_table, name)
+            if before is not None and growth > 0:
+                grown += 1
+                after = allocation(seed_table, name)
+                if after is None or after < before + growth:
+                    raise ValueError(f'RESTBL allocation too small for {name}: {after} < {before} + {growth}')
+
+    def names(raw):
+        found = set()
+        for event in parse_flow(raw).flowchart.events:
+            params = getattr(event.data, 'params', None)
+            value = dict(params.data).get('GameDataName') if params is not None else None
+            if isinstance(value, str):
+                found.add(value)
+        return found
+    data = byml_codec.load(unpack(GAMEDATA, (romfs / GAMEDATA).read_bytes()))['root']['Data']
+    known = {int(e['Hash']) for table in data.values() for e in table if isinstance(e, dict) and 'Hash' in e}
+    flags = 0
+    for path in sorted(p for p in manifest['files'] if p.endswith('.bfevfl.zs')):
+        vanilla = names(unpack(path, nup.read(members[path]))) if path in members else set()
+        for name in sorted(names(unpack(path, (romfs / path).read_bytes())) - vanilla):
+            flags += 1
+            if murmur3(name) not in known:
+                raise ValueError(f'{path} uses a GameData entry the seed does not declare: {name}')
+    return {'grown_resources': grown, 'new_resources': new, 'new_flag_references': flags}
 
 
 def verify(nup_path, seed_dir):
-    from oot_rando.game.extra_sources import scan_world
     seed_dir = Path(seed_dir)
     manifest, checks = read_artifact(seed_dir)
     spoiler = json.loads((seed_dir / 'spoiler.json').read_text(encoding='utf-8'))
@@ -74,6 +162,7 @@ def verify(nup_path, seed_dir):
     d = dictionaries(nup)
     members = effective_members(nup)
     out = lambda path: decompress((seed_dir / 'romfs' / path).read_bytes(), d)
+    invariants = output_invariants(nup, members, seed_dir, d)
     full = [p for p in spoiler['placements'] if str(p.get('category', '')).startswith('full_')]
     # Reconstruct both alternate-talk rewards from the spoiler, rather than
     # accepting the generator's fallback configuration as independent evidence.
@@ -88,7 +177,6 @@ def verify(nup_path, seed_dir):
         raise ValueError('Alternate NPC gifts differ from their shuffled rewards.')
     _, groups, enemies, extra = scan_world(nup, d, members)
     # Fresh logic sweep from the spoiler; it also names the progressive tokens.
-    from oot_rando.logic.world import World
     from oot_rando.randomizer import full_randomizer
     plan = full_randomizer.replay(World(), manifest['settings']['full'], copy.deepcopy(groups),
                                   copy.deepcopy(enemies), {p['id']: p['ap_item'] for p in full},
@@ -97,6 +185,21 @@ def verify(nup_path, seed_dir):
                                   seed_key=(manifest['settings'].get('archipelago') or {}).get('seed_key')
                                   or manifest['seed_id'])
     tokens, natives = plan['progressive']['tokens'], plan['progressive']['natives']
+    # Fake item traps: in chests and ground checks (never gifts or shops), as their own actor.
+    from oot_rando.catalog.traps import is_trap_item, trap_actor
+    from oot_rando.game.extra_sources import EVENT_SOURCES
+    placed_trap_items = sorted({p['ap_item'] for p in full if is_trap_item(p['ap_item'])})
+    for placement in full:
+        if not is_trap_item(placement['ap_item']):
+            continue
+        reward = placement.get('reward_actor', placement['actor'])
+        if (placement.get('source', 'chest') in EVENT_SOURCES + ('shop',)
+                or (canonical_of(reward) if is_derived(reward) else reward) != trap_actor(placement['ap_item'])):
+            raise ValueError('Fake item trap outside a chest or a pickup: ' + placement['id'])
+    from oot_rando.logic import rando_options
+    trap_level = rando_options.stored_value(manifest['settings']['full'] or {}, 'fake_item_traps')
+    if placed_trap_items and trap_level == 'none':
+        raise ValueError('Fake item traps without their option.')
     for placement in full:
         reward = placement.get('reward_actor', placement['actor'])
         canonical = canonical_of(reward) if is_derived(reward) else reward
@@ -118,6 +221,8 @@ def verify(nup_path, seed_dir):
             if actor != placement['before']:
                 for variant in groups[gid]:
                     map_edits[variant['resource']].setdefault(variant['index'], {})['Drop__DropActor'] = actor
+                    if gid == TREASURE_GAME_REWARD:
+                        map_edits[variant['resource']][variant['index']]['DropViewActor'] = actor
             continue
         entry = extra.get(gid)
         if entry is None:
@@ -184,8 +289,13 @@ def verify(nup_path, seed_dir):
         dispatch = 'signal' in mailbox
         if dispatch and mailbox['signal'] != ap_mailbox.SIGNAL:
             raise ValueError('Unexpected Archipelago mailbox signal.')
-        if (seed_dir / 'romfs' / ap_mailbox.MAIN_UPDATE).read_bytes() != ap_mailbox.patch_main_update(
-                nup.read(members[ap_mailbox.MAIN_UPDATE]), expected, dispatch=dispatch):
+        main_update = ap_mailbox.patch_main_update(nup.read(members[ap_mailbox.MAIN_UPDATE]), expected,
+                                                   dispatch=dispatch)
+        watch = manifest.get('skips', {}).get('progressive_watch')
+        if watch:
+            from oot_rando.patching import progressive
+            main_update = progressive.patch_main_update(main_update, watch['tokens'])
+        if (seed_dir / 'romfs' / ap_mailbox.MAIN_UPDATE).read_bytes() != main_update:
             raise ValueError('Unexpected global sequence (Archipelago reception).')
         rows = {r['__RowId']: r for r in Byml(out(ap_mailbox.EVENT_SETTINGS)).root}
         flags = {entry['Hash'] for entry in byml_codec.load(out(GAMEDATA))['root']['Data']['Bool']}
@@ -200,7 +310,22 @@ def verify(nup_path, seed_dir):
             if murmur3(record['recv']) not in flags or murmur3(record['got']) not in flags:
                 raise ValueError('Missing Archipelago reception flag: ' + record['key'])
         report['ap_reception'] = len(expected)
-    from oot_rando.patching import blue_fire_arrows
+    watch = manifest.get('skips', {}).get('progressive_watch')
+    if watch:
+        # Safety net of the progressive tokens: its watchers, event row and dependencies.
+        from oot_rando.patching import progressive
+        all_tokens = sorted(set(plan['progressive']['tokens'].values()) | {n['token'] for n in plan['progressive']['natives']})
+        if watch['tokens'] != all_tokens:
+            raise ValueError('Progressive token watchers differ from the spoiler.')
+        if mailbox is None:
+            if (seed_dir / 'romfs' / progressive.MAIN_UPDATE).read_bytes() != progressive.patch_main_update(
+                    nup.read(members[progressive.MAIN_UPDATE]), all_tokens):
+                raise ValueError('Unexpected global sequence (progressive tokens).')
+        row = {r['__RowId']: r for r in Byml(out(progressive.EVENT_SETTINGS)).root}.get(progressive.WATCH_EVENT)
+        if not row or row.get('EntryPointName') != progressive.CONVERTER_ENTRY or not row.get(
+                'FlowchartFileName', '').endswith('/' + progressive.ACTION_GUIDE + '.evfc'):
+            raise ValueError('Missing progressive converter event row.')
+        report['progressive_watch'] = len(all_tokens)
     blue_arrows = bool((manifest['settings'].get('full') or {}).get('blue_fire_arrows', False))
     if bool(manifest.get('skips', {}).get('blue_fire_arrows')) != blue_arrows:
         raise ValueError('Blue-fire arrow patch differs from the settings.')
@@ -213,15 +338,15 @@ def verify(nup_path, seed_dir):
             raise ValueError('Blue-fire arrow resource differs from the settings: ' + path)
     if blue_arrows:
         report['blue_fire_arrows'] = True
-    from oot_rando.patching import elemental_arrows
     if manifest.get('skips', {}).get('elemental_arrows'):
         for path, fix in elemental_arrows.resource_fixes():
             raw = (seed_dir / 'romfs' / path).read_bytes()
             raw = decompress(raw, d) if path.endswith('.zs') else raw
-            if fix(raw) != raw:
+            # Seeds before 0.12.20 hold the private bow parameter (crashes the menu).
+            old = path == elemental_arrows.PACK and elemental_arrows.OLD_PARAM in sarc(raw)
+            if fix(raw) != raw and not old:
                 raise ValueError('Elemental arrow protection missing: ' + path)
         report['elemental_arrows'] = True
-    from oot_rando.patching import bomb_refills
     if 'bomb_refills' in manifest.get('skips', {}):
         recorded = manifest['skips']['bomb_refills']
         if not set(bomb_refills.NATIVE_PACKS) <= set(recorded):
@@ -233,7 +358,6 @@ def verify(nup_path, seed_dir):
                 if pouch in pack and byml_codec.load(pack[pouch])['root'].get('SmallBagActor'):
                     raise ValueError('Bomb refill still awards a bag: ' + path)
         report['bomb_refill_packs'] = len(recorded)
-    from oot_rando.patching import magic_capacity
     if 'magic_capacity' in manifest.get('skips', {}):
         recorded = manifest['skips']['magic_capacity']
         if not set(magic_capacity.NATIVE_PACKS) <= set(recorded):
@@ -249,8 +373,6 @@ def verify(nup_path, seed_dir):
         report['magic_capacity_packs'] = len(recorded)
     from oot_rando.patching import story_fixes
     openings = (manifest.get('skips', {}).get('story_fixes') or {}).get('openings') or {}
-    from oot_rando.patching import gerudo_fortress
-    from oot_rando.patching import link_goron
     gerudo_story = manifest.get('skips', {}).get('story_fixes') or {}
     if 'gerudo_membership' in gerudo_story:
         for path, fix in gerudo_fortress.resource_fixes():
@@ -284,7 +406,10 @@ def verify(nup_path, seed_dir):
         path = gerudo_fortress.CELL_MODULE
         if (seed_dir / 'romfs' / path).read_bytes() != gerudo_fortress.open_completed_cells(nup.read(members[path])):
             raise ValueError('Unexpected completed fortress cell locks.')
-    from oot_rando.patching import game_defaults
+        path = gerudo_fortress.UNLOCK_FLOW
+        if (seed_dir / 'romfs' / path).read_bytes() != gerudo_fortress.skip_completed_unlocks(
+                decompress(nup.read(members[path]), d))[0]:
+            raise ValueError('Unexpected completed fortress cell unlocks.')
     for option, details in openings.items():
         defaults = details.get('defaults') or {}
         if game_defaults.read_defaults(out(GAMEDATA), defaults) != defaults:
@@ -303,7 +428,6 @@ def verify(nup_path, seed_dir):
             raise ValueError('Unexpected Kakariko burning condition in the game data.')
         report['story_fixes'] = report.get('story_fixes', 0) + 1
     # Cuccos to bring back: the pen's logic module and her lines (the flow is also checked below).
-    from oot_rando.patching import cuccos
     unpack = lambda path, raw: decompress(raw, d) if path.endswith('.zs') else raw
     report.update(cuccos.check_seed(manifest, members, lambda path: unpack(path, nup.read(members[path])),
                                     lambda path: unpack(path, (seed_dir / 'romfs' / path).read_bytes())))
@@ -340,8 +464,6 @@ def verify(nup_path, seed_dir):
     for record in chest_records:
         chest_flows.setdefault(record['flow'], []).append(record)
     # Token gifts outside any item get call the converter themselves (recomputed here).
-    from oot_rando.patching.event_info import flow_path as event_flow_path
-    from oot_rando.patching.progressive import AFTER_PREFIX, ACTION_GUIDE, CONVERTER_ENTRY, hook_sites
 
     def produced_flow(name):
         path = event_flow_path(name)
@@ -358,9 +480,7 @@ def verify(nup_path, seed_dir):
     if hooks != progressive_skip.get('hooks', {}):
         raise ValueError('Progressive token gifts differ from the spoiler.')
     soul_actors, soul_expressions_seen = set(), set()
-    from oot_rando.patching import special_item_shuffle
     master_flows = special_item_shuffle.flow_paths(manifest['settings']['full'], members)
-    from oot_rando.patching.story_fixes import escape_stones
     stones = escape_stones(manifest['settings']['full'])
     if set(master_flows) - set(manifest['files']):
         raise ValueError('Missing Master Sword time travel flow.')
@@ -376,7 +496,7 @@ def verify(nup_path, seed_dir):
                     raise ValueError('Unexpected Master Sword ownership guards: ' + path)
                 report['master_sword_flows'] = report.get('master_sword_flows', 0) + 1
             # Comfort patches, re-applied independently to the original flow.
-            from oot_rando.patching.qol_patches import AREA_PRESENTATIONS, CHEST_FLOW, add_skip_window, flow_path, quick_chest
+            from oot_rando.patching.qol_patches import AREA_PRESENTATIONS, CHEST_FLOW, flow_path, quick_chest
             skips = manifest.get('skips', {})
             if path in {flow_path(name) for name in skips.get('area_presentations', {})}:
                 if path not in {flow_path(name) for name in AREA_PRESENTATIONS}:
@@ -423,6 +543,14 @@ def verify(nup_path, seed_dir):
                     raise ValueError('Dungeon keys differ from the spoiler.')
                 original = add_key_hook(original, records)[0]
                 report['key_items'] = len(records)
+            if path == ACTION_GUIDE_FLOW and (placed_trap_items or skips.get('fake_traps')):
+                # Fake item traps, rebuilt from the spoiler alone.
+                from oot_rando.patching.fake_traps import add_trap_hook, trap_records
+                records = trap_records(placed_trap_items)
+                if records != (skips.get('fake_traps') or {}).get('records'):
+                    raise ValueError('Fake item traps differ from the spoiler.')
+                original = add_trap_hook(original, records)[0]
+                report['fake_traps'] = len(records)
             all_tokens = sorted(set(tokens.values()) | {n['token'] for n in natives})
             if path == ACTION_GUIDE_FLOW and (all_tokens or skips.get('progressive')):
                 # Progressive tokens: converted at the start of every item get.
@@ -499,14 +627,13 @@ def verify(nup_path, seed_dir):
             gifts = skips.get('gift_get', {})
             if path in gifts:
                 # Cutscene whose own add is bypassed: never reached any more.
-                from oot_rando.patching.event_patch import _flow
-                from oot_rando.patching.qol_patches import GIFT_AFTER_CUTSCENE, _predecessors
+                from oot_rando.patching.qol_patches import GIFT_AFTER_CUTSCENE
                 spec, gift = GIFT_AFTER_CUTSCENE.get(path), gifts[path]
                 if spec is None or any(gift.get(key) != spec[key] for key in ('event', 'flow', 'after')):
                     raise ValueError('Unknown cutscene item hand-over: ' + path)
-                chart = _flow(out(path)).flowchart
+                chart = parse_flow(out(path)).flowchart
                 bypassed = next(e for e in chart.events if e.name == spec['event'])
-                if _predecessors(chart, bypassed):
+                if links_to(chart, bypassed):
                     raise ValueError('Cutscene item still added in the cutscene: ' + path)
                 report['gift_get'] = report.get('gift_get', 0) + 1
             for cutscene, gift in sorted(gifts.items()):
@@ -578,7 +705,8 @@ def verify(nup_path, seed_dir):
                 from oot_rando.randomizer.randomizer_core import starting_pouch_items
                 from oot_rando.patching.event_patch import starting_item_events
                 given = starting_pouch_items({'archipelago': manifest.get('archipelago'),
-                                              'starting': manifest.get('starting')})
+                                              'starting': manifest.get('starting'),
+                                              'options': (manifest.get('settings') or {}).get('full')})
                 for item, name in zip(given, starting_item_events(given)):
                     before[name] = {'Num': 1, 'IsEquipDIrect': False,
                                                         'IsSetMessageTargetActorName': False,
@@ -596,9 +724,24 @@ def verify(nup_path, seed_dir):
                     if presentation_flags != presentation_start_values():
                         raise ValueError('Area presentation flags differ from the spoiler.')
                     values = dict(values, **presentation_flags)
-                from oot_rando.patching import child_castle_skip
+                from oot_rando.patching import adult_start, child_castle_skip
+                if adult_start.enabled((manifest.get('settings') or {}).get('full')):
+                    # Adult start: era flag, then the banc change to the Temple of Time.
+                    if (skips.get('story_fixes') or {}).get('adult_start', {}).get('events') != list(adult_start.event_params()):
+                        raise ValueError('Adult start events differ from the settings.')
+                    for name, params in adult_start.event_params().items():
+                        before[name] = params
+                        report['start_values'] = report.get('start_values', 0) + 1
                 if child_castle_skip.enabled((manifest.get('settings') or {}).get('full')):
                     values = dict(values, **child_castle_skip.START_VALUES)
+                area_visits = (skips.get('story_fixes') or {}).get('area_visits')
+                if area_visits:   # (seeds from 0.12.22 on)
+                    from oot_rando.patching.area_presentations import with_area_visits
+                    visited = with_area_visits(values)
+                    if sorted(set(visited) - set(values)) != area_visits:
+                        raise ValueError('Area visits differ from the spoiler.')
+                    values = visited
+                if child_castle_skip.enabled((manifest.get('settings') or {}).get('full')):
                     # The castle quests replayed at the start (native requests, copied).
                     steps = child_castle_skip.start_step_params(
                         lambda p: decompress(nup.read(members[p]), d), door_ready=not stones)
@@ -669,7 +812,7 @@ def verify(nup_path, seed_dir):
             index = indices[id(a)] if indices is not None else position
             a2, b2 = json.loads(json.dumps(a)), json.loads(json.dumps(b))
             shop_presence = a2.get('Presence') or {}
-            if path in KOKIRI_SHOP_MAPS and shop_presence.get('FlagName') == KOKIRI_SHOP_FLAG                     and _shop_actor(a2.get('Gyaml', '')):
+            if path in KOKIRI_SHOP_MAPS and shop_presence.get('FlagName') == KOKIRI_SHOP_FLAG                     and shop_actor(a2.get('Gyaml', '')):
                 # Kokiri shop opened from the start: full stock always, short stock hidden.
                 if shop_presence.get('IsNegation'):
                     shop_presence['FlagName'] = save_marker(manifest)
@@ -769,7 +912,6 @@ def verify(nup_path, seed_dir):
         report['maps'] += 1
     # Actors.
     derived = set()
-    from oot_rando.patching.master_sword_item import MASTER_SWORD_ACTOR
     master_actors = {MASTER_SWORD_ACTOR} if manifest['settings']['full'].get('shuffle_master_sword') else set()
     once_actors = {r['actor']: r for r in tracking.get('repeatables', [])}
     for placement in full:
@@ -777,14 +919,14 @@ def verify(nup_path, seed_dir):
         if actor in once_actors:
             derived.add(actor)
             canonical = once_actors[actor]['canonical']
-            if canonical.startswith(('Item_Soul_', 'Item_AP_')) or is_key_actor(canonical) or is_token(canonical):
+            if canonical.startswith(('Item_Soul_', 'Item_AP_', 'Item_Trap_')) or is_key_actor(canonical) or is_token(canonical):
                 soul_actors.add(canonical)
-        elif actor.startswith(('Item_Soul_', 'Item_AP_')) or is_key_actor(actor) or is_token(actor):
+        elif actor.startswith(('Item_Soul_', 'Item_AP_', 'Item_Trap_')) or is_key_actor(actor) or is_token(actor):
             soul_actors.add(actor)
         elif is_derived(actor):
             derived.add(actor)
             canonical = canonical_of(actor)
-            if canonical.startswith(('Item_Soul_', 'Item_AP_')) or is_key_actor(canonical) or is_token(canonical):
+            if canonical.startswith(('Item_Soul_', 'Item_AP_', 'Item_Trap_')) or is_key_actor(canonical) or is_token(canonical):
                 soul_actors.add(canonical)  # derived soul/key/token: the generated item must exist too
         elif actor not in master_actors and 'Pack/Actor/' + actor + '.pack.zs' not in members:
             raise ValueError('Actor missing: ' + actor)
@@ -794,7 +936,9 @@ def verify(nup_path, seed_dir):
             derived.add(native['after'])
     source_actors = {variant['textured_actor'] for variants in textured_sources.values()
                      for variant in variants.values()}
-    generated = soul_actors | derived | master_actors | source_actors
+    from oot_rando.catalog.traps import SENSOR_ACTOR, sprung_flag
+    sensor_actors = {SENSOR_ACTOR} if placed_trap_items else set()
+    generated = soul_actors | derived | master_actors | source_actors | sensor_actors
     if generated:
         rest = decompress((seed_dir / 'romfs' / RESTBL).read_bytes(), d)
         count = struct.unpack_from('<I', rest, 14)[0]
@@ -812,6 +956,9 @@ def verify(nup_path, seed_dir):
         for record in manifest.get('skips', {}).get('key_items', {}).get('records', []):
             if record['kind'] == 'ring' and murmur3(record['applied']) not in flags:
                 raise ValueError('Missing key ring flag: ' + record['folder'])
+        for item in placed_trap_items:
+            if murmur3(sprung_flag(trap_actor(item))) not in flags:
+                raise ValueError('Missing fake item trap flag: ' + item)
         for actor in sorted(a for a in soul_actors if is_token(a)):
             if murmur3(applied_flag(actor)) not in flags:
                 raise ValueError('Missing progressive token flag: ' + actor)
@@ -821,12 +968,21 @@ def verify(nup_path, seed_dir):
             Byml(pack[f'Actor/{actor}.engine__actor__ActorParam.bgyml'])
             if zlib.crc32(pack_path[:-3].encode()) not in crcs:
                 raise ValueError('Missing RESTBL entry: ' + actor)
-            required = (tables['ActorInfo'], tables['GameActorInfo']) if actor in source_actors else tables.values()
+            required = ((tables['ActorInfo'], tables['GameActorInfo']) if actor in source_actors | sensor_actors
+                        else tables.values())
             if any(actor not in rows for rows in required):
                 raise ValueError('Missing RSDB row: ' + actor)
             if actor in soul_actors and murmur3(FLAG_PREFIX + actor) not in flags:
                 raise ValueError('Missing save flag: ' + actor)
         report['textured_sources'] = len(source_actors)
+    if placed_trap_items:
+        # Fake item traps freeze child Link too (vanilla: adult only).
+        from oot_rando.patching.fake_traps import CHILD_PACK, ELINK, child_ice_shell, enable_child_freeze
+        if out(CHILD_PACK) != enable_child_freeze(decompress(nup.read(members[CHILD_PACK]), d)):
+            raise ValueError('Child Link cannot be frozen by the fake item traps.')
+        if out(ELINK) != child_ice_shell(decompress(nup.read(members[ELINK]), d)):
+            raise ValueError('Child Link has no ice shell for the fake item traps.')
+        report['child_freeze'] = True
     multiworld = manifest.get('archipelago')
     if multiworld is not None:
         # Placed by Archipelago: victory may need items of other worlds (checked by
@@ -841,6 +997,7 @@ def verify(nup_path, seed_dir):
                 taken[item] += 1
             elif full_randomizer.starting_unsupported(item) or actor != item_actor(item, None):
                 raise ValueError(f'Unexpected starting item: {item} → {actor}')
+        report['invariants'] = invariants
         report.update(souls=len(soul_actors), derived=len(derived), beatable='checked by Archipelago',
                       spheres=plan['sphere_count'], unreachable_logic_locations=plan['unreachable'],
                       archipelago={'seed_name': multiworld.get('seed_name'), 'slot_name': multiworld.get('slot_name'),
@@ -850,8 +1007,11 @@ def verify(nup_path, seed_dir):
     if plan.get('before_adult_missing'):
         raise ValueError('Logic replay: Door of Time items unavailable before adulthood: '
                          + ', '.join(plan['before_adult_missing']))
+    if plan.get('unreachable_souls'):
+        raise ValueError('Logic replay: unreachable enemy souls: ' + ', '.join(plan['unreachable_souls']))
     if not plan['beatable']:
         raise ValueError('Logic replay: victory not reached.')
+    report['invariants'] = invariants
     report.update(souls=len(soul_actors), derived=len(derived), beatable=True, spheres=plan['sphere_count'],
                   unreachable_logic_locations=plan['unreachable'])
     nup.stream.close()

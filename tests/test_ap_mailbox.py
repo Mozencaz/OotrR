@@ -5,6 +5,7 @@ import struct
 import unittest
 
 from oot_rando.tracker.live_memory import bool_slot
+from oot_rando.formats.evfl_tools import parse_flow
 
 NUP = os.environ.get('OOT_NUP')
 
@@ -93,10 +94,9 @@ class WithGame(unittest.TestCase):
     def test_ocarina_handed_over_without_the_pose(self):
         # 13/11 in game: the ocarinas cannot be held up (accessory actors): the get crashed.
         from oot_rando.patching import ap_mailbox
-        from oot_rando.patching.event_patch import _flow
         items = ap_mailbox.records([{'item': 'Ocarina', 'location': 'O', 'player': 'Ami'}])
         flow = ap_mailbox.add_entries(self.read(ap_mailbox.FLOW_PATH), items)
-        entry = {e.name: e for e in _flow(flow).flowchart.entry_points}[items[0]['event']]
+        entry = {e.name: e for e in parse_flow(flow).flowchart.entry_points}[items[0]['event']]
         check = entry.main_event.v                                   # holds the Ocarina of Time?
         give = check.data.cases[1].v.data.cases[0].v                  # holds the Fairy Ocarina: give Time
         self.assertEqual(ap_mailbox.given_actor(give)[0], 'Item_Ocarina_Time')
@@ -105,7 +105,6 @@ class WithGame(unittest.TestCase):
 
     def test_handed_over_actors_can_be_held(self):
         # Every native actor given with Link's item-get pose derives from a holdable base.
-        import json
         from oot_rando.formats import byml_codec
         from oot_rando.formats.inspect_resources import sarc
         from oot_rando.game.remake_world import PROGRESSIVE
@@ -154,14 +153,13 @@ class WithGame(unittest.TestCase):
 
     def test_dispatch_routes_last_item_once_and_lists_every_dependency(self):
         from oot_rando.patching import ap_mailbox
-        from oot_rando.patching.event_patch import _flow
         from oot_rando.patching.event_info import closure, flow_path
         from oot_rando.formats.byml_codec import load
         remote = [{'item': 'Rupees (5)', 'location': f'L{i}', 'player': 'Ami'} for i in range(300)]
         remote[-1]['item'] = 'Ocarina'
         items = ap_mailbox.records(remote)
         flow = ap_mailbox.add_entries(self.read(ap_mailbox.FLOW_PATH), items, dispatch=True)
-        chart = _flow(flow).flowchart
+        chart = parse_flow(flow).flowchart
         entry = next(e for e in chart.entry_points if e.name == ap_mailbox.DISPATCH)
         target = items[-1]
 
@@ -218,13 +216,12 @@ class WithGame(unittest.TestCase):
     def test_progressive_tier_chain(self):
         # Tier chosen in game: highest held + 1 (the last one again when all are held).
         from oot_rando.patching import ap_mailbox
-        from oot_rando.patching.event_patch import _flow
         from oot_rando.game.remake_world import PROGRESSIVE
         items = ap_mailbox.records(self.REMOTE + [
             {'item': 'Progressive Wallet', 'location': 'W', 'player': 'Moi'},
             {'item': 'Bomb Bag', 'location': 'B', 'player': 'Ami'}])
         flow = ap_mailbox.add_entries(self.read(ap_mailbox.FLOW_PATH), items)
-        entries = {e.name: e for e in _flow(flow).flowchart.entry_points}
+        entries = {e.name: e for e in parse_flow(flow).flowchart.entry_points}
         bag = items[3]
         self.assertEqual(bag['tiers'], PROGRESSIVE['Bomb Bag'])
         event, seen = entries[bag['event']].main_event.v, []

@@ -138,7 +138,8 @@ OPTIONS = [
             ('open', 'Open', 'The Gerudo Membership Card is handed over by the rescue of the last '
              'carpenter: with every carpenter free from the start its check would be lost.')), 'normal',
            'One carpenter: the first carpenter freed, in any cell, ends the fortress and brings the '
-           'rescue reward, then frees the remaining carpenters and opens every cell. '
+           'rescue reward, then frees the remaining carpenters and opens every cell; the keys of the '
+           'thieves not yet defeated lie in their cells. '
            'To be confirmed in game.', experimental=('fast',)),
     Option('open_gerudo_valley_bridge', 'World', 'Gerudo Valley bridge repaired',
            ((False, OK), (True, OK)), False,
@@ -146,7 +147,12 @@ OPTIONS = [
            'The carpenters stay in their cells and the last rescue still '
            'brings the Gerudo Membership Card. To be confirmed in game.', kind='bool', experimental=(True,)),
     Option('starting_age', 'World', 'Starting age',
-           (('child', 'Child', OK), ('adult', 'Adult', NO_ADAPTER), ('random', 'Random', NO_ADAPTER)), 'child'),
+           (('child', 'Child', OK), ('adult', 'Adult', OK), ('random', 'Random', NO_ADAPTER)), 'child',
+           'Adult: a new game begins as adult Link in the Temple of Time, with the Door of Time open '
+           '(the "Door of Time open" option is forced on) and time travel possible both ways at the '
+           'pedestal. Link holds the Master Sword (needed to travel back) and the starting inventory '
+           'you choose, nothing else. New save required. To be confirmed in game.',
+           experimental=('adult',)),
     # ------------------------------------------------------------------- Goal
     Option('bridge', 'Goal', 'Rainbow Bridge',
            (('vanilla', 'Shadow and Spirit medallions (vanilla)', OK), ('open', 'Open', NO_ADAPTER),
@@ -283,6 +289,15 @@ OPTIONS = [
             ('minimal', 'Minimal (one bottle, no extra hearts)', OK)), 'balanced',
            'Applies to the shuffled locations only (their count never changes): extra copies '
            'replace rupees and other filler, removed copies become rupees.'),
+    Option('fake_item_traps', 'Items', 'Fake item traps',
+           (('none', 'None', OK), ('some', 'Some (one per major item)', OK),
+            ('plentiful', 'Plentiful (two per major item, plus dungeon rewards and songs)', OK)), 'none',
+           'Fake copies of items (hookshot, bow, boots…), in chests and on the ground (freestanding, '
+           'skulltulas, pots, rocks…), never NPC gifts or shops. Some: one per major item of the pool. '
+           'Plentiful: two per major item, plus one per medallion, spiritual stone and song. A trap looks '
+           'like the real item, but its text says it is a trap and Link is frozen. Replaces filler. '
+           'Not available for Archipelago. To be confirmed in game.',
+           experimental=('some', 'plentiful')),
     # --------------------------------------------------------------- Dungeons
     Option('shuffle_mapcompass', 'Dungeons', 'Maps and compasses',
            (('vanilla', 'Vanilla', OK), ('dungeon', 'In their dungeon', OK), ('remove', 'Removed', OK),
@@ -359,7 +374,8 @@ OUT_OF_SCOPE = ('Entrance shuffle, Master Quest, multiworld and gossip stone hin
 
 # Options added after a release, left out of the stored settings at this value: stored settings
 # without the option mean it, and seeds made before the option keep their identity.
-UNRECORDED = {'spiritual_stones': 'all', 'door_of_time_requirement': 'song', 'blue_fire_arrows': False}
+UNRECORDED = {'spiritual_stones': 'all', 'door_of_time_requirement': 'song', 'blue_fire_arrows': False,
+              'fake_item_traps': 'none'}
 
 
 def recorded(values):
@@ -433,6 +449,8 @@ def validate(values, supported_only=False):
             raise ValueError(f'Unknown value for {name}: {value!r}')
         if supported_only and not option.supported(value):
             raise ValueError(f'{option.label} = {value!r}: {option.reason(value)}')
+    if result['starting_age'] == 'adult':
+        result['open_door_of_time'] = True   # the adult starts beyond the door: it stands open
     if supported_only:
         moved = result['shuffle_smallkeys'] not in ('vanilla', 'remove')
         if moved and result['key_rings'] == 'off':
@@ -452,11 +470,12 @@ PRESETS = {
     'ap_defaults': {'label': 'AP glitchless — defaults', 'values': {}},
     'everything': {'label': 'Everything shuffled (available values)', 'values': {
         'shuffle_chests': True, 'shuffle_kokiri_sword': True, 'shuffle_remake_items': True,
-        'shuffle_mapcompass': 'dungeon', 'shuffle_smallkeys': 'vanilla', 'shuffle_bosskeys': 'dungeon',
+        'shuffle_mapcompass': 'dungeon', 'shuffle_smallkeys': 'keysanity', 'key_rings': 'all', 'shuffle_bosskeys': 'keysanity',
         'shuffle_enemy_spawns': 'all', 'chest_matching': 'scene', 'progressive_order': True,
         'tokensanity': 'all', 'shopsanity': '4', 'shuffle_freestanding_items': 'all', 'shuffle_npc_gifts': True,
         'shuffle_boss_rewards': True, 'shuffle_great_fairies': True, 'shuffle_quest_rewards': True,
         'shuffle_master_sword': True, 'shuffle_gerudo_card': True,
+        'shuffle_song_items': 'everywhere', 'blue_fire_arrows': True,
         'shuffle_pots': 'all', 'shuffle_crates': 'all', 'shuffle_beehives': True, 'shuffle_bushes': True,
         'shuffle_rocks': True, 'shuffle_trees': True, 'shuffle_scrubs': 'low'}},
     'prudent': {'label': 'Prudent (chests except keys, no souls)', 'values': {
@@ -562,38 +581,6 @@ AP_GAME = 'OoT Remake'
 AP_APP_SECTION = 'OoT Remake application'
 
 
-def to_ap_yaml(values, name='Player', open_forest=True):
-    """Archipelago YAML of the ``OoT Remake`` game (the multiworld player YAML).
-
-    The options Archipelago does not take (or takes in another form) follow in an
-    ``OoT Remake application`` section, which Archipelago ignores and
-    :func:`from_ap_yaml` reads back, so the export round-trips exactly.
-    """
-    import json
-    from oot_rando.archipelago.bridge import ap_option_specs, player_yaml
-    values = validate(values, supported_only=True)
-    exposed = {spec['name'] for spec in ap_option_specs()} | {'start_inventory_from_pool'}
-    lines = [player_yaml(values, open_forest, name).rstrip('\n'),
-             '# Options of the OoT Randomizer application, ignored by Archipelago:',
-             AP_APP_SECTION + ':']
-    for option in OPTIONS:
-        if option.name in exposed:
-            continue
-        value = values[option.name]
-        if option.name == 'logic_tricks':
-            text = '[]' if value == 'none' else json.dumps(value)  # read back as a trick list
-        elif option.kind == 'items':
-            text = json.dumps(value, ensure_ascii=False)
-        elif option.kind == 'list':
-            text = json.dumps(list(value), ensure_ascii=False)
-        elif isinstance(value, bool):
-            text = 'true' if value else 'false'
-        else:
-            text = json.dumps(value if isinstance(value, str) else str(value), ensure_ascii=False)
-        lines.append(f'  {option.name}: {text}')
-    return '\n'.join(lines) + '\n'
-
-
 # Randomization tab: each category checkbox drives these complete-mode options
 # ((option, value when checked, value when unchecked), …). Categories absent
 # here have no proven adapter and stay greyed in complete mode.
@@ -628,3 +615,23 @@ def set_category(values, category, checked):
     for option, on, off in CATEGORY_OPTIONS[category]:
         result[option] = on if checked else off
     return result
+
+
+def ap_settings(options, open_forest):
+    """Settings of the AP rules (``logic.rules.Logic``) for remake options ``options``."""
+    values = {name: options[name] for name in ('open_kakariko', 'open_door_of_time', 'door_of_time_requirement', 'zora_fountain',
+                                               'spiritual_stones', 'gerudo_fortress', 'open_gerudo_valley_bridge',
+                                               'starting_age', 'bridge', 'trials',
+                                               'shuffle_ganon_bosskey', 'big_poe_count', 'chicken_count',
+                                               'free_scarecrow', 'shuffle_child_trade', 'logic_rules',
+                                               'shuffle_master_sword', 'shuffle_gerudo_card',
+                                               'logic_no_night_tokens_without_suns_song',
+                                               'skip_child_zelda')}
+    values['open_forest'] = 'closed_deku' if open_forest else 'closed'
+    # AP rules' ``keysanity``: false lets one Fire Temple door open without its key
+    # ("Fire Temple Lower Locked Door": (Small Key, 8) or not keysanity), OoTR's
+    # "a vanilla key may sit behind its own door". Shuffled small keys are key rings
+    # here (one item, every key at once): the ring itself could go behind that door
+    # (Discord 16/11: Fire Temple ring on Volvagia, boss key chest past the door).
+    values['keysanity'] = options.get('shuffle_smallkeys', 'vanilla') != 'vanilla'
+    return values

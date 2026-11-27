@@ -32,6 +32,8 @@ Not validated in game: the colour parameters are taken as multipliers of the
 harp's albedo.
 """
 import struct
+from oot_rando.formats import byml_codec as codec
+from oot_rando.formats.inspect_resources import sarc
 
 HARP_ACTOR = 'Dm_Item_Sheik_Harp'
 HARP_FMDB = 'Item_Harp_Sheik'
@@ -75,23 +77,23 @@ def model_info_path(actor):
 
 
 # ------------------------------------------------------------------ BFRES
-def _u16(data, offset):
+def read_u16(data, offset):
     return struct.unpack_from('<H', data, offset)[0]
 
 
-def _u32(data, offset):
+def read_u32(data, offset):
     return struct.unpack_from('<I', data, offset)[0]
 
 
-def _pointer(data, offset):
+def read_pointer(data, offset):
     value = struct.unpack_from('<Q', data, offset)[0]
     if not 0 < value < len(data):
         raise ValueError('BFRES: pointer outside the file.')
     return value
 
 
-def _name(data, offset):
-    size = _u16(data, offset)
+def read_name(data, offset):
+    size = read_u16(data, offset)
     return data[offset + 2:offset + 2 + size].decode('utf-8')
 
 
@@ -103,33 +105,33 @@ def _check(data, offset, magic):
 def shader_keys(names):
     """``Shader/ExternalBinaryString.bfres``: parameter name -> key."""
     _check(names, 0, b'FRES')
-    keys, dictionary = _pointer(names, 0xb8), _pointer(names, 0xc0)
-    return {_name(names, _pointer(names, dictionary + 0x20 + 16 * i)):
-            struct.unpack_from('<Q', names, keys + 8 * i)[0] for i in range(_u32(names, dictionary + 4))}
+    keys, dictionary = read_pointer(names, 0xb8), read_pointer(names, 0xc0)
+    return {read_name(names, read_pointer(names, dictionary + 0x20 + 16 * i)):
+            struct.unpack_from('<Q', names, keys + 8 * i)[0] for i in range(read_u32(names, dictionary + 4))}
 
 
 def material_params(model):
     """``{material: {key: (type, value offset)}}`` of every model of a BFRES."""
     _check(model, 0, b'FRES')
     result = {}
-    models = _pointer(model, 0x28)
-    for m in range(_u16(model, 0xdc)):
+    models = read_pointer(model, 0x28)
+    for m in range(read_u16(model, 0xdc)):
         fmdl = models + 0x78 * m
         _check(model, fmdl, b'FMDL')
-        materials = _pointer(model, fmdl + 0x38)
-        for i in range(_u32(model, _pointer(model, fmdl + 0x40) + 4)):
+        materials = read_pointer(model, fmdl + 0x38)
+        for i in range(read_u32(model, read_pointer(model, fmdl + 0x40) + 4)):
             fmat = materials + 0xb0 * i
             _check(model, fmat, b'FMAT')
-            assign = _pointer(model, _pointer(model, fmat + 0x10))
-            count = _u16(model, assign + 0x4a)
+            assign = read_pointer(model, read_pointer(model, fmat + 0x10))
+            count = read_u16(model, assign + 0x4a)
             params = {}
             if count:
-                array, values = _pointer(model, assign + 0x20), _pointer(model, fmat + 0x58)
+                array, values = read_pointer(model, assign + 0x20), read_pointer(model, fmat + 0x58)
                 for p in range(count):
                     entry = array + 0x18 * p
                     key = struct.unpack_from('<Q', model, entry + 8)[0]
-                    params[key] = (_u16(model, entry + 0x12), values + _u16(model, entry + 0x10))
-            result[_name(model, _pointer(model, fmat + 8))] = params
+                    params[key] = (read_u16(model, entry + 0x12), values + read_u16(model, entry + 0x10))
+            result[read_name(model, read_pointer(model, fmat + 8))] = params
     return result
 
 
@@ -163,7 +165,6 @@ def tinted_harp(model, keys, rgb):
 # ------------------------------------------------------------------ actors
 def repoint_pack(pack, actor, codec):
     """Song pack bytes whose ModelInfo names the song's harp."""
-    from oot_rando.formats.inspect_resources import sarc
     files = sarc(pack)
     path = model_info_path(actor)
     if path not in files:
@@ -197,7 +198,6 @@ def build_files(read_raw, actors=tuple(SONG_COLOURS)):
 
     ``read_raw(path)`` returns decompressed bytes (modified ones first); ``new``
     values are ``(raw, compression and size template path)``."""
-    from oot_rando.formats import byml_codec as codec
     keys = shader_keys(read_raw(SHADER_NAMES))
     harp = read_raw(HARP_MODEL)
     modified, new = {}, {}

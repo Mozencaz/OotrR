@@ -7,10 +7,14 @@ from pathlib import Path
 import threading
 
 from oot_rando.logic.rules import split_age_member
-from oot_rando.randomizer.randomizer_services import ManualTracker, read_artifact
-from oot_rando.tracker.save_reader import load_snapshot
+from oot_rando.randomizer.artifact import read_artifact
+from oot_rando.tracker.manual_tracker import ManualTracker
+from oot_rando.formats.save_file import load_snapshot
 from oot_rando.paths import state_dir
 from oot_rando.pc_port import KNOWN_EXES, port_exe
+from oot_rando.game.remake_world import ZONE_LABELS
+from oot_rando.patching.key_adapter import dungeon_keys
+from oot_rando.patching.soul_adapter import soul_name
 
 
 NAND_SAVE = ('nand', 'user', 'save')
@@ -66,6 +70,7 @@ def save_roots(hookshot_root=None, mods=None):
         if data:
             names = dict.fromkeys(name.lower() for name in port_appdata_names(root))
             roots.extend(data / name / 'save' for name in names)
+
     portable = emulator_save_root(mods) if mods else None
     if portable:
         roots.append(portable)
@@ -108,14 +113,63 @@ def newest_save(hookshot_root=None, title=None, mods=None):
     return best
 
 
+def default_port_save_roots():
+    """Standard OS save folders for known PC ports when no port root is specified."""
+    roots = []
+    appdata = os.environ.get('APPDATA')
+    names = port_appdata_names(Path("."))
+    if appdata:
+        roots.extend(Path(appdata) / name / 'save' for name in names)
+    data = linux_data_home()
+    if data:
+        for name in dict.fromkeys(n.lower() for n in names):
+            roots.append(data / name / 'save')
+    return roots
+
+def resolve_party_save_root(recorded_saves, mods=None, fallback_saves=None):
+    """Resolve a party save folder across PCs, usernames, and moved/extracted builds."""
+    candidates = []
+    if recorded_saves:
+        rec = Path(recorded_saves)
+        candidates.append(rec)
+        if rec.name and not rec.name.startswith("slot_"):
+            for root in save_roots(mods, mods):
+                if root.is_dir():
+                    account_cand = root / rec.name
+                    if account_cand.is_dir() and any(account_cand.glob("slot_*/progress.sav")):
+                        candidates.append(account_cand)
+    search_roots = list(save_roots(mods, mods))
+    for r in default_port_save_roots():
+        if r not in search_roots:
+            search_roots.append(r)
+    for root in search_roots:
+        if not root.is_dir():
+            continue
+        if any(root.glob("slot_*/progress.sav")):
+            candidates.append(root)
+        try:
+            for child in sorted(root.iterdir()):
+                if child.is_dir() and any(child.glob("slot_*/progress.sav")):
+                    candidates.append(child)
+        except OSError:
+            pass
+    if fallback_saves:
+        candidates.append(Path(fallback_saves))
+    for cand in candidates:
+        if cand.is_dir() and any(cand.rglob("progress.sav")):
+            return cand
+    for cand in candidates:
+        if cand.is_dir():
+            return cand
+    return Path(recorded_saves) if recorded_saves else Path(fallback_saves or ".")
+
+
 def soul_zones(metadata, counts):
     """Souls of a seed by zone: ``[(zone label, [(soul name, owned)])]``, in map order.
 
     A family soul is listed in every zone where its enemies appear. Seeds tracked
     before the zones were recorded show their souls under a single group.
     """
-    from oot_rando.game.remake_world import ZONE_LABELS
-    from oot_rando.patching.soul_adapter import soul_name
     metadata = metadata or {}
     souls = metadata.get('souls')
     if souls is None:
@@ -132,7 +186,7 @@ def soul_zones(metadata, counts):
 
 class TrackerSession:
     """A session observes one selected save; rollbacks replace its automatic state."""
-    def __init__(self, directory, slot, save_path='', live=None):
+    def __init__(self, directory, slot, save_path='', live=None, manual_directory=None):
         self.directory = Path(directory)
         self.live, self.live_status = live, ''   # live_memory.LiveGameData, optional
         self.live_bool64 = False
@@ -140,7 +194,7 @@ class TrackerSession:
         self.seed_id, self.slot = self.manifest['seed_id'], slot
         self.checks = catalogue['checks']
         self.save_path = str(save_path)
-        self.manual = ManualTracker(state_dir() / 'tracker',
+        self.manual = ManualTracker(manual_directory if manual_directory is not None else state_dir() / 'tracker',
                                     self.seed_id, slot, [c['id'] for c in self.checks])
         self.metadata = None
         if self.manifest.get('tracking'):
@@ -150,16 +204,23 @@ class TrackerSession:
         self._automatic, self._access = set(), {}
         self._soul_reasons = {}
         self._inventory = (Counter(), set())
-        from oot_rando.patching.key_adapter import dungeon_keys
         self._keys = dungeon_keys((self.metadata or {}).get('keys'), None)   # 0 found until a save is read
         self._fingerprint = None
         self._logic, self._logic_error = None, ''
         self._observed, self._goal = False, False
+        self._link = 'none'   # see ``link``
         self._source_path = ''
         self._good_summary = None
         self._summary = {'status': 'Choose a save to enable automatic tracking.',
                          'updated_at': '', 'automatic': 0, 'available': 0, 'blocked': 0,
                          'unknown': len(self.checks)}
+
+    @property
+    def link(self):
+        """How the save relates to the seed at the latest read: 'linked' (a save of this seed),
+        'other' (a save of another seed or of the vanilla game) or 'none' (no save read yet)."""
+        with self._lock:
+            return self._link
 
     @property
     def goal_reached(self):
@@ -363,11 +424,15 @@ class TrackerSession:
         if not self.metadata:
             return self._failure('This old seed has no tracking data. Generate a new seed.')
         if not path:
+            with self._lock:
+                self._link = 'none'
             return self._failure('Choose the progress.sav file of the game to track.')
         try:
             snapshot = load_snapshot(path)
             marker = self.metadata.get('seed_marker')
             if not marker or snapshot['bool'].get(int(marker)) is not True:
+                with self._lock:
+                    self._link = 'other'
                 return self._failure('This save is not linked to this seed. Start a new game with this seed.', reset=True)
             live_digest, self.live_status = None, ''
             if self.live is not None:
@@ -402,6 +467,7 @@ class TrackerSession:
                 self._inventory = inventory
                 self._keys = keys
                 self._fingerprint, self._observed, self._source_path = token, True, path
+                self._link = 'linked'
                 self._summary = {'status': status, 'updated_at': stamp, 'automatic': len(automatic),
                                  'available': sum(v == 'available' for v in access.values()),
                                  'blocked': sum(v == 'blocked' for v in access.values()),

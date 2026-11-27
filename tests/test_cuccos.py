@@ -10,6 +10,7 @@ from oot_rando.formats import byml_codec, msbt
 from oot_rando.formats.inspect_resources import sarc
 from oot_rando.logic import rando_options
 from oot_rando.patching import cuccos
+from oot_rando.formats.evfl_tools import params_by_event, parse_flow
 
 NUP = os.environ.get('OOT_NUP')
 FLOW_PATH = f'Event/EventFlow/{cuccos.FLOW}.bfevfl.zs'
@@ -198,15 +199,14 @@ class WithGame(unittest.TestCase):
             nup.stream.close()
 
     def test_flow(self):
-        from oot_rando.patching.event_patch import _flow, _snapshot
         self.assertEqual(list(self.flows), [FLOW_PATH])
         raw = self.flows[FLOW_PATH]
         self.assertIs(cuccos.patch_flow(raw, 7), raw)
         self.assertEqual(cuccos.flow_values(raw), {'Event3': 7, 'Event82': 7})
-        before = _snapshot(_flow(raw))
+        before = params_by_event(parse_flow(raw))
         for count in range(1, 7):
             patched = cuccos.patch_flow(raw, count)
-            after = _snapshot(_flow(patched))
+            after = params_by_event(parse_flow(patched))
             self.assertEqual({k for k in before if before[k] != after[k]}, {'Event3', 'Event82'})
             self.assertEqual(cuccos.flow_values(patched), {'Event3': count, 'Event82': count})
             with self.assertRaises(ValueError):

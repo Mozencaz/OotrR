@@ -11,6 +11,7 @@ from oot_rando.logic.world import World
 from oot_rando.patching import child_castle_skip as cs
 from oot_rando.randomizer.full_randomizer import (CASTLE_JUNK, ap_settings, prepare, skipped_castle_check,
                                                   vname)
+from oot_rando.formats.evfl_tools import params_by_event, parse_flow
 
 NUP = os.environ.get('OOT_NUP')
 LETTER, IMPA, FAIRY = 'quest#HC Zeldas Letter', 'song#Song from Impa', 'fairy#HC Great Fairy Reward'
@@ -186,8 +187,7 @@ class CastleFlows(unittest.TestCase):
         for path in flows:
             new, events = cs.kokiri_talk(self.decompress(self.nup.read(members[path]), self.d))
             talks += len(events)
-            from oot_rando.patching.event_patch import _flow
-            names = [e.data.params.data.get('GameDataName') for e in _flow(new).flowchart.events
+            names = [e.data.params.data.get('GameDataName') for e in parse_flow(new).flowchart.events
                      if getattr(e.data, 'params', None) is not None]
             self.assertNotIn(cs.CASTLE_DONE_STATE, names, path)
         self.assertGreater(talks, 5)
@@ -215,11 +215,11 @@ class CastleFlows(unittest.TestCase):
         self.assertEqual([(p['ChallengeName'], p['StepName']) for _, p in steps],
                          [(c, s) for _, _, c, s in cs.START_STEPS])
         self.assertTrue(all(p['IsIgnoreChallengeProgressUI'] for _, p in steps))
-        from oot_rando.patching.event_patch import _flow, _snapshot, add_collection_markers
+        from oot_rando.patching.event_patch import add_collection_markers
         opening, _ = add_collection_markers(self.read(cs.OPENING_FLOW), {'Event3': 'RandoSeed.test'})
         raw, names = cs.add_start_steps(opening, steps)
         self.assertEqual(names, cs.step_event_names())
-        before, after = _snapshot(_flow(opening)), _snapshot(_flow(raw))
+        before, after = params_by_event(parse_flow(opening)), params_by_event(parse_flow(raw))
         self.assertEqual({k: v for k, v in after.items() if k in before}, before)
         self.assertEqual({k: v for k, v in after.items() if k not in before}, dict(steps))
         with self.assertRaises(ValueError):
@@ -229,10 +229,10 @@ class CastleFlows(unittest.TestCase):
         # Black screen at a new game: the requests ran in Opening_LoadingKokiriForest,
         # before its loading screen closes. They belong to Opening_Introduction, right
         # after its own quest request.
-        from oot_rando.patching.event_patch import _flow, add_collection_markers
+        from oot_rando.patching.event_patch import add_collection_markers
         opening, _ = add_collection_markers(self.read(cs.OPENING_FLOW), {'Event3': 'RandoSeed.test'})
         raw, names = cs.add_start_steps(opening, cs.start_step_params(self.read))
-        chart = _flow(raw).flowchart
+        chart = parse_flow(raw).flowchart
         entries = {e.name: e.main_event.v for e in chart.entry_points}
 
         def chain(event):

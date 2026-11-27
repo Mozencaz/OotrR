@@ -76,7 +76,7 @@ class ColossusChildSources(unittest.TestCase):
         nup = Nup(os.environ['OOT_NUP'])
         try:
             members = {p: v for p, v in effective_members(nup).items()
-                       if p.startswith('Banc/DesertColossus/')}
+                       if p.startswith(('Banc/DesertColossus/', 'Logic/'))}
             maps, _, _ = scan_maps(nup, dictionaries(nup), members)
         finally:
             nup.stream.close()

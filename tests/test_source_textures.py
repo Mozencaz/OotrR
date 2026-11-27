@@ -58,7 +58,7 @@ class NativeSourceTextureTests(unittest.TestCase):
 
     def test_all_shuffled_source_models_preserve_physical_state_and_switch_on_check(self):
         import ainb
-        from oot_rando.game.item_forms import resolve_components, _pack_path
+        from oot_rando.game.item_forms import resolve_components, pack_path
         sources = ['Obj_BrokenBox_A_01', 'Obj_BrokenBox_A_03', 'Obj_BrokenRock_A_01',
                    'Obj_BrokenRock_A_02', 'Obj_Kokiri_Beehive_A_01', 'Obj_LiftRock_A_01',
                    'Obj_LiftRock_A_03', 'Obj_Plant_Grass_A_01', 'Obj_Plant_Grass_A_04',
@@ -91,7 +91,7 @@ class NativeSourceTextureTests(unittest.TestCase):
                 for key, value in original.items():
                     if key not in ('ModelInfoRef', 'AIInfoRef', 'PreActorSettingRef'):
                         self.assertEqual(components[key], value)
-                model = codec.load(pack[_pack_path(components['ModelInfoRef'])])['root']
+                model = codec.load(pack[pack_path(components['ModelInfoRef'])])['root']
                 self.assertEqual(model['SubModels'][0]['FmdbName'], model['FmdbName'])
                 self.assertFalse(model['IsExclusiveControl'])
                 nodes = ainb.AINB.from_binary(pack[f'AI/{actor}.root.ainb']).as_dict()['Nodes']

@@ -7,8 +7,10 @@ import unittest
 from pathlib import Path
 
 from oot_rando.randomizer.randomizer_core import Settings, settings_identity
-from oot_rando.randomizer.randomizer_services import archive_previous_seeds, is_randomizer_seed
+from oot_rando.randomizer.artifact import is_randomizer_seed
+from oot_rando.randomizer.mods_folder import archive_previous_seeds
 from oot_rando.patching.randomize_kokiri import TITLE
+from oot_rando.formats.evfl_tools import links_to, params_by_event, parse_flow
 
 NUP = os.environ.get('OOT_NUP')
 
@@ -91,11 +93,10 @@ class NupTests(unittest.TestCase):
 
     def test_refill_scrub_always_offers_a_good(self):
         from oot_rando.formats.inspect_resources import decompress, dictionaries
-        from oot_rando.patching.event_patch import _flow
         raw = decompress(self.read(self.q.SCRUB_FLOW), dictionaries(self.nup))
         patched, report = self.q.keep_one_scrub_good(raw)
         self.assertEqual(report['checks'], ['Event192', 'Event334'])
-        events = {e.name: e for e in _flow(patched).flowchart.events}
+        events = {e.name: e for e in parse_flow(patched).flowchart.events}
 
         def run(hidden):
             """Event reached after the third check, Unopened0n flags as given."""
@@ -134,10 +135,9 @@ class NupTests(unittest.TestCase):
 
     def test_saria_gift_is_added_before_its_get_window(self):
         from oot_rando.formats.inspect_resources import decompress, dictionaries
-        from oot_rando.patching.event_patch import _flow
         raw = decompress(self.read(self.q.SARIA_GIFT_FLOW), dictionaries(self.nup))
         patched, _ = self.q.saria_add_before_display(raw)
-        events = {e.name: e for e in _flow(patched).flowchart.events}
+        events = {e.name: e for e in parse_flow(patched).flowchart.events}
         self.assertIs(events['Event58'].data.nxt.v, events['Event68'])
         self.assertIs(events['Event68'].data.nxt.v, events['Event77'])
         self.assertNotIn(events['Event68'], [f.v for f in events['Event26'].data.forks])
@@ -205,13 +205,12 @@ class NupTests(unittest.TestCase):
         return decompress(self.read(path), dictionaries(self.nup))
 
     def test_area_presentations_get_a_native_skip_window(self):
-        from oot_rando.patching.event_patch import _flow, _snapshot
         files, report = self.q.area_presentation_files(self._flow)
         self.assertEqual(set(report), set(self.q.AREA_PRESENTATIONS))
         self.assertNotIn('Dm_HrlCastle_0000', self.q.AREA_PRESENTATIONS)   # it talks
         for name in self.q.AREA_PRESENTATIONS:
             path = self.q.flow_path(name)
-            before, after = _flow(self._flow(path)).flowchart, _flow(files[path]).flowchart
+            before, after = parse_flow(self._flow(path)).flowchart, parse_flow(files[path]).flowchart
             added = {e.name for e in after.events} - {e.name for e in before.events}
             deferred = [r for r in report[name] if 'location_ui' in r]
             self.assertEqual(len(added), len({r['entry'] for r in report[name]}) + len(report[name])
@@ -249,8 +248,8 @@ class NupTests(unittest.TestCase):
                 self.assertEqual(visit.data.params.data['GameDataName'], record['location_ui']['visit'])
                 self.assertTrue(record['location_ui']['visit'].startswith('IsVisitLocation.'))
             # Every other original parameter is unchanged; the frame events became 1-frame waits.
-            original = _snapshot(_flow(self._flow(path)))
-            patched = _snapshot(_flow(files[path]))
+            original = params_by_event(parse_flow(self._flow(path)))
+            patched = params_by_event(parse_flow(files[path]))
             moved = {n for r in deferred for n in r['location_ui']['deferred']}
             self.assertEqual({k: v for k, v in patched.items() if k in original and k not in moved},
                              {k: v for k, v in original.items() if k not in moved})
@@ -260,9 +259,8 @@ class NupTests(unittest.TestCase):
 
     def test_quick_chest_goes_from_lid_to_item(self):
         from evfl.common import Argument
-        from oot_rando.patching.event_patch import _flow
         raw, report = self.q.quick_chest(self._flow(self.q.CHEST_FLOW))
-        chart = _flow(raw).flowchart
+        chart = parse_flow(raw).flowchart
         entry = next(e for e in chart.entry_points if e.name == 'Success_')
         fanfare = entry.main_event.v.data.cases[0].v
         # No chest-opening music (the fanfare's intro): the item fanfare starts at once.
@@ -294,10 +292,9 @@ class NupTests(unittest.TestCase):
         self.assertEqual(sorted(report['lid_not_awaited']), sorted(e.name for e in lids))
 
     def test_quick_small_chest_opens_the_lid_then_displays_the_item(self):
-        from oot_rando.patching.event_patch import _flow, _snapshot
         source = self._flow(self.q.SMALL_CHEST_FLOW)
         raw, report = self.q.quick_small_chest(source)
-        chart = _flow(raw).flowchart
+        chart = parse_flow(raw).flowchart
         event = next(e for e in chart.entry_points if e.name == 'Success_').main_event.v
         chain = []
         while event is not None and len(chain) < 6:
@@ -310,7 +307,7 @@ class NupTests(unittest.TestCase):
         self.assertEqual(lid.data.params.data['ASName'], self.q.SMALL_CHEST_LID)
         self.assertIs(lid.data.params.data['IsWaitEnd'], False)
         # Nothing else changes: original parameters kept, /Open itself left in place.
-        original, patched = _snapshot(_flow(source)), _snapshot(_flow(raw))
+        original, patched = params_by_event(parse_flow(source)), params_by_event(parse_flow(raw))
         self.assertEqual({k: v for k, v in patched.items() if k in original}, original)
         self.assertEqual(sorted(set(patched) - set(original)), sorted(report['added']))
         self.assertTrue(any(e.name == 'Open' for e in chart.entry_points))
@@ -318,7 +315,6 @@ class NupTests(unittest.TestCase):
             self.q.quick_small_chest(raw)
 
     def test_reported_cutscenes_get_windows_and_replay_their_writes(self):
-        from oot_rando.patching.event_patch import _flow
         # A fade-out ends a window (no vanilla window holds one): the Kokiri Forest
         # presentation is skippable up to its fade before the Dm_Kokiri_0050 transition
         # (user test 12/11: it no longer was), the fade and the transition always play.
@@ -326,7 +322,7 @@ class NupTests(unittest.TestCase):
         self.assertFalse(self.q.is_world_change('UISystemActor', 'EventEventFadeOut'))
         raw, report = self.q.add_skip_windows_with_replay(self._flow(self.q.flow_path('Dm_Kokiri_0045')))
         self.assertIn({'entry': 'EntryPoint0', 'from': 'Event79', 'to': 'Event2', 'replayed': ['Event67']}, report)
-        events = {e.name: e for e in _flow(raw).flowchart.events}
+        events = {e.name: e for e in parse_flow(raw).flowchart.events}
         self.assertEqual(events['Event38'].data.actor_action.v.v, 'EventEventFadeOut')
         end = events['Event3'].data.nxt.v   # the fork's join: the window ends, then the fade
         self.assertEqual(end.data.actor_action.v.v, 'EventTriggerSkipEnd')
@@ -339,7 +335,7 @@ class NupTests(unittest.TestCase):
         for name in ('Dm_Kokiri_0060', 'Dm_Kokiri_0075'):
             with self.assertRaises(ValueError):
                 self.q.add_skip_windows_with_replay(self._flow(self.q.flow_path(name)))
-        self.assertIn('EventTalk', self.q.dialogue_actions(_flow(self._flow(self.q.flow_path('Dm_Kokiri_0060'))).flowchart))
+        self.assertIn('EventTalk', self.q.dialogue_actions(parse_flow(self._flow(self.q.flow_path('Dm_Kokiri_0060'))).flowchart))
 
     def test_world_changes_are_never_skippable(self):
         # Deku Tree water (11/11): skipping the switch cutscene left the water up.
@@ -368,10 +364,9 @@ class NupTests(unittest.TestCase):
         self.assertEqual(c('Npc', 'EventSomethingUnknown', {}), 'barrier')
 
     def test_kokiri_sword_chest_skips_sword_cutscene(self):
-        from oot_rando.patching.event_patch import _flow, _snapshot
         source = self._flow(self.q.SWORD_CHEST_FLOW)
         raw, report = self.q.skip_kokiri_sword_cutscene(source)
-        chart = _flow(raw).flowchart
+        chart = parse_flow(raw).flowchart
         entry = {e.name: e for e in chart.entry_points}['GetSword']
         seen, event = [], entry.main_event.v
         while event is not None and getattr(event.data, 'nxt', None) is not None:
@@ -381,32 +376,32 @@ class NupTests(unittest.TestCase):
                  if e.data.params is not None and 'EventName' in e.data.params.data]
         self.assertEqual(names, ['Dm_SY_Treasurebox'])   # chest performance kept, Dm_Kokiri_0063 gone
         self.assertEqual(report['to'], event.name)
-        before, after = _snapshot(_flow(source)), _snapshot(_flow(raw))
+        before, after = params_by_event(parse_flow(source)), params_by_event(parse_flow(raw))
         self.assertEqual(after, before)
         with self.assertRaises(ValueError):
             self.q.skip_kokiri_sword_cutscene(raw)  # never applied twice
 
     def test_deku_tree_gift_is_given_back_in_game(self):
-        from oot_rando.patching.event_patch import _flow, _snapshot, add_collection_markers, patch_event_params
+        from oot_rando.patching.event_patch import add_collection_markers, patch_event_params
         path = 'Event/EventFlow/Dm_Kokiri_0130.bfevfl.zs'
         spec = self.q.GIFT_AFTER_CUTSCENE[path]
         source = patch_event_params(self._flow(path), [('Event22', 'ActorName', 'Item_Stone_Forest', 'Item_HoverBoot')])
         source = add_collection_markers(source, {'Event22': 'RandoCheck.test.boss'})[0]
         raw, bypass = self.q.bypass_cutscene_gift(source, spec['event'])
         self.assertEqual(bypass, {'actor': 'Item_HoverBoot', 'flag': 'RandoCheck.test.boss', 'resume': 'Event49'})
-        chart = _flow(raw).flowchart
+        chart = parse_flow(raw).flowchart
         events = {e.name: e for e in chart.events}
-        self.assertEqual(self.q._predecessors(chart, events['Event22']), [])
-        self.assertEqual([e.name for e, _, _ in self.q._predecessors(chart, events['RandoCollected_Event22'])],
+        self.assertEqual(links_to(chart, events['Event22']), [])
+        self.assertEqual([e.name for e, _, _ in links_to(chart, events['RandoCollected_Event22'])],
                          ['Event22'])   # (only the unreachable add)
         self.assertEqual(events['Event106'].data.nxt.v.name, 'Event49')   # the cutscene goes on
-        self.assertEqual(_snapshot(_flow(raw)), _snapshot(_flow(source)))
+        self.assertEqual(params_by_event(parse_flow(raw)), params_by_event(parse_flow(source)))
         with self.assertRaises(ValueError):
             self.q.bypass_cutscene_gift(raw, spec['event'])   # never applied twice
         # Back in the forest: Link's normal item get, then the collection flag.
         escape = self._flow(spec['flow'])
         given, report = self.q.give_gift_after(escape, spec['after'], bypass['actor'], bypass['flag'])
-        events = {e.name: e for e in _flow(given).flowchart.events}
+        events = {e.name: e for e in parse_flow(given).flowchart.events}
         gift = events[self.q.GIFT_GET_EVENT]
         self.assertIs(events[spec['after']].data.nxt.v, gift)
         self.assertEqual((gift.data.res_flowchart_name, gift.data.entry_point_name), self.q.GIFT_GET_TARGET)
@@ -419,16 +414,15 @@ class NupTests(unittest.TestCase):
             self.q.give_gift_after(given, spec['after'], 'Item_HoverBoot')   # never applied twice
         # Vanilla: the flow returning to the forest has Link's normal animations, and the
         # target entry exists (gift without a giver, as Skull Kid's heart piece).
-        player = next(a for a in _flow(escape).flowchart.actors if a.identifier.name == 'Player_Event')
+        player = next(a for a in parse_flow(escape).flowchart.actors if a.identifier.name == 'Player_Event')
         self.assertEqual(player.params.data['UseEventAS'], '使用しない')
-        target = {e.name for e in _flow(self._flow('Event/EventFlow/Dm_SY_GetInEvent.bfevfl.zs')).flowchart.entry_points}
+        target = {e.name for e in parse_flow(self._flow('Event/EventFlow/Dm_SY_GetInEvent.bfevfl.zs')).flowchart.entry_points}
         self.assertIn(self.q.GIFT_GET_TARGET[1], target)
 
     def test_ocarina_guide_runs_on_item_get_while_ocarina_is_held(self):
-        from oot_rando.patching.event_patch import _flow, _snapshot
         source = self._flow(self.q.ACTION_GUIDE_FLOW)
         raw, report = self.q.ocarina_guide_on_get(source)
-        chart = _flow(raw).flowchart
+        chart = parse_flow(raw).flowchart
         entry = {e.name: e for e in chart.entry_points}['ActionGuide']
         held = entry.main_event.v
         self.assertEqual(held.data.actor_query.v.v, 'EventQueryIsExistInPouch')
@@ -442,7 +436,7 @@ class NupTests(unittest.TestCase):
                          ('', 'OpenActionGuideSceenForOcarina'))
         self.assertIs(guide.data.nxt.v, original)
         self.assertEqual(original.data.actor_query.v.v, 'EventQueryCheckPouchContentCategory')
-        before, after = _snapshot(_flow(source)), _snapshot(_flow(raw))
+        before, after = params_by_event(parse_flow(source)), params_by_event(parse_flow(raw))
         self.assertEqual({k: v for k, v in after.items() if k in before}, before)
         with self.assertRaises(ValueError):
             self.q.ocarina_guide_on_get(raw)  # never applied twice

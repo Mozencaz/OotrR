@@ -9,7 +9,7 @@ import hashlib
 
 from oot_rando.formats.byml_writer import patch_strings
 from oot_rando.formats.inspect_resources import Byml, decompress, sarc
-from oot_rando.patching.randomize_kokiri import CHESTS
+from oot_rando.catalog.kokiri_chests import CHESTS
 from oot_rando.game.randomizer_categories import candidate_category, CATEGORIES
 from oot_rando.game.remake_world import inaccessible_child_actor
 
@@ -30,9 +30,10 @@ SAFE_SCRUBS = frozenset({'Shop_DekuNutBundle_01', 'Shop_BombBundle_01', 'Shop_Bo
 
 def effective_members(nup):
     result = {}
-    for package in ('0', '1'):
+    ordered = sorted(nup.entries)
+    for package in ('0', '1'):   # the update's copy ('1/') replaces the base's
         prefix = package + '/romfs/'
-        for member in sorted(nup.entries):
+        for member in ordered:
             if member.startswith(prefix):
                 result[member[len(prefix):]] = member
     return result

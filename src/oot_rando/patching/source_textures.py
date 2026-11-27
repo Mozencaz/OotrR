@@ -12,9 +12,11 @@ import struct
 from pathlib import Path
 
 from oot_rando.formats import byml_codec as codec
-from oot_rando.game.item_forms import resolve_components, _pack_path
-from oot_rando.patching.repeatable_adapter import EVENT_PACK, EVENT_MEMBER, _default, _guid
-from oot_rando.patching.song_models import _pointer, _u16, _u32, _name
+from oot_rando.game.item_forms import resolve_components, pack_path
+from oot_rando.patching.repeatable_adapter import EVENT_PACK, EVENT_MEMBER, ainb_default, stable_guid
+from oot_rando.patching.song_models import read_pointer, read_u16, read_u32, read_name
+from oot_rando.formats.inspect_resources import decompress
+from oot_rando.formats.inspect_resources import sarc
 
 ASSETS = Path(__file__).with_name('source_textures')
 REMAPS = {
@@ -38,12 +40,12 @@ def material_names(raw):
     if raw[:4] != b'FRES':
         raise ValueError('Expected a native BFRES source model.')
     names = []
-    models = _pointer(raw, 0x28)
-    for i in range(_u16(raw, 0xdc)):
+    models = read_pointer(raw, 0x28)
+    for i in range(read_u16(raw, 0xdc)):
         model = models + i * 0x78
-        materials = _pointer(raw, model + 0x38)
-        count = _u32(raw, _pointer(raw, model + 0x40) + 4)
-        names.extend(_name(raw, _pointer(raw, materials + j * 0xb0 + 8)) for j in range(count))
+        materials = read_pointer(raw, model + 0x38)
+        count = read_u32(raw, read_pointer(raw, model + 0x40) + 4)
+        names.extend(read_name(raw, read_pointer(raw, materials + j * 0xb0 + 8)) for j in range(count))
     return sorted(set(names))
 
 
@@ -67,7 +69,7 @@ def gold_model(raw):
 def _merged(pack, ref):
     chain = []
     while ref:
-        root = codec.load(pack[_pack_path(ref)])['root']
+        root = codec.load(pack[pack_path(ref)])['root']
         chain.append(root)
         ref = root.get('$parent')
     merged = {}
@@ -87,7 +89,7 @@ def visibility_ai(raw, flag, filename, materials, templates):
         hold = copy.deepcopy(templates['hold'])
         hold.update({'Node Index': 0, 'Flags': ['Is Root Node']})
         document['Nodes'] = [hold]
-        document['Commands'] = [{'Name': 'Root', 'GUID': _guid(flag + '/texture/command'),
+        document['Commands'] = [{'Name': 'Root', 'GUID': stable_guid(flag + '/texture/command'),
                                  'Root Node Index': 0}]
     else:
         document = ainb.AINB.from_binary(raw).as_dict()
@@ -99,14 +101,14 @@ def visibility_ai(raw, flag, filename, materials, templates):
 
     def add(template, purpose):
         node = copy.deepcopy(template)
-        node.update({'Node Index': len(nodes), 'GUID': _guid(flag + '/texture/' + purpose),
+        node.update({'Node Index': len(nodes), 'GUID': stable_guid(flag + '/texture/' + purpose),
                      'Flags': [], 'Queries': [], 'Attachments': [], 'XLink Actions': [], 'Plugs': {}})
         nodes.append(node)
         return node
 
     query = add(templates['query'], 'query')
     query['Flags'] = ['Is Query']
-    query['Parameters']['Inputs']['String'] = [_default('GameDataFullName', flag)]
+    query['Parameters']['Inputs']['String'] = [ainb_default('GameDataFullName', flag)]
     for prop in query['Properties'].get('Bool', []):
         if prop['Name'] == 'OutputOnlyOnEnter':
             prop['Default Value'] = False
@@ -129,10 +131,10 @@ def visibility_ai(raw, flag, filename, materials, templates):
                     prop['Default Value'] = True
             action['Queries'] = [signal['Node Index']]
             action['Parameters'] = {'Inputs': {
-                'Int': [_default('ModelAccessIndex', access)],
+                'Int': [ainb_default('ModelAccessIndex', access)],
                 'Bool': [{'Name': 'IsVisible', 'Default Value': False,
                           'Node Index': signal['Node Index'], 'Output Index': 0, 'Flags': []}],
-                'String': [_default('MaterialName', material)]}, 'Outputs': {}}
+                'String': [ainb_default('MaterialName', material)]}, 'Outputs': {}}
             action['Plugs'] = {'Generic': [{'Node Index': signal['Node Index'], 'Name': 'IsVisible'}]}
             children.append({'Node Index': action['Node Index'], 'Name': ''})
     root = add(templates['parallel'], 'root')
@@ -156,7 +158,6 @@ def visibility_ai(raw, flag, filename, materials, templates):
 def build_files(records, maps, raw_maps, read_pack, read_raw, tables):
     """Build source packs/models/textures and repoint only shuffled map instances."""
     import ainb
-    from oot_rando.formats.inspect_resources import sarc, decompress
     if not any(r['kind'] == 'pickup' and r.get('variants') for r in records):
         return {}
     global_ai = sarc(read_raw(EVENT_PACK))

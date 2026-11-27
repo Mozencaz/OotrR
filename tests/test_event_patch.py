@@ -3,7 +3,8 @@ import _src_path  # noqa: F401  (src on sys.path)
 import os
 import unittest
 
-from oot_rando.patching.event_patch import GAMEDATA_ACTOR_PARAMS, POUCH_ACTOR_PARAMS, _flow, add_collection_markers, add_pouch_items
+from oot_rando.patching.event_patch import GAMEDATA_ACTOR_PARAMS, POUCH_ACTOR_PARAMS, add_collection_markers, add_pouch_items
+from oot_rando.formats.evfl_tools import parse_flow
 
 NUP = os.environ.get('OOT_NUP')
 OPENING = 'Event/EventFlow/OpeningEvent.bfevfl.zs'
@@ -20,9 +21,9 @@ class CollectionMarkerTests(unittest.TestCase):
         dic = dictionaries(nup)
         member = next(p + '/romfs/' + OPENING for p in '10' if p + '/romfs/' + OPENING in nup.entries)
         raw = decompress(nup.read(member), dic)
-        self.assertFalse([a for a in _flow(raw).flowchart.actors if str(a.identifier) == 'GameDataActor'])
+        self.assertFalse([a for a in parse_flow(raw).flowchart.actors if str(a.identifier) == 'GameDataActor'])
         patched, records = add_collection_markers(raw, {'Event3': 'RandoSeed.test'})
-        actors = _flow(patched).flowchart.actors
+        actors = parse_flow(patched).flowchart.actors
         added = [a for a in actors if str(a.identifier) == 'GameDataActor']
         self.assertEqual(len(added), 1)
         self.assertEqual(dict(added[0].params.data), GAMEDATA_ACTOR_PARAMS)
@@ -37,9 +38,9 @@ class CollectionMarkerTests(unittest.TestCase):
         member = next(p + '/romfs/' + OPENING for p in '10' if p + '/romfs/' + OPENING in nup.entries)
         raw = decompress(nup.read(member), dictionaries(nup))
         marked, _ = add_collection_markers(raw, {'Event3': 'RandoSeed.test'})
-        original_next = {e.name: e for e in _flow(marked).flowchart.events}['RandoCollected_Event3'].data.nxt.v.name
+        original_next = {e.name: e for e in parse_flow(marked).flowchart.events}['RandoCollected_Event3'].data.nxt.v.name
         patched = add_pouch_items(marked, 'RandoCollected_Event3', ('Item_BulletBag_Small', 'Item_Quiver_Small'))
-        chart = _flow(patched).flowchart
+        chart = parse_flow(patched).flowchart
         events = {e.name: e for e in chart.events}
         chain, event = [], events['RandoCollected_Event3']
         for _ in range(3):

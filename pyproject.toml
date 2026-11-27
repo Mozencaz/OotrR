@@ -4,20 +4,25 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oot-rando"
-version = "0.8.0"
+dynamic = ["version"]   # single source: src/oot_rando/__init__.py
 description = "Randomizer for the Ocarina of Time remake (RomFS mods for Hookshot / emulator)"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE", "src/oot_rando/logic/world/LICENSE-archipelago-oot.txt"]
 requires-python = ">=3.11"
-dependencies = ["zstandard>=0.23,<1", "evfl>=1.3,<2", "ainb==0.2.17"]
+dependencies = ["zstandard>=0.23,<1", "evfl>=1.3,<2", "ainb==0.2.17", "websockets>=13,<16", "certifi>=2024.2.2"]
 
 [project.optional-dependencies]
+# In-game overlay icons (tracker/icon_extract.py, tracker/game_overlay.py).
+overlay = ["Pillow>=10,<14", "texture2ddecoder>=1.0.5,<2"]
 yaml = ["PyYAML>=6"]
 build = ["pyinstaller>=6.10"]
 
 [project.scripts]
 oot-rando = "oot_rando.__main__:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "oot_rando.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -25,3 +30,15 @@ where = ["src"]
 [tool.setuptools.package-data]
 oot_rando = ["logic/world/*.json", "logic/world/*.txt", "logic/world/regions/*.json",
              "patching/title_badge.rgba.zlib", "patching/source_textures/*.zstd"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["src/oot_rando/archipelago/ap_world.py.in"]
+
+[tool.ruff.lint]
+# Correctness only: unused or undefined names, syntax errors, likely bugs.
+select = ["F", "E9", "B", "PLW0603"]
+# B023: the closures flagged here are all called within the loop (checked one by one).
+# B905/B007: zip without strict and unused loop variables are deliberate in this code.
+ignore = ["B023", "B905", "B007"]

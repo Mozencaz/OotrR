@@ -7,10 +7,10 @@ import unittest
 from pathlib import Path
 
 from oot_rando.patching.soul_adapter import murmur3
-from oot_rando.tracker import save_patch
-from oot_rando.tracker.save_patch import (GameRunning, SavePatchRefused, migration_candidates,
+from oot_rando.randomizer import save_patch
+from oot_rando.randomizer.save_patch import (GameRunning, SavePatchRefused, migration_candidates,
                                           migration_markers, patch_save, plan_patch, running_game)
-from oot_rando.tracker.save_reader import decode_progress, MAGIC, FORMAT_VERSION, PROGRESS_TYPE_HASH
+from oot_rando.formats.save_file import decode_progress, MAGIC, FORMAT_VERSION, PROGRESS_TYPE_HASH
 
 MANIFEST = {'seed_id': 'a' * 64, 'settings': {'seed': 'demo'},
             'start_values': {'HavePlayedEvent.Dm_HrlField_0000': True, 'NaviHint_Disp_FieldHint_01': False,
@@ -150,7 +150,7 @@ class MigrationTests(unittest.TestCase):
         # Several versions skipped, or several regenerations: the save holds the flag of
         # the seed it was started with, not necessarily of the one just replaced.
         from oot_rando.randomizer.randomizer_core import Settings, settings_identity
-        from oot_rando.randomizer.randomizer_services import ACCEPTED_GENERATORS
+        from oot_rando.randomizer.artifact import ACCEPTED_GENERATORS
         settings = Settings('demo')
         manifest = dict(MANIFEST, settings=settings.to_dict())
         markers = migration_markers(manifest, None)

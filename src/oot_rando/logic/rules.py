@@ -161,6 +161,18 @@ def check_generated(source):
             raise ValueError('Unexpected generated rule code: constant')
 
 
+_RULE_FUNCTIONS = {}
+
+
+def _rule_function(source):
+    """The checked, evaluated lambda of generated rule code (shared by every Logic)."""
+    function = _RULE_FUNCTIONS.get(source)
+    if function is None:
+        check_generated(source)
+        function = _RULE_FUNCTIONS[source] = eval(source, {'__builtins__': {}})
+    return function
+
+
 class Logic:
     """Compiled AP world. ``extra_exit_requirements`` gates region entries."""
 
@@ -176,6 +188,7 @@ class Logic:
         self.settings['skipped_trials'] = {name: index >= trials for index, name in enumerate(TRIALS)}
         self.helpers = {}
         self._cache = {}
+        self._compiled = {}
         for key, body in data.helpers.items():
             match = re.fullmatch(r'(\w+)(?:\((\w+(?:,\s*\w+)*)\))?', key)
             params = [p.strip() for p in match.group(2).split(',')] if match.group(2) else []
@@ -463,16 +476,23 @@ class Logic:
         raise ValueError('Cannot generate rule: ' + ast.unparse(node))
 
     def compile(self, rule, extra_items=None):
-        try:
-            code = self._code(self._expand(self._parse(rule)))
-        except ValueError as error:
-            raise ValueError(f'{error} — rule: {" ".join(rule.split())[:200]}') from None
+        # The generated code depends on the rule, the region (here()) and the night
+        # flag only: identical rules (most of them) are expanded once per Logic.
+        key = (rule, self._region if 'here' in rule else None, self._night_needs_song)
+        cached = self._compiled.get(key)
+        if cached is None:
+            before = set(self.referenced)
+            try:
+                code = self._code(self._expand(self._parse(rule)))
+            except ValueError as error:
+                raise ValueError(f'{error} — rule: {" ".join(rule.split())[:200]}') from None
+            cached = self._compiled[key] = (code, frozenset(self.referenced - before))
+        code, referenced = cached
+        self.referenced.update(referenced)
         if extra_items:
             self.referenced.update(extra_items)
             code = '(' + code + ' and ' + ' and '.join(f'c.get({i!r},0)>=1' for i in sorted(extra_items)) + ')'
-        source = 'lambda s,c,a:' + code
-        check_generated(source)
-        return eval(source, {'__builtins__': {}})
+        return _rule_function('lambda s,c,a:' + code)
 
     # ----------------------------------------------------------------- search
     def new_state(self, counts=None):
@@ -526,9 +546,6 @@ class Logic:
                 item = placements[location]
                 if item:
                     state.add(item)
-            if not record_spheres:
-                # Faster when spheres are not needed: keep collecting greedily.
-                pass
         return state, collected, spheres
 
     def _expand_regions(self, state):

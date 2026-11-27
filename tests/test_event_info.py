@@ -47,12 +47,12 @@ class NupTests(unittest.TestCase):
 
     def test_dependency_diff_decodes_each_version_once(self):
         from unittest.mock import patch
-        from oot_rando.patching import event_info, event_patch, qol_patches
+        from oot_rando.patching import event_info, qol_patches
         original = self.flow('ActionGuide')
         changed, _ = qol_patches.ocarina_guide_on_get(original)
         for diff in (event_info.new_subflows, event_info.new_transitions):
             with self.subTest(diff=diff.__name__), patch.object(
-                    event_patch, '_flow', wraps=event_patch._flow) as decode:
+                    event_info, 'parse_flow', wraps=event_info.parse_flow) as decode:
                 diff({'ActionGuide': changed}, self.flow)
                 from collections import Counter
                 counts = Counter(call.args[0] for call in decode.call_args_list)
@@ -63,7 +63,6 @@ class NupTests(unittest.TestCase):
         from oot_rando.formats.byml_codec import load
         from oot_rando.formats.inspect_resources import Byml
         from oot_rando.patching import event_info, qol_patches
-        from oot_rando.patching.event_patch import add_collection_markers
         spec = qol_patches.GIFT_AFTER_CUTSCENE['Event/EventFlow/Dm_Kokiri_0130.bfevfl.zs']
         escape = self.raw(spec['flow'])
         given, _ = qol_patches.give_gift_after(escape, spec['after'], 'Item_HoverBoot', 'RandoCheck.test.boss')

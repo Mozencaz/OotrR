@@ -3,6 +3,7 @@ import _src_path  # noqa: F401
 import os
 import unittest
 
+from oot_rando.archipelago.bridge import to_ap_yaml
 from oot_rando.logic import rando_options
 from oot_rando.randomizer.full_randomizer import enabled_sources
 from oot_rando.game.remake_world import actor_item, item_actor
@@ -16,7 +17,7 @@ class EquipmentOptions(unittest.TestCase):
                 self.assertFalse(rando_options.defaults()[name])
                 options = rando_options.validate({name: True}, supported_only=True)
                 self.assertEqual(enabled_sources(options), {source: 'all'})
-                restored, ignored = rando_options.from_ap_yaml(rando_options.to_ap_yaml(options))
+                restored, ignored = rando_options.from_ap_yaml(to_ap_yaml(options))
                 self.assertEqual(ignored, [])
                 self.assertEqual(restored, options)
                 self.assertTrue(rando_options.preset('everything')[name])
@@ -32,16 +33,9 @@ class EquipmentOptions(unittest.TestCase):
 class EquipmentSources(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        from oot_rando.formats.inspect_nup import Nup
-        from oot_rando.formats.inspect_resources import dictionaries
-        from oot_rando.game.world_maps import effective_members
-        from oot_rando.game.extra_sources import scan_world
+        from game_fixture import scan_world
         from oot_rando.logic.world import World
-        nup = Nup(os.environ['OOT_NUP'])
-        try:
-            _, cls.groups, cls.enemies, cls.extra = scan_world(nup, dictionaries(nup), effective_members(nup))
-        finally:
-            nup.stream.close()
+        _, cls.groups, cls.enemies, cls.extra = scan_world()
         cls.data = World()
 
     def test_native_reward_sites_and_option_scopes(self):

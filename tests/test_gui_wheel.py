@@ -20,6 +20,35 @@ class WheelTests(unittest.TestCase):
         self.assertEqual(theme.wheel_units('??', -1), 1)
         self.assertEqual(theme.wheel_units('??', 0), 0)
 
+    def test_wheel_never_changes_a_setting(self):
+        import tkinter as tk
+        from tkinter import ttk
+        try:
+            root = tk.Tk()
+        except tk.TclError as error:
+            self.skipTest(str(error))
+        try:
+            root.withdraw()
+            values = ('One', 'Two', 'Three')
+            combo = ttk.Combobox(root, values=values, state='readonly')
+            combo.set('Two')
+            number = tk.IntVar(root, 5)
+            spin = ttk.Spinbox(root, from_=1, to=10, textvariable=number)
+            theme.keep_values_on_wheel(root)
+            for widget_class in ('TCombobox', 'TSpinbox'):
+                for sequence in theme.WHEEL_EVENTS:
+                    self.assertEqual(root.bind_class(widget_class, sequence), '')
+            for widget in (combo, spin):
+                widget.pack()
+            root.update()
+            for widget in (combo, spin):
+                widget.event_generate('<MouseWheel>', delta=-120, x=5, y=5)
+            root.update()
+            self.assertEqual(combo.get(), 'Two')
+            self.assertEqual(number.get(), 5)
+        finally:
+            root.destroy()
+
 
 if __name__ == '__main__':
     unittest.main()

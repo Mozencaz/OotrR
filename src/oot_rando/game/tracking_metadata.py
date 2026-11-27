@@ -2,9 +2,11 @@
 from pathlib import PurePosixPath
 
 from oot_rando.formats.inspect_resources import Byml, sarc
-from oot_rando.game.remake_world import ACTOR_ITEMS, PROGRESSIVE
-from oot_rando.patching.soul_adapter import murmur3, soul_actor, soul_item, soul_label
-from oot_rando.game.item_forms import resolve_components, _pack_path
+from oot_rando.game.remake_world import ACTOR_ITEMS, PROGRESSIVE, ZONE_LABELS
+from oot_rando.catalog.hashing import murmur3
+from oot_rando.catalog.keys import APPLIED_PREFIX, BOSS_KEY_DUNGEONS, RING_DUNGEONS, TRACKED_BOSS_KEYS
+from oot_rando.catalog.souls import soul_actor, soul_item, soul_label
+from oot_rando.game.item_forms import resolve_components, pack_path
 from oot_rando.formats import byml_codec
 import copy
 
@@ -137,7 +139,7 @@ def build_tracking(seed_id, checks, full, read_raw):
             ref = components.get('PouchContentRef')
             merged, seen = {}, set()
             while ref:
-                path = _pack_path(ref)
+                path = pack_path(ref)
                 if not path or path in seen:
                     break
                 seen.add(path)
@@ -174,7 +176,6 @@ def build_tracking(seed_id, checks, full, read_raw):
     families = (full or {}).get('souls', {}).get('families', {})
     souls = [{'item': soul_item(key), 'zones': list(folders)} for key, folders in sorted(families.items())]
     # Dungeon keys (small keys found / total, boss key), read from DungeonInfo.<folder>.
-    from oot_rando.patching.key_adapter import key_tracking
     dungeon_keys = key_tracking(full.get('options'), keys) if full else []
     return {'schema_version': 1, 'seed_id': seed_id, 'checks': rows, 'inventory': inventory, 'souls': souls,
             'keys': dungeon_keys,
@@ -183,3 +184,33 @@ def build_tracking(seed_id, checks, full, read_raw):
             'repeatables': (full or {}).get('repeatables', []),
             'logic_world_sha256': (full or {}).get('logic_world_sha256'),
             'known_bool64': [str(h) for h in sorted(keys.get('Bool64bitKey', set()))]}
+
+
+def key_tracking(options, saved_keys):
+    """Tracker rows of the dungeon keys: GameData hashes to read, per dungeon.
+
+    ``saved_keys``: {'Int': hashes, 'Bool': hashes} of the saved GameData entries.
+    Small keys found = max(``SmallKeyTotalNum``, ``SmallKeyNum`` held), or every key
+    once the key ring is applied (``RandoKeyRing.<folder>``) or with keys "Removed".
+    """
+    options = options or {}
+    removed_small = options.get('shuffle_smallkeys') == 'remove'
+    removed_boss = options.get('shuffle_bosskeys') == 'remove'
+    rows = []
+    for folder in dict.fromkeys(list(RING_DUNGEONS) + list(TRACKED_BOSS_KEYS)):
+        base = f'DungeonInfo.{folder}.'
+        row = {'folder': folder, 'dungeon': ZONE_LABELS.get(folder, folder), 'small': None, 'boss': None}
+        if folder in RING_DUNGEONS:
+            found, held = murmur3(base + 'SmallKeyTotalNum'), murmur3(base + 'SmallKeyNum')
+            if {found, held} <= saved_keys.get('Int', set()):
+                ring = murmur3(APPLIED_PREFIX + folder)
+                row['small'] = {'total': RING_DUNGEONS[folder], 'found': str(found), 'held': str(held),
+                                'ring': str(ring) if ring in saved_keys.get('Bool', set()) else None,
+                                'all': removed_small}
+        if folder in TRACKED_BOSS_KEYS:
+            boss = murmur3(base + 'IsGetBossKey')
+            if boss in saved_keys.get('Bool', set()):
+                row['boss'] = {'hash': str(boss), 'all': removed_boss and folder in BOSS_KEY_DUNGEONS}
+        if row['small'] or row['boss']:
+            rows.append(row)
+    return rows

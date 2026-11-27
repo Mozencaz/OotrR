@@ -265,6 +265,28 @@ def label_entries(maps, groups, extra):
     return marks
 
 
+def _load_overrides():
+    """Load label_overrides.json once at import time. Missing or malformed file = no overrides."""
+    import json
+    from oot_rando.paths import resource
+    try:
+        return json.loads(resource('game', 'label_overrides.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
+
+
+_LABEL_OVERRIDES = _load_overrides()
+
+
 def entry_label(entry):
     """The readable name of a positioned check, or None (events, NPC gifts...)."""
-    return next((v['label'] for v in entry.get('variants', ()) if v.get('label')), None)
+    label = next((v['label'] for v in entry.get('variants', ()) if v.get('label')), None)
+    if label is None:
+        return None
+    # Override keys come from the catalogue "name" field, which includes age suffixes
+    # like " (child)" / " (adult)". Variant labels never have the suffix (tracker_checks
+    # appends it separately). Try bare label first, then with each suffix.
+    for key in (label, f'{label} (child)', f'{label} (adult)'):
+        if key in _LABEL_OVERRIDES:
+            return _LABEL_OVERRIDES[key]
+    return label

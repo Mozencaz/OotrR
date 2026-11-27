@@ -5,7 +5,8 @@ import unittest
 
 from oot_rando.formats import byml_codec
 from oot_rando.patching import quest_guard as q
-from oot_rando.patching.story_fixes import _Chart, _params
+from oot_rando.patching.story_fixes import _Chart
+from oot_rando.formats.evfl_tools import event_params_of
 
 NUP = os.environ.get('OOT_NUP')
 STEPS = {'Quest': ['Ready', 'Step01', 'Step02', 'Step03']}
@@ -69,7 +70,7 @@ class GameFlows(unittest.TestCase):
         for event, step, resume in report['guarded']:
             guard = next(e for e in chart.events if e.name.startswith(q.PREFIX)
                          and e.data.cases[1].v.name == event)
-            self.assertEqual(_params(guard), {'GameDataName': report['expression']})
+            self.assertEqual(event_params_of(guard), {'GameDataName': report['expression']})
             # Nothing reaches the request without passing the guard.
             for other in chart.events:
                 if other is not guard and getattr(other.data, 'nxt', None) is not None:

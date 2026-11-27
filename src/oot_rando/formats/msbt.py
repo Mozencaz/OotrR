@@ -43,6 +43,16 @@ class Msbt:
         self.labels[label] = len(self.texts)
         self.texts.append(raw + b'\0')
 
+    def add_copy(self, label, source):
+        """Add a new label holding the text of label ``source`` (control tags included)."""
+        if label in self.labels:
+            raise ValueError('Label already present: ' + label)
+        raw = self.get(source)
+        if raw is None:
+            raise ValueError('Message not found: ' + source)
+        self.labels[label] = len(self.texts)
+        self.texts.append(raw)
+
 
 def load(data):
     if data[:8] != MAGIC or data[8:10] != b'\xff\xfe' or data[0x0c] != 0:

@@ -8,6 +8,7 @@ import struct
 import unittest
 import zlib
 
+from oot_rando.archipelago.bridge import to_ap_yaml
 from oot_rando.formats import byml_codec
 from oot_rando.formats.byml_writer import patch_strings
 from oot_rando.randomizer.full_randomizer import DetRandom
@@ -40,7 +41,7 @@ class Units(unittest.TestCase):
 
     def test_ap_yaml_roundtrip_and_off(self):
         values = rando_options.preset('everything')
-        imported, ignored = rando_options.from_ap_yaml(rando_options.to_ap_yaml(values))
+        imported, ignored = rando_options.from_ap_yaml(to_ap_yaml(values))
         self.assertEqual(imported, values)
         self.assertEqual(ignored, [])
         imported, ignored = rando_options.from_ap_yaml(
@@ -255,16 +256,9 @@ class Integration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from oot_rando.logic.world import World
-        from oot_rando.formats.inspect_nup import Nup
-        from oot_rando.formats.inspect_resources import dictionaries
-        from oot_rando.game.remake_world import scan_maps
-        from oot_rando.game.world_maps import effective_members
+        from game_fixture import scan_maps
         cls.data = World()
-        nup = Nup(NUP)
-        try:
-            _, cls.groups, cls.enemies = scan_maps(nup, dictionaries(nup), effective_members(nup))
-        finally:
-            nup.stream.close()
+        _, cls.groups, cls.enemies = scan_maps()
 
     def run_plan(self, overrides, seed):
         from oot_rando.randomizer import full_randomizer

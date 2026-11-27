@@ -19,6 +19,9 @@ falling pickup instead (``Obj_RandoDrop_<canonical>``, see ``DROP_TEMPLATE``).
 Their behaviour is experimental until an in-game pilot confirms it.
 """
 import copy
+from oot_rando.catalog.tokens import FAMILIES
+from oot_rando.catalog.tokens import token_family
+from oot_rando.catalog.traps import is_trap_actor
 
 WORLD_PREFIX = 'Obj_Rando_'
 # The same pickups on a spot under water (``game/underwater.py``): they glow (see GLOW_ACTOR).
@@ -117,7 +120,6 @@ SAME_MODEL = {'Weapon_Range_SlingShot': 'Item_Range_SlingShot', 'Weapon_Range_Bo
 
 def model_of(canonical):
     """Game item whose model (and model box) ``canonical`` is drawn with."""
-    from oot_rando.patching.progressive import FAMILIES, token_family
     family = token_family(canonical)
     if family is not None:
         model = FAMILIES[family][3]
@@ -307,6 +309,11 @@ def can_take(canonical, form, ap=(), actor=''):
     if canonical.startswith('Item_AP_'):
         # Another player's item (Archipelago medallion): forms proven for new pouch actors.
         return form in ('chest', 'world')
+    if is_trap_actor(canonical):
+        # Fake item trap (patching/fake_traps.py): its freeze reads the IsGet flag the
+        # pouch writes on the item's get event, as for the souls: chests and pickups
+        # (world); shops and NPC/cutscene gifts may add the item without that event.
+        return form in ('chest', 'world')
     if canonical.startswith('Item_Soul_'):
         # The soul flag is written by the soul's own get event: proven for pickups
         # (world) and planned for chests; shop purchases and NPC/cutscene gifts may
@@ -330,7 +337,7 @@ def canonical_of(derived):
 
 
 # ------------------------------------------------------------------ packs
-def _pack_path(ref):
+def pack_path(ref):
     """``?Component/X.bgyml`` or ``Work/Component/X.gyml`` → path inside a pack."""
     if ref.startswith('?'):
         return ref[1:]
@@ -339,16 +346,16 @@ def _pack_path(ref):
     return None
 
 
-def _copy_ref(source, ref, files, codec):
+def copy_ref(source, ref, files, codec):
     """Copy a pack-local resource and its ``$parent`` chain from ``source``."""
-    path = _pack_path(ref) if isinstance(ref, str) else None
+    path = pack_path(ref) if isinstance(ref, str) else None
     while path and path in source:
         files[path] = source[path]
         if not path.endswith('.bgyml'):
             return
         parent = codec.load(source[path])['root']
         parent = parent.get('$parent') if isinstance(parent, dict) else None
-        path = _pack_path(parent) if isinstance(parent, str) else None
+        path = pack_path(parent) if isinstance(parent, str) else None
 
 
 def resolve_components(pack, actor, codec):
@@ -361,7 +368,7 @@ def resolve_components(pack, actor, codec):
         document = codec.load(pack[path])['root']
         chain.append(document)
         parent = document.get('$parent')
-        path = _pack_path(parent) if isinstance(parent, str) else None
+        path = pack_path(parent) if isinstance(parent, str) else None
     components = {}
     for document in reversed(chain):
         components.update(document.get('Components', {}))
@@ -370,12 +377,12 @@ def resolve_components(pack, actor, codec):
 
 def _table_components(pack, ref, codec):
     """Components of a GameParameterTable, ``$parent`` chain merged (child wins)."""
-    chain, path = [], _pack_path(ref) if isinstance(ref, str) else None
+    chain, path = [], pack_path(ref) if isinstance(ref, str) else None
     while path and path in pack:
         document = codec.load(pack[path])['root']
         chain.append(document)
         parent = document.get('$parent')
-        path = _pack_path(parent) if isinstance(parent, str) else None
+        path = pack_path(parent) if isinstance(parent, str) else None
     merged = {}
     for document in reversed(chain):
         merged.update(document.get('Components', {}))
@@ -394,7 +401,7 @@ def _merge_game_parameters(derived, source, source_components, files, components
     source_table = _table_components(source, source_components.get('GameParameterTableRef'), codec)
     # A template may inherit its table from its ``$parent`` (Obj_Item_Base).
     template_ref = components.get('GameParameterTableRef') or (inherited or {}).get('GameParameterTableRef')
-    template_path = _pack_path(template_ref) if isinstance(template_ref, str) else None
+    template_path = pack_path(template_ref) if isinstance(template_ref, str) else None
     if template_path not in files:
         raise ValueError('Model parameter table not found for ' + derived)
     template_table = _table_components(files, template_ref, codec)
@@ -404,7 +411,7 @@ def _merge_game_parameters(derived, source, source_components, files, components
     table = codec.load(files[template_path])
     table['root'].setdefault('Components', {}).update(added)
     for ref in added.values():
-        _copy_ref(source, ref, files, codec)
+        copy_ref(source, ref, files, codec)
     new_table = f'GameParameter/GameParameterTable/{derived}.engine__actor__GameParameterTable.bgyml'
     files[new_table] = codec.dump(table)
     components['GameParameterTableRef'] = '?' + new_table
@@ -432,18 +439,18 @@ def build_pack(derived, read_pack, codec):
     for key in ('ModelInfoRef', 'AnimationRef', 'ActorNameRef', 'ASRef'):
         if key in source_components:
             components[key] = source_components[key]
-            _copy_ref(source, source_components[key], files, codec)
+            copy_ref(source, source_components[key], files, codec)
     if kind == 'world':
         # Effect: the item's own, else under water the gold token's glow, else none (see GLOW_ACTOR).
         effect = source_components.get('ELinkRef')
-        effect_path = _pack_path(effect) if isinstance(effect, str) else None
+        effect_path = pack_path(effect) if isinstance(effect, str) else None
         if effect_path in source:
             user = codec.load(source[effect_path])['root'].get('UserName')
         else:   # shared effect parameters (not in the pack): the item's own
             user = canonical if isinstance(effect, str) and effect else None
         if keeps_own_effect(derived, canonical, user):
             components['ELinkRef'] = effect
-            _copy_ref(source, effect, files, codec)
+            copy_ref(source, effect, files, codec)
         elif is_underwater(derived):
             glow = read_pack(GLOW_PACK)
             if glow is None or GLOW_ELINK not in glow:
@@ -456,15 +463,15 @@ def build_pack(derived, read_pack, codec):
         if not keeps_token_links(template_name, 'SLinkRef' in source_components):
             if 'SLinkRef' in source_components:
                 components['SLinkRef'] = source_components['SLinkRef']
-                _copy_ref(source, source_components['SLinkRef'], files, codec)
+                copy_ref(source, source_components['SLinkRef'], files, codec)
             else:
                 components.pop('SLinkRef', None)
     pouch_ref = source_components.get('PouchContentRef')
-    if not isinstance(pouch_ref, str) or _pack_path(pouch_ref) not in source:
+    if not isinstance(pouch_ref, str) or pack_path(pouch_ref) not in source:
         raise ValueError('Pouch content not found for ' + canonical)
-    _copy_ref(source, pouch_ref, files, codec)
+    copy_ref(source, pouch_ref, files, codec)
     pouch_path = f'Component/PouchContentParam/{derived}.game__component__PouchContentParam.bgyml'
-    pouch = {'$parent': 'Work/' + _pack_path(pouch_ref)[:-len('.bgyml')] + '.gyml',
+    pouch = {'$parent': 'Work/' + pack_path(pouch_ref)[:-len('.bgyml')] + '.gyml',
              'PouchActor': f'Work/Actor/{canonical}.engine__actor__ActorParam.gyml', 'DefaultAutoGet': True}
     if kind == 'world':
         pouch.update(WORLD_POUCH_FLAGS)
@@ -477,7 +484,7 @@ def build_pack(derived, read_pack, codec):
             raise ValueError('Soul in a shop not supported: ' + derived)
         # The soul's get event writes its IsGet flag: the pickup runs that clone
         # instead of the template's native event (first-collection technique).
-        from oot_rando.patching.soul_adapter import soul_event_ain, soul_event_member
+        from oot_rando.catalog.souls import soul_event_ain, soul_event_member
         member = soul_event_member(canonical)
         if member not in source:
             raise ValueError('Soul get event missing: ' + canonical)
@@ -497,7 +504,7 @@ def build_pack(derived, read_pack, codec):
         files[price_path] = codec.dump({'endian': '<', 'version': 7,
                                         'root': {'BuyingPrice': SHOP_PRICE, 'SellingPrice': 1}})
         table_ref = components.get('GameParameterTableRef')
-        table_path = _pack_path(table_ref) if isinstance(table_ref, str) else None
+        table_path = pack_path(table_ref) if isinstance(table_ref, str) else None
         if table_path not in files:
             raise ValueError('Shop parameter table not found.')
         table = codec.load(files[table_path])

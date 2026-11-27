@@ -5,7 +5,8 @@ import os
 import unittest
 
 from oot_rando.formats import byml_codec
-from oot_rando.patching.event_patch import _flow, _snapshot, add_collection_markers
+from oot_rando.patching.event_patch import add_collection_markers
+from oot_rando.formats.evfl_tools import params_by_event, parse_flow
 
 NUP = os.environ.get('OOT_NUP')
 
@@ -47,11 +48,22 @@ class LostDog(unittest.TestCase):
         with self.assertRaises(ValueError):
             dog.map_from_start(result)
 
+    def test_random_appear_dog_pool_ignores_kakariko_gate(self):
+        import ainb
+        from oot_rando.patching import lost_dog as dog
+        source = self.read(dog.POOL_MODULE)
+        expected = ainb.AINB.from_binary(source).as_dict()
+        expected['Nodes'][dog.POOL_GATE_NODE]['Parameters']['Inputs']['String'][0]['Default Value'] = dog.CHILDHOOD
+        result, _ = dog.pool_from_start(source)
+        self.assertEqual(ainb.AINB.from_binary(result).as_dict(), expected)
+        with self.assertRaises(ValueError):
+            dog.pool_from_start(result)
+
     def test_first_reward_depends_only_on_receipt_not_quest_or_inventory(self):
         from oot_rando.patching import lost_dog as dog
         source = self.read(dog.FLOW)
         result, _ = dog.reward_until_received(source)
-        events = {e.name: e for e in _flow(result).flowchart.events}
+        events = {e.name: e for e in parse_flow(result).flowchart.events}
         check = events['Event50'].data
         self.assertEqual(check.actor_query.v.v, 'EventQueryIsGameDataBool')
         self.assertEqual(check.params.data, {'GameDataName': dog.RECEIPT, 'Index': -1})
@@ -62,9 +74,9 @@ class LostDog(unittest.TestCase):
                                  'Event73' if received else 'Event16')
         self.assertEqual(events['Event55'].data.params.data,
                          {'GameDataName': dog.RECEIPT, 'Index': -1, 'Value': True})
-        expected = _snapshot(_flow(source))
+        expected = params_by_event(parse_flow(source))
         expected['Event50'] = dict(check.params.data)
-        self.assertEqual(_snapshot(_flow(result)), expected)
+        self.assertEqual(params_by_event(parse_flow(result)), expected)
         with self.assertRaises(ValueError):
             dog.reward_until_received(result)
 
@@ -72,7 +84,7 @@ class LostDog(unittest.TestCase):
         from oot_rando.patching import lost_dog as dog
         source, _ = add_collection_markers(self.read(dog.FLOW), {'Event16': 'RandoCheck_LostDog'})
         result, _ = dog.reward_until_received(source)
-        events = {e.name: e for e in _flow(result).flowchart.events}
+        events = {e.name: e for e in parse_flow(result).flowchart.events}
         self.assertEqual(events['Event16'].data.nxt.v.name, 'RandoCollected_Event16')
         self.assertEqual(events['RandoCollected_Event16'].data.nxt.v.name, 'Event55')
         self.assertEqual(events['RandoCollected_Event16'].data.params.data['GameDataName'], 'RandoCheck_LostDog')
@@ -82,6 +94,7 @@ class LostDog(unittest.TestCase):
         from oot_rando.patching import lost_dog as dog, story_fixes
         self.assertIn((dog.FLOW, 'lost_dog_reward', dog.reward_until_received), story_fixes.flow_fixes(()))
         self.assertIn((dog.MODULE, 'lost_dog_map', dog.map_from_start), story_fixes.scene_module_fixes())
+        self.assertIn((dog.POOL_MODULE, 'lost_dog_pool', dog.pool_from_start), story_fixes.scene_module_fixes())
 
     def test_new_save_has_no_reward_or_return_receipt(self):
         from oot_rando.patching import lost_dog as dog

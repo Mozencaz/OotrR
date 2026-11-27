@@ -8,9 +8,8 @@ These resource checks are not an in-game validation of swordless time travel.
 """
 from evfl.util import make_index
 
-from oot_rando.patching.event_patch import _flow
-from oot_rando.patching.qol_patches import _predecessors
-from oot_rando.patching.story_fixes import _Chart, _params
+from oot_rando.formats.evfl_tools import event_params_of, links_to, parse_flow
+from oot_rando.patching.story_fixes import _Chart
 
 SWORD = 'Weapon_Sword_Master'
 KOKIRI_SWORD = 'Weapon_Sword_Kokiri'
@@ -60,7 +59,7 @@ def _action(chart, name, action, parameters=None, following=None):
     event = chart.event(name, 'ActionEvent')
     if event.data.actor_action.v.v != action:
         raise ValueError('Unexpected Master Sword action: ' + name)
-    params = _params(event)
+    params = event_params_of(event)
     if parameters and any(params.get(k) != v for k, v in parameters.items()):
         raise ValueError('Unexpected Master Sword parameters: ' + name)
     if following is not None and getattr(event.data.nxt.v, 'name', None) != following:
@@ -69,7 +68,7 @@ def _action(chart, name, action, parameters=None, following=None):
 
 
 def _guard(chart, target, false, label, sword=SWORD):
-    links = _predecessors(chart.chart, target)
+    links = links_to(chart.chart, target)
     if not links:
         raise ValueError('Master Sword action is unreachable: ' + target.name)
     guard = chart.switch('RandoMasterSwordOwned_' + label, 'EventQueryIsExistInPouch',
@@ -97,17 +96,17 @@ def patch_flow(path, raw):
         # its collection marker. Arbitrary rewards must never be equipped.
         gift = _action(chart, 'Event115', 'EventTriggerAddOrRemovePouchContent',
                        {'Num': 1, 'IsEquipDIrect': True, 'IsGetEvent': False})
-        if not isinstance(_params(gift).get('Actor'), str):
+        if not isinstance(event_params_of(gift).get('Actor'), str):
             raise ValueError('Missing pedestal reward actor.')
         gift.data.params.data['IsEquipDIrect'] = False
         chart.expected[gift.name]['IsEquipDIrect'] = False
         report['direct_equip'] = False
     elif normalized == FLOWS[1]:
         display = chart.event('Event117', 'SubFlowEvent')
-        if (display.data.res_flowchart_name, display.data.entry_point_name, _params(display)) != (
+        if (display.data.res_flowchart_name, display.data.entry_point_name, event_params_of(display)) != (
                 'GetPouchContent', 'DisplayGetByActorName', {'ActorName': SWORD}):
             raise ValueError('Unexpected pedestal sword display.')
-        links = _predecessors(chart.chart, display)
+        links = links_to(chart.chart, display)
         if [(owner.name, kind, key) for owner, kind, key in links] != [('Event136', 'nxt', None)]:
             raise ValueError('Unexpected pedestal display links.')
         # End only the display branch, retaining the timeline's sword animation.
@@ -126,9 +125,9 @@ def patch_flow(path, raw):
         # as the adult weapon: the next pull then equips an unowned Master Sword (hand
         # only, lost on reload, 20/11). Drop that stored sword before it is restored.
         start = chart.event('Event4', 'SwitchEvent')
-        if _params(start) != {'GameDataName': 'PlayerStatus.AnotherEraEquipWeapon', 'Index': -1}:
+        if event_params_of(start) != {'GameDataName': 'PlayerStatus.AnotherEraEquipWeapon', 'Index': -1}:
             raise ValueError('Unexpected era weapon check.')
-        links = _predecessors(chart.chart, start)
+        links = links_to(chart.chart, start)
         if [kind for _, kind, _ in links] != ['entry']:
             raise ValueError('Unexpected era weapon entry.')
         clear = chart.action('RandoMasterSwordClear_EraStored', 'GameDataActor',
@@ -181,15 +180,15 @@ def patch_flow(path, raw):
             # Event66 loops until the forced sword exists: missing ownership must
             # skip that wait and its RemoveWeaponKeepSheath as well.
             report['guards'].append(_guard(chart, equip, chart.events[resume], label))
-    expected_guards = {name: _params(chart.events[name]) for name in report['guards']}
+    expected_guards = {name: event_params_of(chart.events[name]) for name in report['guards']}
     result, _ = chart.write()
     # Ensure every newly inserted ownership query survives writing with the
     # correct true/false polarity (native bool cases 0=true, 1=false).
-    checked = _flow(result)
+    checked = parse_flow(result)
     guards = {e.name: e for e in checked.flowchart.events if e.name in report['guards']}
     if set(guards) != set(report['guards']) or any(
             e.data.actor_query.v.v != 'EventQueryIsExistInPouch' or
-            _params(e) != expected_guards[e.name] or 0 not in e.data.cases
+            event_params_of(e) != expected_guards[e.name] or 0 not in e.data.cases
             or not set(e.data.cases) <= {0, 1}
             for e in guards.values()):
         raise ValueError('Master Sword ownership guard failed serialization.')

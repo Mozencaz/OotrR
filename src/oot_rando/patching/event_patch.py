@@ -6,6 +6,7 @@ Only string parameters whose current value matches ``before`` are changed, and
 the result is re-read to check that no other parameter moved.
 """
 import io
+from oot_rando.formats.evfl_tools import params_by_event, parse_flow
 
 # Parameters of GameDataActor in 896 of the 900 vanilla flows that declare it.
 GAMEDATA_ACTOR_PARAMS = {
@@ -14,26 +15,11 @@ GAMEDATA_ACTOR_PARAMS = {
 }
 
 
-def _flow(raw):
-    from evfl import EventFlow
-    flow = EventFlow()
-    flow.read(raw)
-    return flow
-
-
-def _snapshot(flow):
-    result = {}
-    for event in flow.flowchart.events:
-        params = getattr(event.data, 'params', None)
-        result[event.name] = dict(params.data) if params is not None else None
-    return result
-
-
 def patch_event_params(raw, edits):
     """``edits``: list of ``(event name, parameter, before, after)``. Returns new bytes."""
-    flow = _flow(raw)
+    flow = parse_flow(raw)
     events = {event.name: event for event in flow.flowchart.events}
-    expected = _snapshot(flow)
+    expected = params_by_event(flow)
     seen = set()
     for name, param, before, after in edits:
         if (name, param) in seen:
@@ -53,7 +39,7 @@ def patch_event_params(raw, edits):
     stream = io.BytesIO()
     flow.write(stream)
     result = stream.getvalue()
-    if _snapshot(_flow(result)) != expected:
+    if params_by_event(parse_flow(result)) != expected:
         raise ValueError('Semantic check of the event failed.')
     return result
 
@@ -69,10 +55,10 @@ def add_collection_markers(raw, markers):
     from evfl.container import Container
     from evfl.event import Event, ActionEvent
     from evfl.util import make_index, make_rindex
-    flow = _flow(raw)
+    flow = parse_flow(raw)
     chart = flow.flowchart
     events = {e.name: e for e in chart.events}
-    expected = _snapshot(flow)
+    expected = params_by_event(flow)
     actor = next((a for a in chart.actors if str(a.identifier) == 'GameDataActor'), None)
     if actor is None:
         actor = Actor()
@@ -110,8 +96,8 @@ def add_collection_markers(raw, markers):
     stream = io.BytesIO()
     flow.write(stream)
     result = stream.getvalue()
-    checked = _flow(result)
-    if _snapshot(checked) != expected:
+    checked = parse_flow(result)
+    if params_by_event(checked) != expected:
         raise ValueError('The marker changed parameters unrelated to collection.')
     written = next(a for a in checked.flowchart.actors if str(a.identifier) == 'GameDataActor')
     if written.params is None or not set(GAMEDATA_ACTOR_PARAMS) <= set(written.params.data):
@@ -148,10 +134,10 @@ def add_pouch_items(raw, after, actors):
     from evfl.container import Container
     from evfl.event import Event, ActionEvent
     from evfl.util import make_index, make_rindex
-    flow = _flow(raw)
+    flow = parse_flow(raw)
     chart = flow.flowchart
     events = {e.name: e for e in chart.events}
-    expected = _snapshot(flow)
+    expected = params_by_event(flow)
     anchor = events.get(after)
     if anchor is None or not hasattr(anchor.data, 'nxt'):
         raise ValueError('Anchor event without continuation: ' + after)
@@ -188,8 +174,8 @@ def add_pouch_items(raw, after, actors):
     stream = io.BytesIO()
     flow.write(stream)
     result = stream.getvalue()
-    checked = _flow(result)
-    if _snapshot(checked) != expected:
+    checked = parse_flow(result)
+    if params_by_event(checked) != expected:
         raise ValueError('Adding starting items changed other parameters.')
     actual = {e.name: e for e in checked.flowchart.events}
     chain = actual[after]
@@ -222,10 +208,10 @@ def add_start_values(raw, after, values):
     from evfl.util import make_index, make_rindex
     if not values:
         return raw
-    flow = _flow(raw)
+    flow = parse_flow(raw)
     chart = flow.flowchart
     events = {e.name: e for e in chart.events}
-    expected = _snapshot(flow)
+    expected = params_by_event(flow)
     anchor = events.get(after)
     if anchor is None or not hasattr(anchor.data, 'nxt'):
         raise ValueError('Anchor event without continuation: ' + after)
@@ -266,8 +252,8 @@ def add_start_values(raw, after, values):
     stream = io.BytesIO()
     flow.write(stream)
     result = stream.getvalue()
-    checked = _flow(result)
-    if _snapshot(checked) != expected:
+    checked = parse_flow(result)
+    if params_by_event(checked) != expected:
         raise ValueError('Writing start values changed other parameters.')
     actual = {e.name: e for e in checked.flowchart.events}
     chain = actual[after]

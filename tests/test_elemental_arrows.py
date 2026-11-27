@@ -11,6 +11,23 @@ from oot_rando.patching.soul_adapter import murmur3
 
 
 class LogicTests(unittest.TestCase):
+    def test_menu_restores_selection_after_the_previous_patch(self):
+        # A standalone arrow is the native selectable entry; marking it unusable
+        # prevents selection even with the bow and magic already acquired.
+        for usable in (False, True):
+            before = {'root': {'ItemArray': [{'Actor': [
+                {'ActorShort': 'Item_Arrow_' + element, 'IsUsableAdult': usable,
+                 'IsUsableChild': False}
+                for element in a.ELEMENTS
+            ]}]}, 'version': 7, 'endian': '<'}
+            raw = b.dump(before)
+            patched = a.patch_ui(raw)
+            after = b.load(patched)
+            for row in before['root']['ItemArray'][0]['Actor']:
+                row['IsUsableAdult'] = True
+            self.assertEqual(after, before)
+            self.assertEqual(a.patch_ui(patched), patched)
+
     def test_elemental_arrows_need_bow_and_magic(self):
         from oot_rando.logic.rules import Logic
         from oot_rando.logic.world import World
@@ -59,6 +76,13 @@ class GameTests(unittest.TestCase):
         for path, raw in before.items():
             if path != a.GAME_TABLE:
                 self.assertEqual(after[path], raw, path)
+        # Only native resources: the private file of the old patch crashed the inventory.
+        self.assertEqual(set(after), set(before) | {a.PARAM})
+        native = sarc(self.read('Pack/Actor/Weapon_Range_Bow.pack.zs'))[a.PARAM]
+        self.assertEqual(b.load(after[a.PARAM]), b.load(native))
+        old = dict(before)
+        old[a.OLD_PARAM] = b'stale'
+        self.assertEqual(a.patch_pack(b.build_sarc(old)), a.patch_pack(original))
         raw = self.read(a.TABLE)
         before, after = b.load(raw)['root'], b.load(a.patch_table(raw))['root']
         for old, new in zip(before, after):
@@ -68,13 +92,13 @@ class GameTests(unittest.TestCase):
                 expected['AssignableItem'] = 'Bow'
             self.assertEqual(new, expected)
 
-    def test_only_combined_arrows_can_be_equipped(self):
+    def test_native_arrow_selection_is_preserved(self):
         before = b.load(self.read(a.UI))
         after = b.load(a.patch_ui(self.read(a.UI)))
         for slot in before['root']['ItemArray']:
             for row in slot['Actor']:
                 if row['ActorShort'] in ['Item_Arrow_' + e for e in a.ELEMENTS]:
-                    row['IsUsableAdult'] = False
+                    self.assertTrue(row['IsUsableAdult'])
                 if row['ActorShort'].startswith('Pouch_Range_BowAndArrow_'):
                     self.assertTrue(row['IsUsableAdult'])
         self.assertEqual(after, before)

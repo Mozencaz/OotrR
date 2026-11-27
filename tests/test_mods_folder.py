@@ -6,9 +6,9 @@ import unittest
 from pathlib import Path
 
 from oot_rando.randomizer.randomizer_core import Settings, CHECKS, settings_identity, GENERATOR_VERSION, ADAPTER_VERSION
-from oot_rando.randomizer.randomizer_services import (ManualTracker, continued_save, generate_in_mods,
-                                                        installed_regeneration, read_artifact,
-                                                        regeneration_settings, validate_mod_directory)
+from oot_rando.randomizer.artifact import installed_regeneration, read_artifact, regeneration_settings
+from oot_rando.randomizer.mods_folder import continued_save, generate_in_mods, validate_mod_directory
+from oot_rando.tracker.manual_tracker import ManualTracker
 from oot_rando.patching.randomize_kokiri import TITLE, BUILD
 from oot_rando import __version__ as APP_VERSION
 

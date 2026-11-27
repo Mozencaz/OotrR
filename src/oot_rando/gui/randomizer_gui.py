@@ -1,18 +1,24 @@
 """Desktop application (Tkinter). Run with ``python -m oot_rando``."""
 import ctypes
+from datetime import datetime
 import json
 import os
 from pathlib import Path
 import queue
+import re
 import secrets
 import threading
 import webbrowser
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
+from tkinter import ttk, messagebox, simpledialog
+from tkinter import font as tkfont
 
-from oot_rando.randomizer.randomizer_core import Settings, CHECKS, GENERATOR_VERSION
-from oot_rando.randomizer.randomizer_services import (read_artifact, qol_seed_warning,
-                                                      regeneration_settings, validate_mod_directory)
+from oot_rando import native_dialogs as filedialog
+
+from oot_rando.archipelago.bridge import to_ap_yaml
+from oot_rando.randomizer.randomizer_core import Settings, CHECKS, GENERATOR_VERSION, settings_from_patch
+from oot_rando.randomizer.artifact import read_artifact, regeneration_settings
+from oot_rando.randomizer.mods_folder import validate_mod_directory
 from oot_rando.randomizer.qol_install import install_qol
 from oot_rando.tracker.auto_tracker import TrackerSession, find_save_slots, newest_save
 from oot_rando.tracker import game_overlay
@@ -24,10 +30,13 @@ from oot_rando.patching.randomize_kokiri import POOL, TITLE
 from oot_rando.game.randomizer_categories import CATEGORIES
 from oot_rando.game.world_maps import SAFE_CATEGORIES
 from oot_rando.logic import rando_options
-from oot_rando.paths import data_dir, seeds_dir, state_dir
+from oot_rando.logic.rando_options import STARTABLE_ITEMS
+from oot_rando.native_dialogs import open_in_file_manager
+from oot_rando.paths import data_dir, error_log, seeds_dir, state_dir, write_error_log
 from oot_rando.gui import theme
-from oot_rando.gui.generation_worker import generate_isolated
+from oot_rando.gui.parties_page import PartiesPage
 from oot_rando import __version__ as APP_VERSION, updater
+from oot_rando import pc_port
 
 STATE = state_dir()
 LABELS = dict(zip(POOL, ('Green Rupee', 'Blue Rupee', 'Red Rupee', 'Purple Rupee',
@@ -83,6 +92,9 @@ OPTION_COPY = {
                                   'Songs by name ("Sarias Song"). Tunics are not available yet.'),
     'item_pool_value': ('Item pool', 'Plentiful: an extra copy of the major items. Scarce: at most 3 bottles '
                         'and half the hearts. Minimal: one bottle and no extra hearts.'),
+    'fake_item_traps': ('Fake item traps', 'Fake copies of items hide in chests and on the ground. They look '
+                        'real, but Link is frozen. Some: one per major item. Plentiful: two per major item, '
+                        'plus the medallions, spiritual stones and songs. Not tested in game yet.'),
     'logic_no_night_tokens_without_suns_song': ("Night skulltulas need Sun's Song",
                                                  'Waiting for the night is not expected by the logic.'),
 }
@@ -106,6 +118,10 @@ OPTION_TIPS = {
     'open_door_of_time': 'The Door of Time is open from the start and the Master Sword can be pulled without the '
                          'Spiritual Stones or the Song of Time. Zelda\'s escape still gives the Ocarina of Time '
                          'and the Song of Time. To be confirmed in game.',
+    'starting_age': 'Child: the usual start in Kokiri Forest. Adult: a new game begins as adult Link in the '
+                    'Temple of Time, the Door of Time open (forced on) and time travel possible both ways at the '
+                    'pedestal. Link holds the Master Sword, needed to travel back, plus the starting inventory '
+                    'you choose below, nothing else. New save required. To be confirmed in game.',
     'door_of_time_requirement': 'Play the Song of Time with an ocarina at the door. Choose whether this also '
                                 'needs all three Spiritual Stones, only the Goron Ruby and Zora Sapphire, or '
                                 'no stones. Door of Time open overrides this choice. The stones for Zelda\'s '
@@ -119,7 +135,8 @@ OPTION_TIPS = {
                      'To be confirmed in game.',
     'gerudo_fortress': 'Four carpenters: free the four carpenters to get the Gerudo Membership Card, as in the '
                        'vanilla game. One carpenter: the first one freed, in any cell, ends the fortress and '
-                       'gives the rescue reward, frees the remaining carpenters and opens all cells. '
+                       'gives the rescue reward, frees the remaining carpenters and opens all cells (the keys of '
+                       'the thieves not yet defeated lie in their cells). '
                        'To be confirmed in game.',
     'open_gerudo_valley_bridge': 'The broken bridge of Gerudo Valley is repaired from the start: the adult '
                                  'crosses it on foot without Epona or the Longshot. The carpenters stay in their '
@@ -183,13 +200,14 @@ OPTION_TIPS = {
 # A visible option missing here is shown at the end, in a card named after its tab.
 SETTING_GROUPS = (
     ('Open world', 'Zones and quests open from the start.',
-     ['game:open_forest', 'open_kakariko', 'open_door_of_time', 'door_of_time_requirement', 'spiritual_stones', 'zora_fountain', 'gerudo_fortress',
+     ['game:open_forest', 'starting_age', 'open_kakariko', 'open_door_of_time', 'door_of_time_requirement', 'spiritual_stones', 'zora_fountain', 'gerudo_fortress',
       'open_gerudo_valley_bridge', 'skip_child_zelda']),
     ('Logic and accessibility', '',
      ['accessibility', 'logic_no_night_tokens_without_suns_song', 'game:skulltulas_always_present']),
     ('Item pool', 'What is shuffled and what you start with.',
      ['item_pool_value', 'start_inventory_from_pool', 'shuffle_kokiri_sword',
-      'shuffle_master_sword', 'shuffle_gerudo_card', 'shuffle_remake_items', 'blue_fire_arrows']),
+      'shuffle_master_sword', 'shuffle_gerudo_card', 'shuffle_remake_items', 'blue_fire_arrows',
+      'fake_item_traps']),
     ('Shuffled locations', 'Where items can be found.',
      ['shuffle_chests', 'chest_matching', 'tokensanity', 'shuffle_freestanding_items', 'shuffle_npc_gifts',
       'shuffle_quest_rewards', 'shuffle_boss_rewards', 'shuffle_great_fairies', 'shuffle_song_items',
@@ -206,6 +224,9 @@ HIDDEN_OPTIONS = ('progressive_order', 'progressive_strict', 'fast_chests')
 GAME_OPTION_COPY = {'open_forest': 'Open the way from Kokiri Forest to Hyrule Field',
                     'skulltulas_always_present': 'Night-only gold skulltulas present day and night'}
 UNTESTED_WORDS = ('confirm', 'validated', 'pilot', 'experimental')
+# Pages without their own scroll area keep the same right margin as the scrolled ones.
+PAGE_GUTTER = 22
+RANDOM_SEED = re.compile(r'[0-9a-f]{16}')   # a name from the Random button, not chosen by the player
 
 
 def option_tip(option, label, help_text):
@@ -251,16 +272,18 @@ class ListVar:
 
 
 class ItemsVar:
-    """Text field holding a starting inventory (``"Hover Boots, Bow x2"``) as a dict."""
+    """A starting inventory (``{'Hover Boots': 1, 'Bow': 2}``), shown as removable tags."""
 
     def __init__(self):
-        self.text = tk.StringVar(value='')
+        self.items, self.listeners = {}, []
 
     def get(self):
-        return rando_options.parse_items(self.text.get())
+        return dict(self.items)
 
     def set(self, value):
-        self.text.set(rando_options.format_items(value or {}))
+        self.items = dict(value or {})
+        for listener in self.listeners:
+            listener()
 
 
 
@@ -270,7 +293,7 @@ def default_mods_dir():
     folder = Path(appdata) / 'eden' / 'load' / TITLE if appdata else None
     return str(folder) if folder and folder.is_dir() else ''
 
-class Application:
+class Application(PartiesPage):
     def __init__(self, root):
         self.root = root
         root.title('OoT Randomizer')
@@ -301,6 +324,7 @@ class Application:
         self.tracker_search, self.save_path = tk.StringVar(), tk.StringVar()
         self.auto_save = tk.BooleanVar(value=True)
         self.app_state = self.read_app_state()
+        self.init_parties()
         self.turbo_enabled = tk.BooleanVar(value=self.app_state.get('turbo_a', True) is not False)
         # Remembered between app starts (it was off again at every start: 15/11 report, issue #39).
         self.options['skulltulas_always_present'].set(self.app_state.get('skulltulas_always_present') is True)
@@ -311,7 +335,7 @@ class Application:
         self.nup.set(self.app_state.get('game_file') or '')
         self.mods.set(self.app_state.get('mods_dir') or default_mods_dir())
         self.nup.trace_add('write', lambda *args: self.write_app_state(game_file=self.nup.get()))
-        self.mods.trace_add('write', lambda *args: self.write_app_state(mods_dir=self.mods.get()))
+        self.mods.trace_add('write', self._on_mods_dir_changed)
         self.check_updates = tk.BooleanVar(value=self.app_state.get('check_updates', True) is not False)
         self.check_updates.trace_add('write', lambda *args: self.write_app_state(check_updates=self.check_updates.get()))
         # Opt-in: also offer the GitHub pre-releases (vX.Y.Z-beta.N) when checking for updates.
@@ -334,35 +358,48 @@ class Application:
         self.result = tk.StringVar(value='No seed open. Generate a game or open an existing folder.')
         self.connection_status = tk.StringVar(value='Tracker not connected')
         self.tracker_summary = tk.StringVar(value='Open a seed to show its locations.')
-        self.seed_chip = tk.StringVar(value='No seed open')
+        self.seed_chip = tk.StringVar(value='No seed open')   # name of the open adventure (sidebar card)
         self.sidebar = theme.Sidebar(root, self.fonts, self.show_page, footer=f'Version {APP_VERSION}')
         self.sidebar.pack(side='left', fill='y')
         outer = ttk.Frame(root, padding=(34, 26, 34, 18), style='Page.TFrame')
         outer.pack(side='left', fill='both', expand=True)
+        self._outer = outer
         header = ttk.Frame(outer, style='Page.TFrame')
         header.pack(fill='x', pady=(0, 18))
+        self._header = header
         self.page_title, self.page_subtitle = tk.StringVar(), tk.StringVar()
         titles = ttk.Frame(header, style='Page.TFrame')
         titles.pack(side='left', fill='x', expand=True)
         ttk.Label(titles, textvariable=self.page_title, style='PageTitle.TLabel').pack(anchor='w')
         ttk.Label(titles, textvariable=self.page_subtitle, style='PageSub.TLabel').pack(anchor='w', pady=(2, 0))
-        ttk.Label(header, textvariable=self.seed_chip, style='Chip.TLabel').pack(side='right', anchor='n', pady=(8, 0))
+        # Errors and warnings of the current page: banners here, never a window.
+        self.notice_area = ttk.Frame(outer, style='Page.TFrame')
+        self.notices, self.current_page = [], None
+        self.toast = theme.Toast(root, self.fonts)
         self.tabs = ttk.Notebook(outer, style='Pages.TNotebook')
         self.tabs.pack(fill='both', expand=True)
         self.pages = {}
         self.seed_name, self.tracker_counts, self.tracker_filter = '', None, 'all'
+        self.current_preset = None
         self.home_tab = self.tab('home', 'Home', 'Welcome', 'Your adventure at a glance.')
+        self.parties_tab = self.tab('parties', 'My Games', 'My Games',
+                                   'Find each adventure with its seed and its save.')
         self.settings_tab = self.tab('newseed', 'New seed', 'New seed', 'Pick an adventure, then generate it.')
         self.tracker_tab = self.tab('tracker', 'Tracker', 'Tracker', 'What you found, and what you can reach now.')
         self.multiworld_tab = self.tab('multiworld', 'Multiworld', 'Multiworld', 'Play with friends through Archipelago. Three steps.')
+        self.sidebar.set_visible('parties', self.parties_enabled.get())
         self.sidebar.gap()
         self.setup_tab = self.tab('setup', 'Setup', 'Setup', 'Where your game lives. Set once.')
         self.spoiler_tab = self.tab('spoiler', 'Spoiler', 'Spoiler', 'Every reward of the open seed. Reveal only if you want to know.')
         self.help_tab = self.tab('help', 'Help', 'Help', 'How the application works, step by step.')
         self.tabs.bind('<<NotebookTabChanged>>', lambda event: self.page_changed())
-        self.home_body, self.settings_body = self.scrollable(self.home_tab), self.scrollable(self.settings_tab)
+        # Without a seed, Home fits on one screen: nothing to scroll to.
+        self.home_body = self.scrollable(self.home_tab, locked=lambda: not self.artifact)
+        self.build_action_bar()   # under the settings, never scrolled away
+        self.settings_body = self.scrollable(self.settings_tab)
         self.multiworld_body, self.setup_body = self.scrollable(self.multiworld_tab), self.scrollable(self.setup_tab)
         self.build_home()
+        self.build_parties()
         self.build_setup()
         self.build_categories()
         self.build_tracker()
@@ -372,28 +409,71 @@ class Application:
         for variable in (self.nup, self.mods, self.save_path):
             variable.trace_add('write', lambda *args: self.update_home())
         self.update_home()
-        bottom = ttk.Frame(outer, style='Page.TFrame')
-        bottom.pack(side='bottom', fill='x', pady=(12, 0), before=self.tabs)
+        # Shown only while a long job runs: its current step and a progress bar.
+        bottom = self.status_bar = ttk.Frame(outer, style='Page.TFrame')
+        self.status_parent = outer
         self.progress = ttk.Progressbar(bottom, mode='indeterminate', length=120)
-        ttk.Label(bottom, textvariable=self.status, style='Page.TLabel', wraplength=760).pack(side='left', fill='x')
+        ttk.Label(bottom, textvariable=self.status, style='PageHeading.TLabel', wraplength=760).pack(side='left', fill='x')
         self.show_page('home')
+        for number in range(1, 10):
+            root.bind_all(f'<Control-Key-{number}>', lambda event, n=number: self.shortcut_page(n))
         self.root.protocol('WM_DELETE_WINDOW', self.close)
         self.register_hotkey()
         self.tracker_search.trace_add('write', lambda *args: self.render_tracker())
-        root.after(100, self.poll)
+        self.seed_chip.trace_add('write', lambda *args: self.update_adventure())
+        self._after_ids = set()
+        self.root.bind('<Destroy>', self._on_root_destroy, add='+')
+        self._schedule_after(100, self.poll)
         updater.cleanup()
         if self.check_updates.get():
-            root.after(2500, lambda: self.check_for_updates(silent=True))
-        root.after(1800, self.tracker_tick)
-        root.after(50, self.restore_last_artifact)
-        root.after(60, self.start_turbo)
+            self._schedule_after(2500, lambda: self.check_for_updates(silent=True))
+        self._schedule_after(1800, self.tracker_tick)
+        self._schedule_after(50, self.restore_last_artifact)
+        self._schedule_after(60, self.start_turbo)
+
+    def _schedule_after(self, delay_ms, callback):
+        if getattr(self, 'closed', False):
+            return None
+        ids = getattr(self, '_after_ids', None)
+        if ids is None:
+            ids = set()
+            self._after_ids = ids
+        box = [None]
+        def _wrapped():
+            if box[0] is not None:
+                ids.discard(box[0])
+            if getattr(self, 'closed', False):
+                return
+            callback()
+        aid = self.root.after(delay_ms, _wrapped)
+        box[0] = aid
+        ids.add(aid)
+        return aid
+
+    def _on_root_destroy(self, event=None):
+        if event is not None and getattr(event, "widget", None) is not self.root:
+            return
+        self.closed = True
+        self._cancel_all_after()
+
+    def _cancel_all_after(self):
+        ids = getattr(self, '_after_ids', None)
+        if not ids:
+            return
+        for aid in list(ids):
+            try:
+                self.root.after_cancel(aid)
+            except Exception:
+                pass
+        ids.clear()
 
     def configure_theme(self):
         self.colors = dict(theme.COLORS, bg=theme.COLORS['surface'], accent=theme.COLORS['green'])
         self.fonts, self.images = theme.apply(self.root)
 
     # ------------------------------------------------------------ layout
-    def scrollable(self, outer):
+    def scrollable(self, outer, locked=None):
+        """A vertically scrolled page. ``locked()`` true: the page stays at its top, without a bar."""
         canvas = tk.Canvas(outer, highlightthickness=0, background=self.colors['page'], borderwidth=0)
         bar = ttk.Scrollbar(outer, orient='vertical', command=canvas.yview, style='Page.Vertical.TScrollbar')
         parent = ttk.Frame(canvas, padding=(0, 0, 16, 6), style='Page.TFrame')
@@ -402,6 +482,12 @@ class Application:
         canvas.bind('<Configure>', lambda event: canvas.itemconfigure(window, width=event.width))
         def autohide(first, last):
             # The bar keeps its place (no relayout, so no flicker) and is only painted when needed.
+            if locked and locked():
+                if float(first) > 0:   # dragged through the hidden bar: back to the top
+                    canvas.after_idle(lambda: canvas.yview_moveto(0))
+                bar.configure(style='Hidden.Vertical.TScrollbar')
+                bar.set(first, last)
+                return
             needed = not (float(first) <= 0 and float(last) >= 1)
             bar.configure(style='Page.Vertical.TScrollbar' if needed else 'Hidden.Vertical.TScrollbar')
             bar.set(first, last)
@@ -409,12 +495,15 @@ class Application:
         canvas.configure(yscrollcommand=autohide)
         canvas.pack(side='left', fill='both', expand=True)
         def wheel(event):
+            if locked and locked():
+                return
             if str(event.widget).startswith(str(outer)):
                 units = theme.wheel_units(event.num, event.delta)
                 if units:
                     canvas.yview_scroll(units, 'units')
         for sequence in theme.WHEEL_EVENTS:
             self.root.bind_all(sequence, wheel, add='+')
+        parent.canvas = canvas
         return parent
 
     def card(self, parent, title=None, subtitle=None, fill='x', expand=False, side='top', padx=0):
@@ -436,6 +525,8 @@ class Application:
 
     def build_help(self):
         parent = self.scrollable(self.help_tab)
+        self.build_tutorial(parent)
+        ttk.Label(parent, text='MORE DETAILS', style='PageField.TLabel').pack(anchor='w', pady=(10, 8))
         sections = [
             ('Prepare a game', 'In Setup, choose your .nup file and the mods folder. In New seed, pick an adventure, then click Generate and install: the seed is written straight into the mods folder. Close the game during installation.'),
             ('Play on a PC port (Hookshot, Longshot...)', 'Choose the mods folder next to the game exe (hookshot.exe, longshot.exe...). Each seed is installed in its own sub-folder. Only one seed of this application stays active at a time; the previous one is archived.'),
@@ -453,10 +544,69 @@ class Application:
             ttk.Label(box, text=f'{index + 1:02d}', style='Field.TLabel').pack(anchor='w')
             ttk.Label(box, text=heading, style='Heading.TLabel').pack(anchor='w', pady=(2, 6))
             ttk.Label(box, text=text, style='Muted.TLabel', wraplength=360, justify='left').pack(anchor='w')
-        ttk.Label(parent, text=f'Application version: {APP_VERSION} (generator {GENERATOR_VERSION})', style='Page.TLabel').pack(anchor='w', pady=(4, 8))
-        row = self.buttons(parent, pady=(0, 8))
-        ttk.Button(row, text='Check for updates', command=lambda: self.check_for_updates(silent=False)).pack(side='left')
-        ttk.Checkbutton(row, text='Check at start-up', variable=self.check_updates).pack(side='left', padx=(12, 0))
+        row = ttk.Frame(parent, style='Page.TFrame')
+        row.pack(fill='x', pady=(4, 8))
+        ttk.Label(row, text=f'Application version: {APP_VERSION} (generator {GENERATOR_VERSION}).',
+                  style='Page.TLabel').pack(side='left')
+        ttk.Button(row, text='Updates are in Setup ›', style='Page.Link.TButton',
+                   command=lambda: self.show_page('setup')).pack(side='left', padx=(8, 0))
+
+    TUTORIAL = [
+        ('setup', 'Tell the app where your game is',
+         'Open Setup and choose two things: your game file (.nup) and the mods folder. On a PC port '
+         '(Hookshot, Longshot…), the mods folder sits next to the game exe. On an emulator, it is the title '
+         f'folder {TITLE} in the emulator\'s load folder. A green tick under each field means it was recognised. '
+         'You only do this once.', 'Open Setup ›', 'setup'),
+        ('seed', 'Create your first seed',
+         'Open New seed and pick an adventure: each card is a ready-made set of settings, so you can '
+         'generate right away and change details later. Close the game, then click Generate and install: '
+         'the seed is written straight into the mods folder.', 'Create a seed ›', 'newseed'),
+        ('save', 'Start a new game and save once',
+         'Launch the game and start a new file (an old save belongs to another seed). Play past the intro, '
+         'then save: the tracker finds the newest save by itself and links it to this seed.', None, None),
+        ('play', 'Play and follow your progress',
+         'Home shows how many locations you found and what is in reach now. The Tracker lists every location: '
+         'Available means your items let you get it. It updates each time the game saves, and live while '
+         'the game runs.', 'Open the tracker ›', 'tracker')]
+
+    def build_tutorial(self, parent):
+        """First-time guide at the top of Help: four steps, ticked as the player completes them."""
+        box = self.card(parent, 'First time here? Start in 4 steps',
+                        'Follow these steps in order. Each one is ticked as soon as the app sees it done.')
+        self.tutorial_marks = {}
+        for index, (key, title, text, button, page) in enumerate(self.TUTORIAL):
+            if index:
+                theme.rule(box).pack(fill='x', pady=(2, 12))
+            row = ttk.Frame(box)
+            row.pack(fill='x', pady=(0, 10))
+            mark = theme.badge(row, self.images)
+            mark.pack(side='left', anchor='n', padx=(0, 16))
+            body = ttk.Frame(row)
+            body.pack(side='left', fill='x', expand=True)
+            ttk.Label(body, text=title, style='Heading.TLabel').pack(anchor='w')
+            ttk.Label(body, text=text, style='Muted.TLabel', wraplength=640, justify='left').pack(anchor='w', pady=(2, 0))
+            if button:
+                ttk.Button(body, text=button, style='Link.TButton',
+                           command=lambda page=page: self.show_page(page)).pack(anchor='w', pady=(6, 0))
+            self.tutorial_marks[key] = mark
+        theme.rule(box).pack(fill='x', pady=(2, 12))
+        ttk.Label(box, text='Going further: play with friends in Multiworld, keep several adventures side by side '
+                  'with My Games (turn it on in Setup), or look up where every item is in Spoiler.',
+                  style='Small.TLabel', wraplength=720, justify='left').pack(anchor='w')
+        self.update_tutorial()
+
+    def update_tutorial(self):
+        if not hasattr(self, 'tutorial_marks'):
+            return
+        nup = self.nup.get().strip()
+        mods = self.mods.get().strip()
+        done = {'setup': bool(nup) and Path(nup).is_file() and bool(mods) and Path(mods).is_dir(),
+                'seed': bool(self.artifact),
+                'save': bool(self.tracker) and self.tracker.link == 'linked'}
+        done['play'] = done['save'] and bool(self.tracker_counts) and self.tracker_counts.get('done', 0) > 0
+        current = next((key for key, *_ in self.TUTORIAL if not done[key]), None)
+        for index, (key, *_) in enumerate(self.TUTORIAL):
+            self.tutorial_marks[key].set('done' if done[key] else 'on' if key == current else 'off', str(index + 1))
 
     def tab(self, key, nav, title, subtitle):
         frame = ttk.Frame(self.tabs, style='Page.TFrame')
@@ -476,8 +626,67 @@ class Application:
                 self.sidebar.select(key)
                 self.page_title.set(title)
                 self.page_subtitle.set(subtitle)
+                if key != self.current_page:
+                    self.current_page = key
+                    self.clear_notices()
+                    if self.busy:
+                        self.show_status_bar()
+
+    def shortcut_page(self, number):
+        """Ctrl+1 … Ctrl+9: the menu entries, in their order on screen."""
+        shown = [key for key in self.sidebar.order if key not in self.sidebar.hidden]
+        if number <= len(shown):
+            self.show_page(shown[number - 1])
+        return 'break'
+
+    # ------------------------------------------------------------ feedback
+    def notify(self, text, action=None):
+        """A success or a hint: a toast for a few seconds, the work goes on."""
+        self.toast.show(text, action)
+
+    def show_notice(self, kind, title, text='', actions=()):
+        """A banner at the top of the current page ('error', 'warn' or 'info')."""
+        self.clear_notices()
+        notice = theme.Notice(self.notice_area, kind, title, text, actions, on_close=self.clear_notices,
+                              wraplength=720)
+        notice.pack(fill='x')
+        self.notices.append(notice)
+        if not self.notice_area.winfo_manager():
+            self.notice_area.pack(fill='x', pady=(0, 14), padx=(0, PAGE_GUTTER), before=self.tabs)
+        if kind == 'error':
+            self.root.bell()
+
+    def clear_notices(self):
+        for notice in self.notices:
+            notice.destroy()
+        self.notices = []
+        if self.notice_area.winfo_manager():
+            self.notice_area.pack_forget()
+
+    def show_status_bar(self, shown=None):
+        """The step of a long job (generation, download) and a moving bar; hidden otherwise.
+        On New seed the action bar shows the step instead."""
+        working = self.busy or self.updating == 'install'
+        visible = working and not (self.busy and self.current_page == 'newseed')
+        if visible and not self.status_bar.winfo_manager():
+            self.status_bar.pack(side='bottom', fill='x', pady=(12, 0), padx=(0, PAGE_GUTTER), before=self.tabs)
+            self.progress.pack(side='right', padx=(12, 0))
+            self.progress.start()
+        elif not visible and self.status_bar.winfo_manager():
+            self.progress.stop()
+            self.progress.pack_forget()
+            self.status_bar.pack_forget()
+        self.update_action_bar()
+
+
+    def copy_text(self, text):
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.notify('Copied to the clipboard.')
+
 
     def path_row(self, parent, text, variable, kind):
+        """A labelled path field; returns the label under it that says what was recognised."""
         frame = ttk.Frame(parent)
         frame.pack(fill='x', pady=(0, 12))
         ttk.Label(frame, text=text, style='Field.TLabel').pack(anchor='w')
@@ -485,26 +694,53 @@ class Application:
         row.pack(fill='x', pady=(5, 0))
         ttk.Entry(row, textvariable=variable).pack(side='left', fill='x', expand=True)
         def choose():
-            value = filedialog.askopenfilename(filetypes=[('NUP game', '*.nup')]) if kind == 'file' else filedialog.askdirectory()
+            current = variable.get().strip()
+            value = (
+                filedialog.askopenfilename(
+                    title='Choose Game File (.nup)',
+                    initialdir=current,
+                    filetypes=[('NUP game', '*.nup')],
+                    parent=self.root,
+                )
+                if kind == 'file'
+                else filedialog.askdirectory(
+                    title='Choose Folder',
+                    initialdir=current,
+                    parent=self.root,
+                )
+            )
             if value:
-                variable.set(value)
+                if kind == 'directory' and variable is self.mods:
+                    value = self.normalize_chosen_mods_dir(value)
+                if value:
+                    variable.set(value)
         ttk.Button(row, text='Browse…', command=choose).pack(side='right', padx=(8, 0))
+        check = ttk.Label(frame, style='Small.TLabel', wraplength=760, justify='left')
+        check.pack(anchor='w', pady=(5, 0))
+        return check
+
 
     def build_setup(self):
         parent = self.setup_body
         box = self.card(parent, 'Game files', 'Seeds are generated straight into the mods folder. The original files stay in place.')
-        self.path_row(box, 'GAME FILE (.NUP)', self.nup, 'file')
-        self.path_row(box, 'MODS FOLDER — PC PORT (HOOKSHOT, LONGSHOT...) / MODS OR THE EMULATOR TITLE FOLDER', self.mods, 'directory')
-        ttk.Label(box, text='PC port (Hookshot, Longshot...): choose the mods folder next to the game exe.', style='Small.TLabel').pack(anchor='w')
-        ttk.Label(box, text='OTHER EMULATOR EXECUTABLES (OPTIONAL)', style='Field.TLabel').pack(anchor='w', pady=(12, 0))
-        row = self.buttons(box, pady=(5, 4))
+        self.nup_check = self.path_row(box, 'GAME FILE (.NUP)', self.nup, 'file')
+        self.mods_check = self.path_row(box, 'MODS FOLDER', self.mods, 'directory')
+        for variable in (self.nup, self.mods):
+            variable.trace_add('write', lambda *args: self.check_paths())
+        self.check_paths()
+        advanced = ttk.Frame(box)
+        self.advanced_label = tk.StringVar(value='Advanced  ▸')
+        ttk.Button(box, textvariable=self.advanced_label, style='Link.TButton',
+                   command=lambda: self.toggle_advanced(advanced)).pack(anchor='w')
+        ttk.Label(advanced, text='OTHER EMULATOR EXECUTABLES (OPTIONAL)', style='Field.TLabel').pack(anchor='w', pady=(8, 0))
+        row = self.buttons(advanced, pady=(5, 4))
         entry = ttk.Entry(row, textvariable=self.extra_emulators)
         entry.pack(side='left', fill='x', expand=True)
         for event in ('<FocusOut>', '<Return>'):
             entry.bind(event, lambda e: self.save_extra_emulators())
-        ttk.Label(box, text='Live tracking finds Hookshot, Longshot, Lichii, Ryuchii, Eden, yuzu, suyu, citron and sudachi. '
+        ttk.Label(advanced, text='Live tracking finds Hookshot, Longshot, Lichii, Ryuchii, Eden, yuzu, suyu, citron and sudachi. '
                   'Another yuzu-based emulator? Add its executable name here (comma-separated; on Linux, with or without .exe).',
-                  style='Small.TLabel', wraplength=780).pack(anchor='w')
+                  style='Small.TLabel', wraplength=760).pack(anchor='w')
         self.build_qol_card(parent)
         box = self.card(parent, 'Save', 'The tracker reads your progress.sav. It is found automatically; pick it by hand only if needed.')
         ttk.Checkbutton(box, text='Follow the most recent save (every slot)', variable=self.auto_save,
@@ -518,15 +754,65 @@ class Application:
         row = self.buttons(box, pady=(5, 12))
         ttk.Entry(row, textvariable=self.slot, width=22).pack(side='left')
         ttk.Button(row, text='Reload the tracker', command=self.load_tracker).pack(side='left', padx=(8, 0))
-        ttk.Label(box, textvariable=self.connection_status, style='Small.TLabel', wraplength=780).pack(anchor='w')
+        ttk.Label(box, textvariable=self.connection_status, style='Small.TLabel', wraplength=760).pack(anchor='w')
         ttk.Label(box, textvariable=self.turbo_status, style='Small.TLabel').pack(anchor='w')
-        box = self.card(parent, 'Application updates', f'Installed version: {APP_VERSION}'
-                        + (' (experimental)' if updater.is_prerelease(APP_VERSION) else '') + '.')
+        box = self.card(parent, 'My Games', 'Optional. When on, every generated seed is kept with its own save in a '
+                        'named game that you can switch between. When off, seeds are installed directly in the '
+                        'mods folder.')
+        ttk.Checkbutton(box, text='Keep each adventure with its save (adds My Games to the menu)',
+                        variable=self.parties_enabled, command=self.toggle_parties).pack(anchor='w')
+        box = self.card(parent, 'Updates', f'Installed version: {APP_VERSION}'
+                        + (' (experimental)' if updater.is_prerelease(APP_VERSION) else '')
+                        + f' · generator {GENERATOR_VERSION}.')
+        row = self.buttons(box, pady=(0, 6))
+        ttk.Button(row, text='Check now', command=lambda: self.check_for_updates(silent=False)).pack(side='left')
+        ttk.Checkbutton(row, text='Check at start-up', variable=self.check_updates).pack(side='left', padx=(16, 0))
         ttk.Checkbutton(box, text='Use experimental versions (pre-releases)', variable=self.experimental_updates,
                         command=self.experimental_toggled).pack(anchor='w')
         ttk.Label(box, text='Experimental versions get new features first, but may contain bugs or break a seed in progress. '
                   'Untick to go back to the latest stable version: it is offered for download, then the application restarts.',
-                  style='Small.TLabel', wraplength=780).pack(anchor='w', pady=(4, 0))
+                  style='Small.TLabel', wraplength=760).pack(anchor='w', pady=(4, 0))
+
+    def toggle_advanced(self, frame):
+        if frame.winfo_manager():
+            frame.pack_forget()
+            self.advanced_label.set('Advanced  ▸')
+        else:
+            frame.pack(fill='x')
+            self.advanced_label.set('Advanced  ▾')
+
+    def check_paths(self):
+        """Say under each path what was recognised, or what to choose instead."""
+        if not hasattr(self, 'nup_check'):
+            return
+        nup = self.nup.get().strip()
+        if not nup:
+            ok, text = False, 'Choose your game file (.nup).'
+        elif not Path(nup).is_file():
+            ok, text = False, 'No file at this path. Choose the .nup file of the game.'
+        elif Path(nup).suffix.lower() != '.nup':
+            ok, text = False, 'This is not a .nup file. Choose the .nup file of the game.'
+        else:
+            size = Path(nup).stat().st_size / 1e9
+            ok, text = True, f'Game file found ({size:.1f} GB).'
+        self.nup_check.configure(text=('\u2713 ' if ok else '\u2715 ') + text, style='Ok.TLabel' if ok else 'Bad.TLabel')
+        mods = self.mods.get().strip()
+        where = ('PC port: the mods folder next to the game exe (Hookshot, Longshot…). Emulator: the title '
+                 f'folder {TITLE} in its load folder.')
+        if not mods:
+            ok, text = False, 'Choose where seeds go. ' + where
+        else:
+            try:
+                folder = validate_mod_directory(mods)
+                ok = True
+                text = (f'PC port: {folder.parent.name}/mods. Each seed gets its own sub-folder.'
+                        if folder.name.lower() == 'mods' else f'Emulator title folder ({TITLE}).')
+                if not folder.exists():
+                    text += ' The folder is created at the first installation.'
+            except ValueError:
+                ok, text = False, 'Not a mods folder. ' + where
+        self.mods_check.configure(text=('\u2713 ' if ok else '\u2715 ') + text, style='Ok.TLabel' if ok else 'Bad.TLabel')
+
 
     def experimental_toggled(self):
         enabled = self.experimental_updates.get()
@@ -558,20 +844,37 @@ class Application:
             self.error(error)
 
     def qol_installed(self, result):
-        self.status.set('Quality of life installed: ' + str(result.folder))
-        warnings = ''.join('\n\n' + warning for warning in result.warnings)
-        messagebox.showinfo('Quality of life installed', 'Installed in:\n' + str(result.folder) + warnings)
+        if result.warnings:
+            self.show_notice('warn', 'Quality of life installed in ' + str(result.folder), '\n\n'.join(result.warnings))
+        else:
+            self.notify('Quality of life installed in ' + str(result.folder) + '.')
 
     def build_home(self):
         parent = self.home_body
         self.home_seed, self.home_progress, self.home_available = tk.StringVar(), tk.StringVar(), tk.StringVar()
+        self.home_hash = tk.StringVar()
         hero = ttk.Frame(parent, style='Hero.TFrame', padding=(28, 24, 28, 24))
         hero.pack(fill='x', pady=(0, 6))
         ttk.Label(hero, text='CURRENT ADVENTURE', style='HeroField.TLabel').pack(anchor='w')
-        ttk.Label(hero, textvariable=self.home_seed, style='HeroTitle.TLabel').pack(anchor='w', pady=(4, 14))
+        ttk.Label(hero, textvariable=self.home_seed, style='HeroTitle.TLabel', wraplength=650).pack(anchor='w', pady=(4, 0))
+        self.home_hash_label = ttk.Label(hero, textvariable=self.home_hash, style='HeroHash.TLabel')
+        self.home_hash_label.pack(anchor='w', pady=(2, 0))
+        ttk.Frame(hero, style='HeroIn.TFrame', height=12).pack(fill='x')
+        # Regeneration offered by an older seed: why, and what it changes.
+        self.home_regen = ttk.Frame(hero, style='HeroNotice.TFrame', padding=(14, 10, 14, 10))
+        self.home_regen_text = tk.StringVar()
+        ttk.Label(self.home_regen, text='A newer version of this seed can be made', style='HeroNotice.TLabel',
+                  font=self.fonts.strong).pack(anchor='w')
+        ttk.Label(self.home_regen, textvariable=self.home_regen_text, style='HeroNoticeMuted.TLabel',
+                  wraplength=640, justify='left').pack(anchor='w', pady=(2, 8))
+        row = ttk.Frame(self.home_regen, style='HeroNotice.TFrame')
+        row.pack(anchor='w')
+        ttk.Button(row, text='Regenerate', style='HeroNotice.Accent.TButton', command=self.regenerate).pack(side='left')
+        ttk.Button(row, text='Not now', style='HeroNotice.TButton', command=self.dismiss_regeneration).pack(side='left', padx=(8, 0))
         self.home_bar = ttk.Progressbar(hero, style='Hero.Horizontal.TProgressbar', maximum=1, value=0)
         self.home_bar.pack(fill='x')
-        row = ttk.Frame(hero, style='HeroIn.TFrame')
+        self.home_hint = ttk.Label(hero, style='HeroMuted.TLabel', wraplength=650, justify='left')
+        row = self.home_row = ttk.Frame(hero, style='HeroIn.TFrame')
         row.pack(fill='x', pady=(14, 0))
         ttk.Label(row, textvariable=self.home_progress, style='Hero.TLabel').pack(side='left')
         ttk.Label(row, textvariable=self.home_available, style='HeroMuted.TLabel').pack(side='left', padx=(8, 0))
@@ -579,12 +882,13 @@ class Application:
         self.home_primary.pack(side='right')
         self.home_secondary = ttk.Button(row, style='Hero.TButton')
         self.home_secondary.pack(side='right', padx=(0, 10))
-        self.home_regen = ttk.Button(row, text='Regenerate', style='Hero.TButton', command=self.regenerate)
         links = ttk.Frame(parent, style='Page.TFrame')
         links.pack(fill='x', pady=(0, 12))
-        for text, command in [('Open a seed…', self.open_artifact), ('Open the folder', self.open_folder),
-                              ('Spoiler', self.show_spoilers)]:
+        # The spoiler is not offered here: one click too close to the adventure.
+        for text, command in [('Open a seed…', self.open_artifact), ('Open the folder', self.open_folder)]:
             ttk.Button(links, text=text, style='Page.Link.TButton', command=command).pack(side='left', padx=(4, 14))
+        ttk.Button(links, text='Need help?  ›', style='Page.Link.TButton',
+                   command=lambda: self.show_page('help')).pack(side='right', padx=(14, 4))
         tiles = ttk.Frame(parent, style='Page.TFrame')
         tiles.pack(fill='x', pady=(0, 14))
         self.home_tiles = {}
@@ -599,8 +903,11 @@ class Application:
             dot.pack(side='left', padx=(0, 7))
             value = ttk.Label(line, style='Value.TLabel')
             value.pack(side='left')
-            self.home_tiles[key] = {'dot': dot, 'value': value, 'fix': ttk.Button(box, text='Fix ›', style='Link.TButton')}
-        box = self.card(parent)
+            detail = ttk.Label(box, style='Small.TLabel', wraplength=190, justify='left')
+            detail.pack(anchor='w', pady=(3, 0))
+            self.home_tiles[key] = {'dot': dot, 'value': value, 'detail': detail,
+                                    'fix': ttk.Button(box, text='Fix ›', style='Link.TButton')}
+        box = self.home_reach = self.card(parent)
         row = self.buttons(box, pady=(0, 6))
         ttk.Label(row, text='Available now', style='Heading.TLabel').pack(side='left')
         self.home_see_all = ttk.Button(row, text='See all ›', style='Link.TButton',
@@ -610,10 +917,12 @@ class Application:
         self.home_list.pack(fill='x')
         self.render_home_list({})
 
-    def set_tile(self, key, state, text, fix=None):
+
+    def set_tile(self, key, state, text, fix=None, detail=''):
         tile = self.home_tiles[key]
         tile['dot'].configure(image=self.images['dot_' + state])
-        tile['value'].configure(text=text)
+        tile['value'].configure(text=text, foreground=self.colors['amber_text'] if state == 'warn' else self.colors['text'])
+        tile['detail'].configure(text=detail)
         if fix:
             tile['fix'].configure(command=fix)
             if not tile['fix'].winfo_manager():
@@ -621,13 +930,67 @@ class Application:
         else:
             tile['fix'].pack_forget()
 
+
+    def adventure_name(self):
+        """(name, hash) of the open adventure: the party name, or the seed name the player chose;
+        a random seed name is shown as its date, with the name itself as the hash."""
+        if self.party_context:
+            return self.party_context['name'], self.seed_name if RANDOM_SEED.fullmatch(self.seed_name) else ''
+        if not self.artifact:
+            return '', ''
+        if RANDOM_SEED.fullmatch(self.seed_name):
+            try:
+                made = datetime.fromtimestamp((self.artifact / 'manifest.json').stat().st_mtime)
+                name = f'Game of {made.day} {made:%b}'
+            except OSError:
+                name = 'Seed'
+            return name, self.seed_name
+        return self.seed_name, ''
+
+    @staticmethod
+    def grouped(seed_hash):
+        return ' '.join(seed_hash[i:i + 4] for i in range(0, len(seed_hash), 4))
+
+    def update_adventure(self):
+        name, seed_hash = self.adventure_name()
+        if name:
+            self.sidebar.set_adventure('Current adventure', name, self.grouped(seed_hash),
+                                       action=lambda: self.show_page('home'))
+        else:
+            self.sidebar.set_adventure('No adventure yet', 'Create a seed to start',
+                                       action=lambda: self.show_page('newseed'))
+
+    def save_tile(self):
+        """(state, value, detail, fix) of the Save tile: the same verdict as the tracker."""
+        path = Path(self.save_path.get()) if self.save_path.get() else None
+        found = bool(path) and path.is_file()
+        detail = ''
+        if found:
+            try:
+                stamp = datetime.fromtimestamp(path.stat().st_mtime).strftime('%H:%M')
+                detail = f'{path.parent.name} · saved at {stamp}'
+            except OSError:
+                pass
+        if not found:
+            return 'warn', 'Not found', 'Start a game and save once.', lambda: self.show_page('setup')
+        link = self.tracker.link if self.tracker else None
+        if link == 'other':
+            return 'warn', 'Other seed', detail, lambda: self.show_page('tracker')
+        if link == 'linked':
+            return 'ok', 'Linked', detail, None
+        return 'off', 'Found', detail, None
+
     def update_home(self):
         """Home shows the state of the adventure; only problems ask for an action."""
         if not hasattr(self, 'home_tiles'):
             return
         counts = self.tracker_counts if self.tracker else None
-        self.home_seed.set(self.seed_name or 'No adventure yet')
-        if counts:
+        name, seed_hash = self.adventure_name()
+        self.home_seed.set(name or 'No adventure yet')
+        self.home_hash.set(('Seed ' + self.grouped(seed_hash)) if seed_hash else '')
+        self.update_adventure()
+        other_save = bool(self.tracker) and self.tracker.link != 'linked'
+        if counts and not other_save:
             self.home_bar.configure(maximum=max(counts['total'], 1), value=counts['done'])
             self.home_progress.set(f'{counts["done"]} / {counts["total"]} found')
             self.home_available.set(f'·  {counts["available"]} available now')
@@ -635,6 +998,19 @@ class Application:
             self.home_bar.configure(maximum=1, value=0)
             self.home_progress.set('Seed installed' if self.artifact else 'Create a seed to start playing.')
             self.home_available.set('')
+        # Until a save of this seed is read, the bar would say 0 %: say what to do instead.
+        if other_save:
+            self.home_hint.configure(text='Start a new game with this seed, then save once: the tracker links '
+                                     'itself to that save.' if self.tracker.link == 'other' else
+                                     'No save of this seed yet. Start a new game, then save once.')
+            if self.home_bar.winfo_manager():
+                self.home_bar.pack_forget()
+            if not self.home_hint.winfo_manager():
+                self.home_hint.pack(anchor='w', before=self.home_row)
+        else:
+            self.home_hint.pack_forget()
+            if not self.home_bar.winfo_manager():
+                self.home_bar.pack(fill='x', before=self.home_row)
         if self.artifact:
             self.home_primary.configure(text='Continue', command=lambda: self.show_page('tracker'))
             self.home_secondary.configure(text='New seed', command=lambda: self.show_page('newseed'))
@@ -642,9 +1018,18 @@ class Application:
             self.regen_settings = None
             self.home_primary.configure(text='Create a seed', command=lambda: self.show_page('newseed'))
             self.home_secondary.configure(text='Open a seed…', command=self.open_artifact)
-        if self.regen_settings is not None:
+        manifest = self.artifact_manifest or {}
+        dismissed = manifest.get('seed_id') and self.app_state.get('regen_dismissed') == manifest.get('seed_id')
+        if self.regen_settings is not None and not dismissed:
+            made_by = manifest.get('app_version')
+            self.home_regen_text.set(
+                f'This seed was made by version {made_by or "older than 0.7.3"}; this is {APP_VERSION}. '
+                'Regenerating applies the fixes made since, with the same name and settings. Items may be '
+                'placed differently, so a new game may be needed'
+                + ('; the original game stays in My Games.' if self.party_context else '.'))
             if not self.home_regen.winfo_manager():
-                self.home_regen.pack(side='right', padx=(0, 10), after=self.home_secondary)
+                self.home_regen.pack(fill='x', pady=(0, 14), before=self.home_bar if self.home_bar.winfo_manager()
+                                     else self.home_hint if self.home_hint.winfo_manager() else self.home_row)
         else:
             self.home_regen.pack_forget()
         setup = lambda: self.show_page('setup')
@@ -656,21 +1041,31 @@ class Application:
             self.set_tile('mods', 'ok', 'PC port' if self.hookshot_root() else 'Emulator')
         else:
             self.set_tile('mods', 'warn', 'Missing', setup)
-        linked = bool(self.save_path.get()) and Path(self.save_path.get()).is_file()
-        if linked:
-            self.set_tile('save', 'ok', 'Linked')
-        else:
-            self.set_tile('save', 'warn', 'Not linked', setup)
+        state, value, detail, fix = self.save_tile()
+        self.set_tile('save', state, value, fix, detail)
         if self.tracker and self.tracker.live and not self.tracker.live_status:
             self.set_tile('live', 'ok', 'On')
         else:
             self.set_tile('live', 'off', 'Game not running' if self.tracker else 'Waiting for a seed')
         if hasattr(self, 'sync_dot'):
-            self.sync_dot.configure(image=self.images['dot_ok' if linked and self.tracker else 'dot_warn' if self.tracker else 'dot_off'])
+            linked = bool(self.tracker) and self.tracker.link == 'linked'
+            self.sync_dot.configure(image=self.images['dot_ok' if linked else 'dot_warn' if self.tracker else 'dot_off'])
+        # Without a seed the list could only say "create a seed": the hero already does.
+        if self.artifact and not self.home_reach.winfo_manager():
+            self.home_reach.pack(fill='x', pady=(0, 14))
+        elif not self.artifact:
+            self.home_reach.pack_forget()
+            self.home_body.canvas.yview_moveto(0)
+        self.update_tutorial()
         if self.pages['home'][1] != ('Welcome back' if self.artifact else 'Welcome'):
             frame, _, subtitle = self.pages['home']
             self.pages['home'] = (frame, 'Welcome back' if self.artifact else 'Welcome', subtitle)
             self.page_changed()
+
+    def dismiss_regeneration(self):
+        self.write_app_state(regen_dismissed=(self.artifact_manifest or {}).get('seed_id'))
+        self.update_home()
+
 
     def render_home_list(self, states):
         for child in self.home_list.winfo_children():
@@ -693,60 +1088,108 @@ class Application:
             ttk.Label(row, text=TRACKER_KINDS.get(check.get('category', ''), ''), style='Small.TLabel').pack(side='right')
 
     def build_seed_row(self, parent):
-        box = self.card(parent, 'Seed name', 'The same seed name and settings reproduce the same game.')
+        box = ttk.Frame(parent, style='Card.TFrame', padding=(20, 12, 20, 12))
+        box.pack(fill='x', pady=(0, 14))
         row = self.buttons(box)
+        ttk.Label(row, text='SEED NAME', style='Field.TLabel').pack(side='left', padx=(0, 12))
         ttk.Entry(row, textvariable=self.seed).pack(side='left', fill='x', expand=True)
         ttk.Button(row, text='Random', command=lambda: self.seed.set(secrets.token_hex(8))).pack(side='left', padx=(8, 0))
-        row = self.buttons(box, pady=(8, 0))
-        ttk.Label(row, text='Seed string: the seed name and every setting in one text to share.',
-                  style='Muted.TLabel').pack(side='left')
-        ttk.Button(row, text='Paste a seed string…', command=self.import_seed_string).pack(side='right')
-        ttk.Button(row, text='Copy seed string', command=self.copy_seed_string).pack(side='right', padx=(0, 8))
+        ttk.Button(row, text='Paste a seed string…', command=self.import_seed_string).pack(side='left', padx=(8, 0))
 
-    def build_generate_section(self, parent):
-        box = self.card(parent)
-        row = self.buttons(box)
-        self.generate_button = ttk.Button(row, text='Generate and install', style='Accent.TButton', command=self.generate)
+
+    def build_action_bar(self):
+        """New seed: the adventure, its changes and Generate, always in view under the settings."""
+        bar = self.action_bar = ttk.Frame(self.settings_tab, style='Card.TFrame', padding=(22, 12, 22, 12))
+        bar.pack(side='bottom', fill='x', padx=(0, PAGE_GUTTER), pady=(10, 0))
+        left = ttk.Frame(bar)
+        left.pack(side='left', fill='x', expand=True)
+        top = ttk.Frame(left)
+        top.pack(anchor='w')
+        self.action_preset = ttk.Label(top, style='Value.TLabel')
+        self.action_preset.pack(side='left')
+        self.action_changes = ttk.Label(top, style='Changed.TLabel')
+        self.action_reset = ttk.Button(top, style='Link.TButton', command=self.reset_to_preset)
+        self.action_note = ttk.Label(left, style='Small.TLabel', wraplength=360, justify='left')
+        self.action_note.pack(anchor='w', pady=(2, 0))
+        self.action_progress = ttk.Progressbar(left, mode='indeterminate', length=280)
+        self.generate_button = ttk.Button(bar, text='Generate and install', style='Accent.TButton', command=self.generate)
         self.generate_button.pack(side='right')
-        ttk.Label(row, text='Close the game first. The previous seed is archived.', style='Muted.TLabel').pack(side='right', padx=(0, 16))
-        self.log = tk.Text(box, height=5, wrap='word', state='disabled', padx=12, pady=10)
-        return box
+        ttk.Button(bar, text='Copy seed string', command=self.copy_seed_string).pack(side='right', padx=(0, 8))
+        self.log = tk.Text(bar, height=5, wrap='word', state='disabled', padx=12, pady=10)   # job steps, kept off screen
+        self.status.trace_add('write', lambda *args: self.update_action_bar())
+        self.seed.trace_add('write', lambda *args: self.update_action_bar())
+
+    def update_action_bar(self):
+        if not hasattr(self, 'action_bar') or not hasattr(self, 'setting_rows'):
+            return
+        names = dict((key, title) for key, title, _ in self.PRESET_CARDS)
+        base = names.get(self.base_preset, 'Custom')
+        changed = sum(self.changed_count.values()) if hasattr(self, 'changed_count') else 0
+        self.action_preset.configure(text=base)
+        if changed:
+            self.action_changes.configure(text=f'+ {changed} change' + ('s' if changed > 1 else ''))
+            self.action_reset.configure(text=f'Reset to {base}')
+            if not self.action_changes.winfo_manager():
+                self.action_changes.pack(side='left', padx=(8, 0))
+                self.action_reset.pack(side='left', padx=(8, 0))
+        else:
+            self.action_changes.pack_forget()
+            self.action_reset.pack_forget()
+        if self.busy and self.current_page == 'newseed':
+            self.action_note.configure(text=self.status.get())
+            if not self.action_progress.winfo_manager():
+                self.action_progress.pack(anchor='w', pady=(4, 0))
+                self.action_progress.start()
+            self.generate_button.configure(text='Generating…')
+        else:
+            seed = self.seed.get().strip() or '?'
+            self.action_note.configure(text=f'Seed {seed} · Close the game first; the previous seed is archived.')
+            if self.action_progress.winfo_manager():
+                self.action_progress.stop()
+                self.action_progress.pack_forget()
+            self.generate_button.configure(text='Generate and install')
+
 
     PRESET_CARDS = [('prudent', 'Chests only', 'A gentle first run: chests are shuffled, keys and enemies stay as usual.'),
                     ('ap_defaults', 'Classic', 'The standard Archipelago rules. The recommended balance.'),
-                    ('everything', 'Everything', 'Shops, pots, crates, grass, rocks and enemy souls join in.')]
+                    ('everything', 'Everything', 'Shops, songs, pots, crates, grass, rocks and enemy souls join in.')]
 
     def build_categories(self):
         parent = self.settings_body
         self.full_enabled = tk.BooleanVar(value=True)
         self.full_vars, self.category_controls = {}, {}
-        self.full_reason = tk.StringVar(value='Select a setting to read what it does.')
-        self.customize_label, self.customize_hint = tk.StringVar(value='Customize settings  ▸'), tk.StringVar()
+        self.base_preset = 'ap_defaults'   # the preset the "changed" marks compare with
+        self.setting_rows, self.setting_cards, self.setting_nav = {}, {}, {}
+        self.help_rows, self.changed_count = {}, {}
+        self.setting_query = tk.StringVar()
+        self.setting_group = None
+        # Presets: a radio group (Tab to reach it, arrows to move, Enter or Space to choose).
         grid = ttk.Frame(parent, style='Page.TFrame')
         grid.pack(fill='x', pady=(0, 14))
         self.preset_cards = {}
+        keys = [key for key, _, _ in self.PRESET_CARDS]
         for column, (key, name, text) in enumerate(self.PRESET_CARDS):
             grid.columnconfigure(column, weight=1, uniform='presets')
-            box = ttk.Frame(grid, style='Card.TFrame', padding=(18, 18, 18, 18), cursor='hand2')
-            box.grid(row=0, column=column, sticky='nsew', padx=(0 if column == 0 else 6, 0 if column == 2 else 6))
-            art = tk.Canvas(box, width=180, height=76, highlightthickness=0, background=self.colors['green_soft'])
+            ring = tk.Frame(grid, background=self.colors['page'], highlightthickness=2, takefocus=1,
+                            highlightbackground=self.colors['page'], highlightcolor=self.colors['gold'])
+            ring.grid(row=0, column=column, sticky='nsew', padx=(0 if column == 0 else 4, 0 if column == 2 else 4))
+            box = ttk.Frame(ring, style='Card.TFrame', padding=(16, 14, 16, 14), cursor='hand2')
+            box.pack(fill='both', expand=True)
+            art = tk.Canvas(box, width=150, height=58, highlightthickness=0, background=self.colors['green_soft'])
             art.pack(fill='x')
             art.bind('<Configure>', lambda event, a=art, k=key: theme.preset_art(a, k, self.colors))
-            widgets = [box, art, ttk.Label(box, text=name, style='Preset.TLabel'),
+            widgets = [ring, box, art, ttk.Label(box, text=name, style='Preset.TLabel'),
                        ttk.Label(box, text=text, style='Small.TLabel', wraplength=200, justify='left')]
-            widgets[2].pack(anchor='w', pady=(12, 2))
-            widgets[3].pack(anchor='w')
+            widgets[3].pack(anchor='w', pady=(8, 2))
+            widgets[4].pack(anchor='w')
             for widget in widgets:
-                widget.bind('<Button-1>', lambda event, k=key: self.apply_full(rando_options.preset(k), enable=True))
-            self.preset_cards[key] = (box, art)
+                widget.bind('<Button-1>', lambda event, k=key: self.choose_preset(k))
+            for sequence in ('<Return>', '<space>'):
+                ring.bind(sequence, lambda event, k=key: self.choose_preset(k))
+            for sequence, step in (('<Left>', -1), ('<Right>', 1), ('<Up>', -1), ('<Down>', 1)):
+                ring.bind(sequence, lambda event, i=column, s=step: self.preset_cards[keys[(i + s) % len(keys)]][2].focus_set())
+            self.preset_cards[key] = (box, art, ring)
         self.build_seed_row(parent)
-        row = ttk.Frame(parent, style='Page.TFrame')
-        row.pack(fill='x', pady=(0, 12))
-        ttk.Button(row, textvariable=self.customize_label, style='Page.Link.TButton', command=self.toggle_details).pack(side='left', padx=(4, 12))
-        ttk.Label(row, textvariable=self.customize_hint, style='Page.TLabel').pack(side='left')
-        self.details = ttk.Frame(parent, style='Page.TFrame')
-        details = self.details
-        ttk.Label(details, textvariable=self.full_reason, style='Page.TLabel', wraplength=780, justify='left').pack(anchor='w', padx=4, pady=(0, 10))
         visible = {}
         for option in rando_options.OPTIONS:
             if option.kind in ('items', 'list'):
@@ -769,13 +1212,39 @@ class Application:
             if name not in placed:
                 leftovers.setdefault(option.tab, []).append(name)
         groups += [(tab, '', names) for tab, names in leftovers.items()]
+        groups = [group for group in groups if group[2]]
+        # The groups are tabs on the left: one group shown at a time, the first one at first.
+        area = ttk.Frame(parent, style='Page.TFrame')
+        area.pack(fill='x')
+        nav = ttk.Frame(area, style='Page.TFrame')
+        nav.pack(side='left', fill='y', anchor='n', padx=(0, 14))
+        self.setting_search = theme.search_entry(nav, self.setting_query, 'Find a setting   /', width=22)
+        self.setting_search.pack(fill='x', pady=(0, 8))
+        content = ttk.Frame(area, style='Page.TFrame')
+        content.pack(side='left', fill='both', expand=True)
+        def tab(title):
+            item = ttk.Frame(nav, style='Tab.TFrame', padding=(10, 6, 10, 6), cursor='hand2', takefocus=1)
+            item.pack(fill='x', pady=(0, 3))
+            label = ttk.Label(item, text=title, style='Tab.TLabel')
+            label.pack(side='left')
+            count = ttk.Label(item, style='TabBadge.TLabel')
+            count.pack(side='right', padx=(8, 0))
+            for widget in (item, label, count):
+                widget.bind('<Button-1>', lambda event, t=title: self.show_setting_group(t))
+            for sequence in ('<Return>', '<space>'):
+                item.bind(sequence, lambda event, t=title: self.show_setting_group(t))
+            item.bind('<Up>', lambda event, t=title: self.step_setting_group(t, -1))
+            item.bind('<Down>', lambda event, t=title: self.step_setting_group(t, 1))
+            self.setting_nav[title] = (item, label, count)
         for title, note, names in groups:
-            if not names:
-                continue
-            frame = self.card(details, title, note or None)
+            tab(title)
+            frame = self.card(content, title, note or None)
+            frame.pack_forget()
+            self.setting_cards[title] = frame
             rows = ttk.Frame(frame)
             rows.pack(fill='x')
             rows.columnconfigure(0, weight=1)
+            self.setting_group = title
             for index, name in enumerate(names):
                 if name.startswith('game:'):
                     key = name[len('game:'):]
@@ -783,34 +1252,144 @@ class Application:
                     self.switch_row(rows, index, text, self.options[key], tip=text + '\n' + OPTION_TIPS[key])
                 else:
                     self.option_row(rows, index, visible[name])
-        box = self.card(details, 'Quality of life', 'Choose each option for your game. Turbo A applies to this app.')
+        ttk.Frame(nav, style='Page.TFrame', height=1).pack(fill='x', pady=6)
+        title = 'Quality of life'
+        tab(title)
+        box = self.setting_cards[title] = self.card(content, title, 'Choose each option for your game. Turbo A applies to this app.')
+        box.pack_forget()
         rows = ttk.Frame(box)
         rows.pack(fill='x')
         rows.columnconfigure(0, weight=1)
+        self.setting_group = title
         for index, (name, text) in enumerate(SKIP_OPTIONS):
             self.switch_row(rows, index, text, self.options[name],
-                            tip='Applies when you generate a game. Turn off to keep the original behaviour.')
+                            tip=text + '\nApplies when you generate a game. Turn off to keep the original behaviour.')
         self.switch_row(rows, len(SKIP_OPTIONS), 'Turbo A: hold A in a dialogue', self.turbo_enabled,
                         command=self.turbo_toggled,
-                        tip='PC port: repeat A while held in a dialogue. Remembered between app starts; takes effect immediately.')
-        box = self.card(details, 'Share these settings')
+                        tip='Turbo A\nPC port: repeat A while held in a dialogue. Remembered between app starts; takes effect immediately.')
+        title = 'Share these settings'
+        tab(title)
+        box = self.setting_cards[title] = self.card(content, title, 'A file of these settings, or an Archipelago YAML.')
+        box.pack_forget()
         row = self.buttons(box)
         ttk.Button(row, text='Import…', command=self.import_settings).pack(side='left')
         ttk.Button(row, text='Export…', command=self.export_settings).pack(side='left', padx=8)
         ttk.Button(row, text='Export an Archipelago YAML…', style='Link.TButton', command=self.export_ap_yaml).pack(side='right')
         ttk.Button(row, text='Import an Archipelago YAML…', style='Link.TButton', command=self.import_ap_yaml).pack(side='right', padx=14)
-        self.generate_card = self.build_generate_section(parent)
+        self.setting_group = None
+        self.setting_query.trace_add('write', lambda *args: self.show_setting_group())
+        self.root.bind_all('<Key-slash>', self.focus_setting_search, add='+')
         for name in {o for opts in rando_options.CATEGORY_OPTIONS.values() for o, _, _ in opts}:
             self.full_vars[name].trace_add('write', lambda *args: self.sync_categories())
+        self.show_setting_group(groups[0][0])
         self.apply_full(rando_options.preset('ap_defaults'), enable=True)
 
+    def focus_setting_search(self, event):
+        """/ jumps to the setting search, unless a field is being typed in."""
+        if self.current_page != 'newseed' or isinstance(event.widget, (tk.Entry, ttk.Entry, tk.Text, ttk.Spinbox)):
+            return None
+        self.setting_search.focus_set()
+        return 'break'
+
+    def step_setting_group(self, title, step):
+        titles = list(self.setting_nav)
+        target = titles[(titles.index(title) + step) % len(titles)]
+        self.show_setting_group(target)
+        self.setting_nav[target][0].focus_set()
+        return 'break'
+
+    def show_setting_group(self, title=None):
+        """One group at a time; while searching, the matching settings of every group."""
+        if title is not None:
+            self.setting_group = title
+            if self.setting_query.get():
+                self.setting_query.set('')   # calls back here
+                return
+        query = self.setting_query.get().strip().casefold()
+        hits = {}
+        for name, record in self.setting_rows.items():
+            match = not query or query in record['search']
+            if match:
+                hits[record['group']] = hits.get(record['group'], 0) + 1
+            # grid_remove() keeps each widget's place; removed ones are no longer grid slaves.
+            if match:
+                for widget in record.pop('removed', ()):
+                    if widget.winfo_exists():
+                        widget.grid()
+            elif 'removed' not in record:
+                record['removed'] = (record['parent'].grid_slaves(row=record['row'])
+                                     + record['parent'].grid_slaves(row=record['row'] + 1))
+                for widget in record['removed']:
+                    widget.grid_remove()
+        for group, card in self.setting_cards.items():
+            shown = (bool(hits.get(group)) or query in group.casefold()) if query else group == self.setting_group
+            if shown and not card.winfo_manager():
+                card.pack(fill='x', pady=(0, 14))
+            elif not shown and card.winfo_manager():
+                card.pack_forget()
+        # Keep the cards in the order of the tabs.
+        for group, card in self.setting_cards.items():
+            if card.winfo_manager():
+                card.pack_forget()
+                card.pack(fill='x', pady=(0, 14))
+        for group, (item, label, count) in self.setting_nav.items():
+            on = not query and group == self.setting_group
+            prefix = 'TabOn' if on else 'Tab'
+            item.configure(style=prefix + '.TFrame')
+            label.configure(style=prefix + '.TLabel')
+            if query:
+                count.configure(text=str(hits.get(group, '')), style=prefix + 'Hit.TLabel')
+            else:
+                changed = self.changed_count.get(group, 0)
+                count.configure(text=f'{changed} changed' if changed else '', style=prefix + 'Badge.TLabel')
+
+    def choose_preset(self, key):
+        self.base_preset = key
+        self.apply_full(rando_options.preset(key), enable=True)
+
+    def reset_to_preset(self):
+        self.apply_full(rando_options.preset(self.base_preset), enable=True)
+
+    def set_full_value(self, name, value):
+        option, variable = rando_options.BY_NAME[name], self.full_vars[name]
+        variable.set(value)
+        if option.kind == 'choice':
+            variable.display.set(variable.labels[[v for v, _, _ in option.values].index(value)])
+
+    def reset_option(self, name):
+        self.set_full_value(name, rando_options.validate(rando_options.preset(self.base_preset))[name])
+        self.update_presets()
+
+    def update_changes(self):
+        """Mark each setting that differs from the chosen preset, and count them per group."""
+        if not hasattr(self, 'setting_rows'):
+            return
+        base = rando_options.validate(rando_options.preset(self.base_preset))
+        counts = {}
+        for name, record in self.setting_rows.items():
+            if name not in base or name == 'fast_chests':
+                continue
+            try:
+                changed = self.full_value(rando_options.BY_NAME[name]) != base[name]
+            except Exception:
+                changed = True
+            marks = record['marks'][0]
+            marks.shown = changed
+            if changed:
+                counts[record['group']] = counts.get(record['group'], 0) + 1
+            elif marks.winfo_manager():
+                marks.pack_forget()
+        self.changed_count = counts
+        for parent in {record['parent'] for record in self.setting_rows.values()}:
+            self.fit_labels(parent, parent.winfo_width())
+        if self.setting_cards:
+            self.show_setting_group()
+        self.update_action_bar()
+
+
     def toggle_details(self):
-        if self.details.winfo_manager():
-            self.details.pack_forget()
-            self.customize_label.set('Customize settings  ▸')
-        else:
-            self.details.pack(fill='x', before=self.generate_card)
-            self.customize_label.set('Customize settings  ▾')
+        """Kept for older scripts: the settings are always shown now, one group at a time."""
+
 
     def update_presets(self):
         """Highlights the preset matching the current settings, if any."""
@@ -823,38 +1402,113 @@ class Application:
         current = next((key for key in self.preset_cards
                         if dict(rando_options.validate(rando_options.preset(key)),
                                 fast_chests=values['fast_chests']) == values), None)
-        for key, (box, art) in self.preset_cards.items():
-            box.configure(style='CardSelected.TFrame' if key == current else 'Card.TFrame')
-            art.configure(background=self.colors['gold_soft' if key == current else 'green_soft'])
-        self.customize_hint.set('' if current else 'Custom settings')
+        self.current_preset = current
+        if current:
+            self.base_preset = current
+        for key, (box, art, ring) in self.preset_cards.items():
+            box.configure(style='CardSelected.TFrame' if key == self.base_preset else 'Card.TFrame')
+            art.configure(background=self.colors['gold_soft' if key == self.base_preset else 'green_soft'])
+        self.update_changes()
+        self.update_archipelago_controls()
 
-    def label_cell(self, parent, index, text, tip=None, wraplength=520, cursor=''):
-        """Column 0 of a settings row: the label, then an ⓘ carrying ``tip`` as a tooltip."""
+    def label_cell(self, parent, index, text, tip=None, wraplength=460, cursor=''):
+        """Column 0 of a settings row: the label, an ⓘ button that unfolds ``tip`` under the row
+        (click, Enter or Space; hovering still shows it), then the "changed" mark and its ↺."""
+        row = index * 2
         cell = ttk.Frame(parent)
-        cell.grid(row=index, column=0, sticky='w', padx=(0, 18), pady=7)
-        label = ttk.Label(cell, text=text, wraplength=wraplength, justify='left', cursor=cursor)
+        cell.grid(row=row, column=0, sticky='w', padx=(0, 18), pady=7)
+        line = ttk.Frame(cell)
+        line.pack(anchor='w')
+        label = ttk.Label(line, text=text, wraplength=wraplength, justify='left', cursor=cursor)
         label.pack(side='left')
         icon = None
         if tip:
-            icon = theme.info_icon(cell, self.fonts, background=self.colors['surface'])
+            icon = theme.info_icon(line, self.fonts, background=self.colors['surface'])
+            icon.configure(takefocus=1, cursor='hand2', highlightthickness=1, highlightcolor=self.colors['gold'],
+                           highlightbackground=self.colors['surface'])
             icon.pack(side='left', padx=(4, 0))
+            for sequence in ('<Button-1>', '<Return>', '<space>'):
+                icon.bind(sequence, lambda event: self.toggle_help(parent, row, tip))
+        # "changed" and its reset: on the label's line when there is room, else under it.
+        marks = ttk.Frame(cell)
+        marks.shown = False
+        ttk.Label(marks, text='changed', style='Changed.TLabel').pack(side='left')
+        reset = ttk.Button(marks, text='↺', width=2, style='Link.TButton')
+        reset.pack(side='left', padx=(2, 0))
+        if parent is not None:
+            # The label wraps in the room the control leaves: nothing is cut at 1040 px.
+            if not hasattr(parent, 'fit_rows'):
+                parent.fit_rows = []
+                parent.bind('<Configure>', lambda event: self.fit_labels(parent, event.width), add='+')
+            parent.fit_rows.append((cell, line, label, marks))
+        if parent is not None and getattr(self, 'setting_group', None):
+            self.current_row = {'group': self.setting_group, 'parent': parent, 'row': row,
+                                'search': (text + ' ' + (tip or '')).casefold(), 'marks': (marks, reset)}
         return label, icon
+
+    def fit_labels(self, parent, width):
+        if width <= 1:
+            return   # not laid out yet: done again at its first <Configure>
+        if not hasattr(self, 'label_font'):
+            self.label_font = tkfont.Font(root=self.root, font=self.fonts.body)
+        # The control column is as wide as its widest control, whatever the row.
+        controls = max((w.winfo_reqwidth() for w in parent.grid_slaves(column=1)), default=0)
+        space = width - controls - 40
+        for cell, line, label, marks in parent.fit_rows:
+            icon = sum(w.winfo_reqwidth() + 4 for w in line.winfo_children() if w is not label and w is not marks)
+            needed = marks.winfo_reqwidth() + 8 if marks.shown else 0
+            inline = self.label_font.measure(label.cget('text')) + icon + needed <= space
+            label.configure(wraplength=max(120, min(460, space - icon - (needed if inline else 0))))
+            if not marks.shown:
+                if marks.winfo_manager():
+                    marks.pack_forget()
+                continue
+            where = str(line if inline else cell)
+            if marks.winfo_manager() and marks.pack_info().get('in') is not None and str(marks.pack_info()['in']) == where:
+                continue
+            marks.pack_forget()
+            if inline:
+                marks.pack(in_=line, side='left', padx=(8, 0))
+            else:
+                marks.pack(in_=cell, anchor='w', pady=(2, 0))
+
+    def register_row(self, name):
+        record = getattr(self, 'current_row', None)
+        if record is not None:
+            self.setting_rows[name] = record
+            record['marks'][1].configure(command=lambda: self.reset_option(name))
+            self.current_row = None
+
+    def toggle_help(self, parent, row, tip):
+        key = (str(parent), row)
+        if key in self.help_rows:
+            self.help_rows.pop(key).destroy()
+            return 'break'
+        body = tip.partition('\n')[2].strip() or tip
+        help_label = ttk.Label(parent, text=body, style='Help.TLabel', wraplength=620, justify='left')
+        help_label.grid(row=row + 1, column=0, columnspan=2, sticky='ew', pady=(0, 8))
+        self.help_rows[key] = help_label
+        return 'break'
+
 
     def switch_row(self, parent, index, text, variable, command=None, tip=None):
         """Label on the left, switch on the right; clicking the label toggles too."""
         label, icon = self.label_cell(parent, index, text, tip, cursor='hand2')
-        widget = ttk.Checkbutton(parent, variable=variable, command=command)
-        widget.grid(row=index, column=1, sticky='e', pady=7)
+        row = index * 2
+        widget = ttk.Checkbutton(parent, variable=variable, command=command, style='Bare.TCheckbutton')
+        widget.grid(row=row, column=1, sticky='e', pady=7)
         def click(event):
             if 'disabled' not in widget.state():
                 widget.invoke()
                 widget.focus_set()
         label.bind('<Button-1>', click)
         if tip:
-            theme.Tooltip((label, icon, widget), tip, self.fonts)
+            theme.Tooltip((label, widget), tip, self.fonts)
         if index:
-            theme.rule(parent).grid(row=index, column=0, columnspan=2, sticky='new')
+            theme.rule(parent).grid(row=row, column=0, columnspan=2, sticky='new')
+        self.register_row(f'switch:{str(parent)}:{row}')
         return widget
+
 
     def sync_categories(self):
         """Complete mode: each checkbox shows the state of its solver options."""
@@ -879,42 +1533,53 @@ class Application:
         self.sync_categories()
 
     def build_tracker(self):
-        parent = self.tracker_tab
+        parent = ttk.Frame(self.tracker_tab, style='Page.TFrame', padding=(0, 0, PAGE_GUTTER, 0))
+        parent.pack(fill='both', expand=True)
         bar = ttk.Frame(parent, style='Page.TFrame')
         bar.pack(fill='x', pady=(0, 10))
         self.sync_dot = ttk.Label(bar, style='Page.TLabel', image=self.images['dot_off'])
         self.sync_dot.pack(side='left', padx=(4, 8))
-        ttk.Label(bar, textvariable=self.connection_status, style='Page.TLabel', wraplength=470, justify='left').pack(side='left')
+        ttk.Label(bar, textvariable=self.connection_status, style='Page.TLabel', wraplength=340, justify='left').pack(side='left')
         ttk.Button(bar, text='Change', style='Page.Link.TButton', command=lambda: self.show_page('setup')).pack(side='left', padx=(10, 0))
         ttk.Button(bar, text='Pop-out window', style='Page.Link.TButton', command=self.toggle_overlay).pack(side='right')
         ttk.Button(bar, text='In-game overlay', style='Page.Link.TButton', command=self.toggle_hud).pack(side='right', padx=14)
         box = self.card(parent, fill='both', expand=True)
         self.tracker_box = box
-        top = self.buttons(box, pady=(0, 12))
+        # Why every location is Unknown, when the save is not one of this seed.
+        self.tracker_notice, self.tracker_notice_key = ttk.Frame(box), None
+        top = self.tracker_top = self.buttons(box, pady=(0, 10))
+        self.tracker_view = 'locations'
+        self.view_switch = theme.Segmented(top, [('locations', 'Locations'), ('keys', 'Keys'), ('souls', 'Souls')],
+                                           self.set_tracker_view)
+        self.view_switch.pack(side='left')
+        theme.search_entry(top, self.tracker_search, 'Search a location, a reward…', width=28).pack(side='right')
+        filters = self.tracker_filters = self.buttons(box, pady=(0, 12))
         self.counters = {}
-        # Location filters, then two views of their own (shown when the seed has them):
-        # dungeon keys and enemy souls, each replacing the location list.
-        for key, label in [('available', 'Available'), ('blocked', 'Not yet'), ('done', 'Done'), ('all', 'All'),
-                           ('keys', 'Keys'), ('souls', 'Souls')]:
-            frame = ttk.Frame(top, padding=(12, 7, 12, 8), cursor='hand2')
+        # The counters are the filters of the location list; each wears the mark of its rows.
+        for key, label in [('available', 'Available'), ('blocked', 'Blocked'), ('unknown', 'Unknown'),
+                           ('done', 'Done'), ('all', 'All')]:
+            frame = ttk.Frame(filters, padding=(12, 7, 12, 8), cursor='hand2', takefocus=1)
             frame.pack(side='left', padx=(0, 6))
             count = ttk.Label(frame, text='–', width=5)
             count.pack(anchor='w')
-            name = ttk.Label(frame, text=label)
+            name = ttk.Label(frame, text=(' ' + label) if key != 'all' else label, compound='left',
+                             image=self.images['state_' + key] if key != 'all' else '')
             name.pack(anchor='w')
             for widget in (frame, count, name):
                 widget.bind('<Button-1>', lambda event, k=key: self.set_tracker_filter(k))
+            for sequence in ('<Return>', '<space>'):
+                frame.bind(sequence, lambda event, k=key: self.set_tracker_filter(k))
             self.counters[key] = (frame, count, name)
-        ttk.Entry(top, textvariable=self.tracker_search, width=18).pack(side='right')
-        ttk.Label(top, text='Search', style='Small.TLabel').pack(side='right', padx=(0, 8))
-        self.tracker_rows = ttk.Frame(box)
+        self.tracker_views = ttk.Frame(box)
+        self.tracker_views.pack(fill='both', expand=True)
+        self.tracker_rows = ttk.Frame(self.tracker_views)
         self.tracker_rows.pack(fill='both', expand=True)
-        self.keys_rows = ttk.Frame(box)
-        self.souls_rows = ttk.Frame(box)
+        self.keys_rows = ttk.Frame(self.tracker_views)
+        self.souls_rows = ttk.Frame(self.tracker_views)
         self.keys_tree, self.keys_shown = None, None
         self.souls_tree, self.souls_open, self.souls_shown = None, {}, None
         footer = ttk.Frame(box)
-        footer.pack(side='bottom', fill='x', before=self.tracker_rows)
+        footer.pack(side='bottom', fill='x', before=self.tracker_views)
         row = ttk.Frame(footer)
         row.pack(fill='x', pady=(10, 0))
         ttk.Label(row, textvariable=self.tracker_summary, wraplength=600, style='Small.TLabel').pack(side='left')
@@ -925,21 +1590,59 @@ class Application:
         ttk.Label(footer, textvariable=self.hud_status, style='Small.TLabel').pack(anchor='w')
         self.set_tracker_filter('all')
 
+
     def set_tracker_filter(self, key):
-        """The counters above the list are also its filter; Keys and Souls show their own view."""
+        """The counters above the list are its filter; Keys and Souls are views of their own."""
+        if key in ('keys', 'souls'):
+            self.set_tracker_view(key)
+            return
         self.tracker_filter = key
         for name, (frame, count, label) in self.counters.items():
             prefix = 'TabOn' if name == key else 'Tab'
             frame.configure(style=prefix + '.TFrame')
             count.configure(style=prefix + 'Count.TLabel')
             label.configure(style=prefix + '.TLabel')
-        shown = {'keys': self.keys_rows, 'souls': self.souls_rows}.get(key, self.tracker_rows)
-        for view in (self.tracker_rows, self.keys_rows, self.souls_rows):
-            if view is not shown and view.winfo_manager():
-                view.pack_forget()
+        self.set_tracker_view('locations')
+
+    def set_tracker_view(self, view):
+        self.tracker_view = view
+        self.view_switch.set(view)
+        if view == 'locations' and not self.tracker_filters.winfo_manager():
+            self.tracker_filters.pack(fill='x', pady=(0, 12), before=self.tracker_views)
+        elif view != 'locations' and self.tracker_filters.winfo_manager():
+            self.tracker_filters.pack_forget()
+        shown = {'keys': self.keys_rows, 'souls': self.souls_rows}.get(view, self.tracker_rows)
+        for frame in (self.tracker_rows, self.keys_rows, self.souls_rows):
+            if frame is not shown and frame.winfo_manager():
+                frame.pack_forget()
         if not shown.winfo_manager():
             shown.pack(fill='both', expand=True)
         self.render_tracker()
+
+    def update_tracker_notice(self):
+        """A banner over the list while the save read is not one of this seed."""
+        link = self.tracker.link if self.tracker else None
+        key = 'other' if link == 'other' else 'none' if link == 'none' and not self.save_path.get() else None
+        if key == self.tracker_notice_key:
+            return
+        self.tracker_notice_key = key
+        for child in self.tracker_notice.winfo_children():
+            child.destroy()
+        if key is None:
+            self.tracker_notice.pack_forget()
+            return
+        if key == 'other':
+            title = 'This save belongs to another seed'
+            text = ('Every location stays Unknown until the tracker reads a save of this seed. Start a new game '
+                    'with this seed and save once, or pick the right save.')
+        else:
+            title = 'No save of this seed yet'
+            text = 'Start a new game with this seed and save once: the tracker finds the save by itself.'
+        theme.Notice(self.tracker_notice, 'warn', title, text,
+                     [('Pick another save…', self.choose_save), ('Open Setup', lambda: self.show_page('setup'))],
+                     on_close=lambda: self.tracker_notice.pack_forget(), wraplength=620).pack(fill='x')
+        self.tracker_notice.pack(fill='x', pady=(0, 12), before=self.tracker_top)
+
 
     def build_multiworld(self):
         parent = self.multiworld_body
@@ -960,11 +1663,22 @@ class Application:
         self.ap_export_button = ttk.Button(row, text='Export my YAML…', command=self.export_multiworld_yaml)
         self.ap_export_button.pack(side='left')
         ttk.Button(row, text='Host needs the apworld?', style='Link.TButton', command=self.build_apworld).pack(side='left', padx=16)
+        self.ap_export_info = ttk.Label(body, style='Small.TLabel', wraplength=640, justify='left')
         body = step('Add the patch the host sent back', 'The .aprmk file from the zip Archipelago produced. The seed is generated and installed right away.')
         self.ap_patch_button = ttk.Button(body, text='Choose the patch…', command=self.generate_from_patch)
         self.ap_patch_button.pack(anchor='w')
         body = step('Connect to the server', 'Checks you find in game are sent to the server.')
-        row = self.buttons(body)
+        # Locked until a seed of an Archipelago patch is open: only the reason is shown.
+        self.ap_lock = ttk.Label(body, text='Locked until the seed of the patch is installed (step 2).',
+                                 style='Muted.TLabel')
+        connect = self.ap_connect = ttk.Frame(body)
+        status = ttk.Frame(connect)
+        status.pack(fill='x', pady=(0, 10))
+        self.ap_dot = ttk.Label(status, image=self.images['dot_off'])
+        self.ap_dot.pack(side='left', padx=(0, 8))
+        ttk.Label(status, textvariable=self.ap_status, style='Value.TLabel', wraplength=600,
+                  justify='left').pack(side='left', fill='x')
+        row = self.buttons(connect)
         for label, variable, width, extra in [('SERVER', self.ap_address, 26, {}), ('SLOT', self.ap_slot, 16, {}),
                                               ('PASSWORD', self.ap_password, 12, {'show': '•'})]:
             field = ttk.Frame(row)
@@ -973,27 +1687,73 @@ class Application:
             ttk.Entry(field, textvariable=variable, width=width, **extra).pack(fill='x', pady=(5, 0))
         self.ap_button = ttk.Button(row, text='Connect', style='Accent.TButton', command=self.toggle_archipelago)
         self.ap_button.pack(side='left', anchor='s')
-        ttk.Label(body, textvariable=self.ap_status, style='Small.TLabel', wraplength=640).pack(anchor='w', pady=(10, 8))
-        self.ap_log = tk.Text(body, height=8, wrap='word', state='disabled', padx=12, pady=10)
-        self.ap_log.pack(fill='x')
-        row = self.buttons(body, pady=(8, 0))
+        # The log and the chat only exist once connected.
+        live = self.ap_live = ttk.Frame(connect)
+        self.ap_log = tk.Text(live, height=8, wrap='word', state='disabled', padx=12, pady=10)
+        self.ap_log.pack(fill='x', pady=(12, 0))
+        row = self.buttons(live, pady=(8, 0))
         chat = ttk.Entry(row, textvariable=self.ap_chat)
         chat.pack(side='left', fill='x', expand=True)
         chat.bind('<Return>', lambda event: self.send_archipelago_chat())
         ttk.Button(row, text='Send', command=self.send_archipelago_chat).pack(side='left', padx=(8, 0))
         self.update_archipelago_controls()
 
+
+    def multiworld_signature(self):
+        """The settings a multiworld YAML carries: an export stays valid while they do not change."""
+        import hashlib
+        try:
+            values = rando_options.validate(self.full_values())
+        except Exception:
+            return None
+        text = json.dumps([values, self.options['open_forest'].get()], sort_keys=True, default=str)
+        return hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]
+
     def update_archipelago_controls(self):
+        if not hasattr(self, 'ap_steps'):
+            return
         self.ap_button.state(['!disabled'] if self.ap_manifest or self.ap_client else ['disabled'])
         self.ap_button.configure(text='Disconnect' if self.ap_client else 'Connect')
+        record = self.app_state.get('ap_yaml_export')
+        record = record if isinstance(record, dict) else None
+        exported = bool(record) and record.get('settings') == self.multiworld_signature()
+        if record:
+            self.ap_export_info.configure(
+                text=f'\u2713 Exported for {record.get("player", "?")} · {record.get("preset", "")} · {record.get("date", "")}'
+                if exported else f'Settings changed since the export of {record.get("date", "")}: export again.',
+                style='Ok.TLabel' if exported else 'Small.TLabel')
+        elif self.app_state.get('ap_yaml_exported'):
+            # Exports made by older versions kept no record of their settings: they cannot be checked.
+            self.ap_export_info.configure(text='A YAML was exported before this version, without a record of its '
+                                          'settings: export again to keep track of them.', style='Small.TLabel')
+        shown = bool(record or self.app_state.get('ap_yaml_exported'))
+        if shown and not self.ap_export_info.winfo_manager():
+            self.ap_export_info.pack(anchor='w', pady=(8, 0))
+        elif not shown:
+            self.ap_export_info.pack_forget()
         # The three steps: done ones are checked, the next one is highlighted.
-        done = [bool(self.app_state.get('ap_yaml_exported') or self.ap_manifest), bool(self.ap_manifest), bool(self.ap_client)]
+        done = [exported or bool(self.ap_manifest), bool(self.ap_manifest), bool(self.ap_client)]
         current = next((index for index, value in enumerate(done) if not value), None)
         for index, (box, mark) in enumerate(self.ap_steps):
             mark.set('done' if done[index] else 'on' if index == current else 'off', str(index + 1))
             box.configure(style='CardSelected.TFrame' if index == current else 'Card.TFrame')
         self.ap_export_button.configure(style='Accent.TButton' if current == 0 else 'TButton')
         self.ap_patch_button.configure(style='Accent.TButton' if current == 1 else 'TButton')
+        unlocked = bool(self.ap_manifest or self.ap_client)
+        if unlocked:
+            self.ap_lock.pack_forget()
+            if not self.ap_connect.winfo_manager():
+                self.ap_connect.pack(fill='x')
+        else:
+            self.ap_connect.pack_forget()
+            if not self.ap_lock.winfo_manager():
+                self.ap_lock.pack(anchor='w')
+        if self.ap_client and not self.ap_live.winfo_manager():
+            self.ap_live.pack(fill='x')
+        elif not self.ap_client and self.ap_live.winfo_manager():
+            self.ap_live.pack_forget()
+        self.ap_dot.configure(image=self.images['dot_ok' if self.ap_client else 'dot_off'])
+
 
     def set_archipelago_seed(self, manifest):
         """A seed was opened: the client follows it only when it comes from an Archipelago patch."""
@@ -1010,6 +1770,8 @@ class Application:
         self.update_archipelago_controls()
 
     def toggle_archipelago(self):
+        if self.busy:
+            return
         from oot_rando.archipelago.client import ArchipelagoClient, ClientError
         if self.ap_client:
             self.stop_archipelago()
@@ -1025,6 +1787,8 @@ class Application:
             self.ap_status.set(str(error))
             return
         self.write_app_state(ap_address=self.ap_address.get().strip())
+        if self.party_context:
+            self.party_library.set_address(self.party_context['id'], self.ap_address.get())
         self.ap_client, self.ap_log_seen = client, 0
         self.ap_log.configure(state='normal')
         self.ap_log.delete('1.0', 'end')
@@ -1070,6 +1834,7 @@ class Application:
         if client.fatal:
             self.ap_client = None
             self.update_archipelago_controls()
+            self.ap_dot.configure(image=self.images['dot_error'])
 
     # ------------------------------------------------------- app state
     @staticmethod
@@ -1088,15 +1853,142 @@ class Application:
         except OSError:
             pass
 
+    def prompt_longshot_channel(self, channels, default_channel=None):
+        """Ask which Longshot channel to use; the chosen channel entry, or None when cancelled."""
+        if not channels:
+            return None
+        dialog = tk.Toplevel(self.root)
+        dialog.title('Choose Longshot channel')
+        dialog.transient(self.root)
+        dialog.resizable(False, False)
+        dialog.configure(background=self.colors['page'])
+        frame = ttk.Frame(dialog, padding=(22, 18), style='Page.TFrame')
+        frame.pack(fill='both', expand=True)
+        ttk.Label(frame, text='Your Longshot folder moved', style='Heading.TLabel').pack(anchor='w')
+        ttk.Label(frame, text='The saved mods folder no longer exists and several Longshot channels are '
+                              'installed. Choose the one to use:',
+                  style='Muted.TLabel', wraplength=460, justify='left').pack(anchor='w', pady=(4, 12))
+        known = any(c['channel'] == default_channel for c in channels)
+        selected = tk.StringVar(value=default_channel if known else channels[0]['channel'])
+        for channel in channels:
+            ttk.Radiobutton(frame, text=f"{channel['label']}  —  {channel['version_name']}",
+                            value=channel['channel'], variable=selected).pack(anchor='w', pady=3)
+            ttk.Label(frame, text='    ' + str(channel['mods_dir']), style='Small.TLabel',
+                      wraplength=460).pack(anchor='w', pady=(0, 6))
+        chosen = []
+
+        def confirm(_event=None):
+            chosen.append(next((c for c in channels if c['channel'] == selected.get()), channels[0]))
+            dialog.destroy()
+
+        buttons = ttk.Frame(frame, style='Page.TFrame')
+        buttons.pack(fill='x', pady=(12, 0))
+        ttk.Button(buttons, text='Cancel', command=dialog.destroy).pack(side='right', padx=(8, 0))
+        ttk.Button(buttons, text='Use this channel', style='Accent.TButton', command=confirm).pack(side='right')
+        dialog.bind('<Return>', confirm)
+        dialog.bind('<Escape>', lambda _event: dialog.destroy())
+        dialog.protocol('WM_DELETE_WINDOW', dialog.destroy)
+        dialog.update_idletasks()
+        x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - dialog.winfo_width()) // 2)
+        y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - dialog.winfo_height()) // 2)
+        dialog.geometry(f'+{x}+{y}')
+        dialog.grab_set()
+        self.root.wait_window(dialog)
+        return chosen[0] if chosen else None
+
+    def resolve_longshot_mods(self, path):
+        """The mods folder a saved or picked Longshot path stands for now ('' when none was chosen).
+
+        A path which is still a port's mods folder is kept as it is: an older build or another
+        channel is the player's choice. Only a vanished path (or a Longshot root or channel folder
+        picked by hand) is replaced: by the newest build of its only channel, else by the
+        channel the player chooses."""
+        info = pc_port.resolve_longshot_update(path)
+        if info['status'] == 'upgraded':
+            return str(info['recommended']['mods_dir'])
+        if info['status'] == 'choose_channel':
+            chosen = self.prompt_longshot_channel(info['channels'], default_channel=info['current_channel'])
+            return str(chosen['mods_dir']) if chosen is not None else ''
+        return ''
+
+    def normalize_chosen_mods_dir(self, raw_path):
+        """A folder picked with Browse…: a port folder becomes its mods, a Longshot root or channel
+        folder becomes the mods of the build to use; anything else is kept."""
+        folder = pc_port.normalize_port_mods_dir(raw_path)
+        if not folder or Path(folder).name.upper() == TITLE or pc_port.is_port_mods_dir(folder):
+            return folder
+        return self.resolve_longshot_mods(folder) or folder
+
+    def reconcile_longshot_installation(self):
+        """Follow a Longshot update which deleted the saved mods folder. Returns a status notice."""
+        candidates = [self.mods.get().strip()]
+        if self.party_library is not None and self.party_library.active_id:
+            try:
+                candidates.append(self.party_library.get(self.party_library.active_id)['mods'])
+            except (OSError, ValueError, KeyError):
+                pass
+        for source in dict.fromkeys(c for c in candidates if c):
+            info = pc_port.resolve_longshot_update(source)
+            if info['status'] != 'not_longshot':
+                break
+        else:
+            return ''
+        if info['status'] == 'unchanged':
+            # The saved folder is fine; still move parties whose own (older) folder vanished.
+            new_mods = source
+        else:
+            new_mods = self.resolve_longshot_mods(source)
+            if not new_mods:
+                return ''
+        migrated = []
+        notice = ''
+        if self.party_library is not None:
+            try:
+                migrated = self.party_library.migrate_mods_directory(new_mods, old_mods=source, root=info['root'])
+            except (OSError, ValueError) as error:
+                notice = f' My Games not updated: {error}'
+            if migrated:
+                self.render_parties()
+        if new_mods == source:
+            if not migrated:
+                return notice.strip()
+            return f'Longshot: {len(migrated)} game(s) moved to {Path(new_mods).parent.name}.' + notice
+        self.mods.set(new_mods)
+        # The game file and the save folder may have lived in the vanished build too.
+        nup = self.nup.get().strip()
+        if nup and not Path(nup).is_file():
+            found = pc_port.resolve_stale_nup_path(nup, new_mods, longshot_root=info['root'])
+            if found is not None:
+                self.nup.set(str(found))
+        save = self.save_path.get().strip()
+        if save and not Path(save).exists():
+            found = pc_port.resolve_stale_port_subpath(save, source, new_mods)
+            if found is not None:
+                self.save_path.set(str(found))
+            elif self.auto_save.get():
+                self.save_path.set('')
+        moved = f' ({len(migrated)} game(s) moved)' if migrated else ''
+        return f'Longshot updated: now using {Path(new_mods).parent.name}{moved}.' + notice
+
     def restore_last_artifact(self):
+        notice = self.reconcile_longshot_installation()
+        if self.restore_party():
+            if notice:
+                current = self.status.get()
+                self.status.set(notice + ('  ' + current if current else ''))
+            return
+        if notice:
+            self.status.set(notice)
         last = self.app_state.get('last_artifact')
         if not last or self.artifact or not (Path(last) / 'manifest.json').is_file():
             return
+        prefix = (notice + '  ') if notice else ''
         try:
             self.use_artifact(last)
-            self.status.set('Last seed reloaded: ' + Path(last).name)
+            self.status.set(prefix + 'Last seed reloaded: ' + Path(last).name)
         except Exception as error:
-            self.status.set('Last seed not reloaded: ' + str(error))
+            self.show_notice('warn', 'The last seed was not reloaded', str(error),
+                             [('Open a seed…', self.open_artifact)])
 
     # ---------------------------------------------------------- saves
     def hookshot_root(self):
@@ -1106,11 +1998,17 @@ class Application:
 
     def newest_save(self):
         """progress.sav most recently written, across every save and slot folder."""
+        if self.party_context:
+            saves = Path(self.party_context['saves'])
+            candidates = list(saves.glob('slot_*/progress.sav'))
+            return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
         return newest_save(self.hookshot_root(), TITLE, self.mods.get() or None)
 
     def follow_newest_save(self):
         newest = self.newest_save()
         if newest is None:
+            if self.party_context:
+                self.save_path.set('')
             if not self.save_path.get():
                 self.connection_status.set('No save found. Start a game and save, or choose progress.sav.')
             return False
@@ -1144,7 +2042,7 @@ class Application:
             self.refresh_tracker()
 
     def choose_save(self):
-        value = filedialog.askopenfilename(title='Choose the save of this game', filetypes=[('Hookshot progress', 'progress.sav'), ('Saves', '*.sav')])
+        value = filedialog.askopenfilename(title='Choose the save of this game', initialdir=self.save_path.get().strip(), filetypes=[('Hookshot progress', 'progress.sav'), ('Saves', '*.sav')], parent=getattr(self, 'root', None))
         if value:
             # A save picked by hand is kept: stop following the newest one.
             self.auto_save.set(False)
@@ -1169,6 +2067,9 @@ class Application:
     def tracker_tick(self):
         if self.closed:
             return
+        if self.busy:
+            self._schedule_after(1000, self.tracker_tick)
+            return
         try:
             if self.auto_save.get():
                 self.follow_newest_save()
@@ -1178,11 +2079,15 @@ class Application:
             self.refresh_tracker()
         if self.turbo and self.turbo.last_hold:
             self.turbo_status.set(self.turbo.status + ' — last: ' + self.turbo.last_hold)
-        self.root.after(1000, self.tracker_tick)   # live memory: ~1 s; the save path is cheap to stat
+        self._schedule_after(1000, self.tracker_tick)   # live memory: ~1 s; the save path is cheap to stat
 
     def refresh_tracker(self):
-        if not self.tracker or self.tracker_refreshing:
+        if self.busy or not self.tracker or self.tracker_refreshing:
             return
+        if self.party_context and self.save_path.get() and not Path(self.save_path.get()).resolve().is_relative_to(
+                Path(self.party_context['saves'])):
+            self.save_path.set('')
+            self.follow_newest_save()
         tracker = self.tracker
         tracker.save_path = self.save_path.get()
         self.tracker_refreshing = True
@@ -1198,20 +2103,44 @@ class Application:
     def option_row(self, parent, index, option):
         label, help_text = OPTION_COPY.get(option.name, (option.label, option.help))
         tip = option_tip(option, label, help_text)
+        row = index * 2
         def describe():
-            self.full_reason.set(label + ' — ' + (help_text or 'Choose the value that suits your game.'))
             self.update_presets()
-        if option.kind in ('items', 'list'):
-            variable = ItemsVar() if option.kind == 'items' else ListVar(option)
+        if option.kind == 'items':
+            variable = ItemsVar()
+            widget = self.items_field(parent, variable, describe) if parent else None
+        elif option.kind == 'list':
+            variable = ListVar(option)
             widget = ttk.Entry(parent, textvariable=variable.text, width=40) if parent else None
             if widget:
-                widget.bind('<FocusOut>', lambda event: describe(), add='+')
+                error = ttk.Label(parent, style='Bad.TLabel')
+                def check(event=None):
+                    # A typing error is said at once, under the field, not at generation.
+                    try:
+                        variable.get()
+                        error.grid_remove()
+                    except ValueError as problem:
+                        error.configure(text='\u2715 ' + str(problem))
+                        error.grid(row=row + 1, column=0, columnspan=2, sticky='w', pady=(0, 6))
+                    describe()
+                widget.bind('<FocusOut>', check, add='+')
+                widget.bind('<Return>', check, add='+')
         elif option.kind == 'bool':
             variable = tk.BooleanVar(value=option.default)
-            widget = self.switch_row(parent, index, label, variable, command=describe, tip=tip) if parent else None
+            if parent:
+                widget = self.switch_row(parent, index, label, variable, command=describe, tip=tip)
+                self.setting_rows[option.name] = self.setting_rows.pop(f'switch:{str(parent)}:{row}', None) or {}
+                if not self.setting_rows[option.name]:
+                    del self.setting_rows[option.name]
+                else:
+                    self.setting_rows[option.name]['marks'][1].configure(command=lambda: self.reset_option(option.name))
+            else:
+                widget = None
         elif option.kind == 'int':
             variable = tk.IntVar(value=option.default)
             widget = ttk.Spinbox(parent, from_=min(option.supported_ints), to=max(option.supported_ints), textvariable=variable, width=8, command=describe) if parent else None
+            if widget:
+                widget.bind('<KeyRelease>', lambda event: describe(), add='+')
         else:
             def choice_label(value, text):
                 if option.name == 'chest_matching':
@@ -1223,7 +2152,9 @@ class Application:
             variable.display, variable.labels = display, labels
             allowed = [choice_label(value, text) for value, text, reason in option.values if reason is None
                        and not (option.name == 'spiritual_stones' and value == 'door')]
-            widget = ttk.Combobox(parent, state='readonly', values=allowed, textvariable=display, width=30) if parent else None
+            # Wide enough for the longest choice: a truncated value reads as another one.
+            width = max(16, min(44, max(len(text) for text in allowed) + 3))
+            widget = ttk.Combobox(parent, state='readonly', values=allowed, textvariable=display, width=width) if parent else None
             if widget:
                 def selected(event=None):
                     variable.set(option.values[labels.index(display.get())][0])
@@ -1232,12 +2163,68 @@ class Application:
         self.full_vars[option.name] = variable
         if widget:
             if option.kind != 'bool':
-                text_label, icon = self.label_cell(parent, index, label, tip, wraplength=460)
-                widget.grid(row=index, column=1, sticky='e', pady=7)
-                theme.Tooltip((text_label, icon), tip, self.fonts)
+                text_label, icon = self.label_cell(parent, index, label, tip, wraplength=420)
+                self.register_row(option.name)
+                widget.grid(row=row, column=1, sticky='e', pady=7)
+                theme.Tooltip((text_label,), tip, self.fonts)
                 if index:
-                    theme.rule(parent).grid(row=index, column=0, columnspan=2, sticky='new')
+                    theme.rule(parent).grid(row=row, column=0, columnspan=2, sticky='new')
             widget.bind('<FocusIn>', lambda event: describe(), add='+')
+
+    def items_field(self, parent, variable, changed):
+        """Starting inventory: one tag per item (× removes it), a field with suggestions to add one;
+        an unknown name is said at once under the field."""
+        frame = ttk.Frame(parent)
+        tags = ttk.Frame(frame)
+        tags.pack(anchor='e')
+        names = sorted(STARTABLE_ITEMS)
+        entry = ttk.Combobox(frame, values=names, width=30)
+        entry.pack(anchor='e', pady=(4, 0))
+        error = ttk.Label(frame, style='Bad.TLabel', wraplength=300, justify='right')
+        def redraw():
+            for child in tags.winfo_children():
+                child.destroy()
+            for position, (name, count) in enumerate(sorted(variable.items.items())):
+                tag = ttk.Frame(tags, style='Tab.TFrame', padding=(8, 2, 4, 2))
+                tag.grid(row=position // 2, column=position % 2, sticky='e', padx=(4, 0), pady=(0, 4))
+                ttk.Label(tag, text=name + (f' \u00d7{count}' if count > 1 else ''), style='Tab.TLabel').pack(side='left')
+                ttk.Button(tag, text='\u00d7', width=2, style='Link.TButton',
+                           command=lambda n=name: remove(n)).pack(side='left')
+        def remove(name):
+            items = variable.get()
+            items.pop(name, None)
+            variable.set(items)
+            changed()
+        def add(event=None):
+            text = entry.get().strip()
+            if not text:
+                return 'break'
+            try:
+                parsed = rando_options.parse_items(text)
+            except ValueError as problem:
+                error.configure(text='\u2715 ' + str(problem) + '. Pick a name from the list.')
+                error.pack(anchor='e', pady=(4, 0))
+                return 'break'
+            error.pack_forget()
+            items = variable.get()
+            for name, count in parsed.items():
+                items[name] = items.get(name, 0) + count
+            entry.set('')
+            entry.configure(values=names)
+            variable.set(items)
+            changed()
+            return 'break'
+        def suggest(event):
+            if event.keysym in ('Return', 'Up', 'Down', 'Escape'):
+                return
+            typed = entry.get().strip().casefold()
+            entry.configure(values=[n for n in names if typed in n.casefold()] if typed else names)
+        entry.bind('<Return>', add)
+        entry.bind('<<ComboboxSelected>>', add)
+        entry.bind('<KeyRelease>', suggest, add='+')
+        variable.listeners.append(redraw)
+        return frame
+
 
     def full_value(self, option):
         return self.full_vars[option.name].get()
@@ -1273,7 +2260,7 @@ class Application:
         self.update_category_states()
 
     def import_ap_yaml(self):
-        name = filedialog.askopenfilename(filetypes=[('Archipelago YAML', '*.yaml *.yml')])
+        name = filedialog.askopenfilename(title='Import Archipelago YAML', filetypes=[('Archipelago YAML', '*.yaml *.yml')], parent=getattr(self, 'root', None))
         if name:
             try:
                 values, ignored = rando_options.from_ap_yaml(Path(name).read_text(encoding='utf-8'))
@@ -1281,21 +2268,22 @@ class Application:
                              for k, v in values.items()}
                 self.options['skip_chest_cutscenes'].set(supported['fast_chests'])
                 self.apply_full(supported, enable=True)
-                message = 'YAML imported.'
                 if ignored:
-                    message += '\n\nValues ignored or replaced by the supported value:\n• ' + '\n• '.join(ignored)
-                messagebox.showinfo('Archipelago YAML import', message)
+                    self.show_notice('info', 'YAML imported. Some values were ignored or replaced by the supported value',
+                                     '• ' + '\n• '.join(ignored))
+                else:
+                    self.notify('YAML imported.')
             except Exception as error:
                 self.error(error)
 
     def export_ap_yaml(self):
         try:
             values = rando_options.validate(self.full_values())
-            name = filedialog.asksaveasfilename(defaultextension='.yaml', filetypes=[('Archipelago YAML', '*.yaml')])
+            name = filedialog.asksaveasfilename(title='Export Archipelago YAML', defaultextension='.yaml', filetypes=[('Archipelago YAML', '*.yaml')], parent=getattr(self, 'root', None))
             if name:
-                Path(name).write_text(rando_options.to_ap_yaml(values, open_forest=self.options['open_forest'].get()),
+                Path(name).write_text(to_ap_yaml(values, open_forest=self.options['open_forest'].get()),
                                       encoding='utf-8')
-                self.status.set('Archipelago YAML exported.')
+                self.notify('Archipelago YAML exported.')
         except Exception as error:
             self.error(error)
 
@@ -1310,13 +2298,16 @@ class Application:
             if not player:
                 return
             text = bridge.player_yaml(values, self.options['open_forest'].get(), player)
-            name = filedialog.asksaveasfilename(defaultextension='.yaml', initialfile=f'{player}.yaml',
-                                                filetypes=[('Archipelago YAML', '*.yaml')])
+            name = filedialog.asksaveasfilename(title='Export Multiworld YAML', defaultextension='.yaml', initialfile=f'{player}.yaml',
+                                                filetypes=[('Archipelago YAML', '*.yaml')], parent=getattr(self, 'root', None))
             if name:
                 Path(name).write_text(text, encoding='utf-8')
-                self.status.set('Multiworld YAML exported.')
-                self.write_app_state(ap_yaml_exported=True)
+                preset = dict((key, title) for key, title, _ in self.PRESET_CARDS).get(self.current_preset, 'Custom settings')
+                self.write_app_state(ap_yaml_export={'player': player, 'preset': preset,
+                                                     'date': datetime.now().strftime('%Y-%m-%d %H:%M'),
+                                                     'settings': self.multiworld_signature()})
                 self.update_archipelago_controls()
+                self.notify('Multiworld YAML exported. Send it to the host.')
         except Exception as error:
             self.error(error)
 
@@ -1326,15 +2317,15 @@ class Application:
             nup = Path(self.nup.get())
             if not nup.is_file():
                 raise ValueError('Select the local NUP file.')
-            name = filedialog.asksaveasfilename(defaultextension='.apworld', initialfile='oot_remake.apworld',
-                                                filetypes=[('Archipelago world', '*.apworld')])
+            name = filedialog.asksaveasfilename(title='Export Archipelago World', defaultextension='.apworld', initialfile='oot_remake.apworld',
+                                                filetypes=[('Archipelago world', '*.apworld')], parent=getattr(self, 'root', None))
             if not name:
                 return
 
             def done(path):
-                self.status.set('apworld written: ' + str(path))
-                messagebox.showinfo('apworld ready', str(path) + '\n\nCopy it into the custom_worlds folder of '
-                                    'Archipelago on the computer that generates the multiworld.')
+                self.show_notice('info', 'apworld ready: ' + str(path), 'Copy it into the custom_worlds folder of '
+                                 'Archipelago on the computer that generates the multiworld.',
+                                 [('Open the folder', lambda: self.open_path(Path(path).parent))])
             self.run_job(lambda progress: build_apworld(nup, name, progress), done)
         except Exception as error:
             self.error(error)
@@ -1342,11 +2333,12 @@ class Application:
     def generate_from_patch(self):
         from oot_rando.archipelago import bridge
         try:
-            name = filedialog.askopenfilename(filetypes=[('Archipelago patch', '*' + bridge.PATCH_SUFFIX)])
+            name = filedialog.askopenfilename(title='Choose Archipelago Patch', filetypes=[('Archipelago patch', '*' + bridge.PATCH_SUFFIX)], parent=getattr(self, 'root', None))
             if not name:
                 return
-            settings = bridge.settings_from_patch(
+            settings = settings_from_patch(
                 bridge.load_patch(name), self.options['skulltulas_always_present'].get()).validate_supported()
+            self.party_name.set('')
             nup = Path(self.nup.get())
             if not nup.is_file():
                 raise ValueError('Select the local NUP file.')
@@ -1391,8 +2383,8 @@ class Application:
             text = settings_string.encode(self.get_settings())
             self.root.clipboard_clear()
             self.root.clipboard_append(text)
-            self.status.set(f'Seed string copied ({len(text)} characters). Share it with the same version '
-                            f'of the randomizer ({APP_VERSION}).')
+            self.notify(f'Seed string copied ({len(text)} characters). Share it with the same version '
+                        f'of the randomizer ({APP_VERSION}).')
         except Exception as error:
             self.error(error)
 
@@ -1408,45 +2400,53 @@ class Application:
             return
         try:
             settings, version = settings_string.decode(text)
-            if version != GENERATOR_VERSION and not messagebox.askyesno(
-                    'Other randomizer version',
-                    f'This seed string comes from generator {version}; this application uses '
-                    f'{GENERATOR_VERSION}. The same settings may give a different game. Import anyway?'):
-                return
-            self.apply_settings(settings)
-            self.status.set('Seed string imported: seed "' + settings.seed + '".')
         except Exception as error:
             self.error(error)
+            return
+        def apply():
+            try:
+                self.apply_settings(settings)
+                self.clear_notices()
+                self.notify('Seed string imported: seed "' + settings.seed + '".')
+            except Exception as error:
+                self.error(error)
+        if version == GENERATOR_VERSION:
+            apply()
+            return
+        self.show_notice('warn', f'This seed string comes from generator {version}',
+                         f'This application uses {GENERATOR_VERSION}: the same settings may give a different game.',
+                         [('Import anyway', apply), ('Cancel', self.clear_notices)])
 
     def import_settings(self):
-        name = filedialog.askopenfilename(filetypes=[('JSON settings', '*.json')])
+        name = filedialog.askopenfilename(title='Import Settings', filetypes=[('JSON settings', '*.json')], parent=getattr(self, 'root', None))
         if name:
             try:
                 value = json.loads(Path(name).read_text(encoding='utf-8'))
                 if value.get('format') != 'oot-remake-settings-v1':
                     raise ValueError('Unsupported settings format.')
                 self.apply_settings(Settings.from_dict(value['settings']))
-                self.status.set('Settings imported.')
+                self.notify('Settings imported.')
             except Exception as error:
                 self.error(error)
 
     def export_settings(self):
         try:
             settings = self.get_settings()
-            name = filedialog.asksaveasfilename(defaultextension='.json', filetypes=[('JSON settings', '*.json')])
+            name = filedialog.asksaveasfilename(title='Export Settings', defaultextension='.json', filetypes=[('JSON settings', '*.json')], parent=getattr(self, 'root', None))
             if name:
                 Path(name).write_text(json.dumps({'format': 'oot-remake-settings-v1', 'settings': settings.to_dict()}, ensure_ascii=False, indent=2), encoding='utf-8')
-                self.status.set('Settings exported.')
+                self.notify('Settings exported.')
         except Exception as error:
             self.error(error)
 
     def run_job(self, function, done):
         if self.busy:
-            self.status.set('An operation is already running.')
+            self.notify('An operation is already running.')
             return
         self.busy = True
-        self.progress.pack(side='right', padx=(12, 0))
-        self.progress.start()
+        self.clear_notices()
+        self.status.set('Working…')
+        self.show_status_bar(True)
         for button in (self.generate_button, self.qol_button):
             button.state(['disabled'])
         def worker():
@@ -1454,6 +2454,9 @@ class Application:
                 result = function(lambda text: self.events.put(('progress', text)))
                 self.events.put(('done', (done, result)))
             except Exception as error:
+                import traceback
+                # A worker process failure carries the traceback of where it really failed.
+                write_error_log(getattr(error, 'trace', '') or traceback.format_exc())
                 self.events.put(('error', str(error)))
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1463,7 +2466,10 @@ class Application:
             settings.validate_supported()
             nup = Path(self.nup.get())
             if not nup.is_file():
-                raise ValueError('Select the local NUP file.')
+                raise ValueError("Select the local NUP file.")
+            if self._using_real_generator():
+                from oot_rando.randomizer.mods_folder import validate_nup_file
+                validate_nup_file(nup)
             mods = validate_mod_directory(self.mods.get())
             self.start_generation(nup, mods, settings)
         except Exception as error:
@@ -1474,53 +2480,45 @@ class Application:
         try:
             settings = self.regen_settings
             if settings is None or self.artifact is None:
-                raise ValueError('This seed is already up to date.')
+                raise ValueError("This seed is already up to date.")
+            settings.validate_supported()
             nup = Path(self.nup.get())
             if not nup.is_file():
-                raise ValueError('Select the local NUP file.')
+                raise ValueError("Select the local NUP file.")
+            if self._using_real_generator():
+                from oot_rando.randomizer.mods_folder import validate_nup_file
+                validate_nup_file(nup)
             mods = validate_mod_directory(self.artifact.parent)
-            if not messagebox.askyesno(
-                    'Regenerate the seed',
-                    f'Seed "{settings.seed}" was made by an older version of the randomizer. Generate it '
-                    f'again with version {APP_VERSION}, with the same name and settings?\n\n'
-                    'The current copy is moved to the archive (never deleted). The new version may '
-                    'place items differently: a new game may be needed.'):
-                return
-
-            self.start_generation(nup, mods, settings)
+            # The banner on Home said why and what changes: the click is the answer.
+            self.generate_party(nup, mods, settings, continuing=self.party_context)
         except Exception as error:
             self.error(error)
 
     def start_generation(self, nup, mods, settings):
-        def job(progress):
-            installed = generate_isolated(nup, mods, settings, ARCHIVE, progress)
-            return installed, installed
-        self.run_job(job, self.generated_and_installed)
-
-    def generated_and_installed(self, result):
-        directory, installed = result
-        previous = self.artifact_manifest   # seed replaced by this one (same folder if regenerated)
-        self.use_artifact(directory)
-        self.show_page('tracker')
-        self.status.set('Seed generated and installed: ' + str(installed))
-        warning = qol_seed_warning(Path(installed).parent)
-        messagebox.showinfo('Seed ready', 'Seed installed in:\n' + str(installed)
-                            + '\n\nStart a new game to enable automatic tracking and first collections.'
-                            + ('\n\n' + warning if warning else ''))
-        self.offer_save_migration(self.artifact_manifest, previous)
+        self.generate_party(nup, mods, settings)
 
     def offer_save_migration(self, manifest, previous=None):
         """Offer to give the saves of this seed the start values they never received.
 
         A fix written by the new-game opening only reaches games started after it. Saves
         of this seed (or of the one it regenerates) are listed; nothing is written unless
-        the player agrees, and each save is backed up first (tracker/save_patch.py)."""
-        from oot_rando.tracker import save_patch
+        the player agrees, and each save is backed up first (randomizer/save_patch.py)."""
+        from oot_rando.randomizer import save_patch
         try:
-            paths = find_save_slots(self.hookshot_root(), TITLE, self.mods.get() or None)
+            from oot_rando.tracker.auto_tracker import resolve_party_save_root
+            party_saves = None
+            if self.party_context:
+                rec_saves = Path(self.party_context["saves"])
+                party_saves = (
+                    rec_saves
+                    if rec_saves.is_dir()
+                    else resolve_party_save_root(rec_saves, mods=self.party_context.get("mods"))
+                )
+            paths = (list(party_saves.glob("slot_*/progress.sav")) if party_saves is not None
+                     else find_save_slots(self.hookshot_root(), TITLE, self.mods.get() or None))
             candidates = save_patch.migration_candidates(paths, manifest, previous)
         except Exception as error:   # never block the installation on a save scan
-            self.status.set('Saves not checked: ' + str(error))
+            self.show_notice('warn', 'The saves of this seed were not checked', str(error))
             return
         if not candidates:
             return
@@ -1528,14 +2526,18 @@ class Application:
         listing = '\n'.join('• ' + str(path) for path, _ in candidates[:6])
         if len(candidates) > 6:
             listing += f'\n• … and {len(candidates) - 6} more'
-        if not messagebox.askyesno(
-                'Update the saves of this seed',
-                f'{len(candidates)} save(s) of this seed were started before some fixes of this version and '
-                f'miss {len(names)} start value(s) (' + ', '.join(names[:4]) + (', …' if len(names) > 4 else '')
-                + ').\n\n' + listing + '\n\nUpdate them now? Close the game first. Each save is backed up '
-                'next to it (progress.sav' + save_patch.BACKUP_SUFFIX + '<date>) and only flags it already '
-                'holds are changed.'):
-            return
+        self.show_notice(
+            'warn', f'{len(candidates)} save(s) of this seed miss fixes of this version',
+            f'They were started before these fixes and miss {len(names)} start value(s) ('
+            + ', '.join(names[:4]) + (', …' if len(names) > 4 else '') + ').\n' + listing
+            + '\nClose the game first. Each save is backed up next to it (progress.sav'
+            + save_patch.BACKUP_SUFFIX + '<date>) and only flags it already holds are changed.',
+            [('Update the saves', lambda: self.migrate_saves(manifest, previous, candidates)),
+             ('Not now', self.clear_notices)])
+
+    def migrate_saves(self, manifest, previous, candidates):
+        from oot_rando.randomizer import save_patch
+        self.clear_notices()
         markers = save_patch.migration_markers(manifest, previous)
         values = save_patch.migration_values(manifest, previous)
         done, failed = [], []
@@ -1552,14 +2554,16 @@ class Application:
         if backups:
             text += '\nBackups:\n' + '\n'.join(backups)
         if failed:
-            text += '\n\nNot updated:\n' + '\n'.join(failed)
-            messagebox.showwarning('Saves of this seed', text)
+            self.show_notice('warn', f'{len(done)} save(s) updated, {len(failed)} not',
+                             text.partition('\n')[2].strip() + '\n\nNot updated:\n' + '\n'.join(failed))
         else:
-            messagebox.showinfo('Saves of this seed', text)
-        self.status.set(text.splitlines()[0])
+            self.notify(text.splitlines()[0] + ' A backup sits next to each one.')
 
     def use_artifact(self, directory):
+        if self.busy:
+            return
         manifest, _ = read_artifact(directory)
+        self.match_party(directory)
         self.artifact, self.artifact_manifest = Path(directory), manifest
         self.result.set('Seed: ' + manifest['settings']['seed'] + '\nIdentity: ' + manifest['seed_id'][:16]
                         + f' • {len(manifest["files"])} resources checked\n' + str(directory))
@@ -1573,12 +2577,13 @@ class Application:
         if coverage:
             self.result.set(self.result.get() + f'\n{coverage["changed_groups"]} ordinary chests changed, '
                             f'{coverage["changed_instances"]} physical variants; vanilla progression.')
-        self.apply_settings(Settings.from_dict(manifest['settings']))
+        # The New seed form is left alone: it starts on the Classic preset, unchanged, instead of
+        # showing the loaded seed's settings as changes (a seed string or settings file restores them).
         self.regen_settings = regeneration_settings(manifest)
         if manifest.get('tracking', {}).get('new_save_required'):
             self.result.set(self.result.get() + '\nA new game is needed for automatic tracking.')
         self.seed_name = (manifest['settings']['seed'] or manifest['seed_id'][:12])[:28]
-        self.seed_chip.set('Seed  ' + self.seed_name)
+        self.seed_chip.set(self.party_chip() if self.party_context else 'Seed  ' + self.seed_name)
         self.write_app_state(last_artifact=str(Path(directory).resolve()))
         if self.auto_save.get():
             self.follow_newest_save()
@@ -1587,8 +2592,18 @@ class Application:
         self.reset_spoiler()
         self.status.set('Seed opened.')
 
+    def _on_mods_dir_changed(self, *_args) -> None:
+        """Persist mods_dir edits."""
+        self.write_app_state(mods_dir=self.mods.get())
+
     def open_artifact(self):
-        directory = filedialog.askdirectory(title='Choose the folder holding manifest.json')
+        if self.busy:
+            return
+        directory = filedialog.askdirectory(
+            title="Choose the folder holding manifest.json",
+            initialdir=self.mods.get().strip(),
+            parent=getattr(self, "root", None),
+        )
         if directory:
             try:
                 self.use_artifact(directory)
@@ -1597,7 +2612,7 @@ class Application:
 
     def open_folder(self):
         if self.artifact:
-            os.startfile(str(self.artifact))
+            open_in_file_manager(self.artifact)
 
     def show_spoilers(self):
         self.show_page('spoiler')
@@ -1613,43 +2628,49 @@ class Application:
         return [seeds_dir(), ARCHIVE]
 
     def build_spoiler(self):
-        parent = self.spoiler_tab
+        page = ttk.Frame(self.spoiler_tab, style='Page.TFrame', padding=(0, 0, PAGE_GUTTER, 0))
+        page.pack(fill='both', expand=True)
         self.spoiler = None
         self.spoiler_search = tk.StringVar()
         self.spoiler_minor = tk.BooleanVar(value=True)
         self.spoiler_info = tk.StringVar(value='Open a seed to read its spoiler.')
-        box = self.card(parent)
+        box = self.card(page)
         row = self.buttons(box)
-        ttk.Button(row, text='Open spoiler.txt', style='Link.TButton', command=self.open_spoiler_text).pack(side='right')
-        ttk.Button(row, text='Export as text…', style='Link.TButton', command=self.export_spoiler).pack(side='right', padx=12)
-        ttk.Button(row, text='Hide', command=self.reset_spoiler).pack(side='right', padx=(8, 12))
-        ttk.Button(row, text='Reveal the spoiler', style='Accent.TButton', command=self.reveal_spoiler).pack(side='right')
         info = ttk.Frame(row)
         info.pack(side='left', fill='x', expand=True, padx=(0, 16))
         ttk.Label(info, text='Seed spoiler', style='Heading.TLabel').pack(anchor='w')
-        ttk.Label(info, textvariable=self.spoiler_info, style='Small.TLabel', wraplength=300, justify='left').pack(anchor='w', pady=(2, 0))
-        parent = self.card(parent, fill='both', expand=True)
-        filters = self.buttons(parent, pady=(0, 8))
-        ttk.Entry(filters, textvariable=self.spoiler_search, width=30).pack(side='left')
-        ttk.Label(filters, text='Search', style='Small.TLabel').pack(side='left', padx=(8, 0))
-        ttk.Checkbutton(filters, text='Minor items (rupees, hearts, ammo, tokens)',
-                        variable=self.spoiler_minor, command=self.render_spoiler).pack(side='right')
+        ttk.Label(info, textvariable=self.spoiler_info, style='Small.TLabel', wraplength=420, justify='left').pack(anchor='w', pady=(2, 0))
+        files = ttk.Frame(row)
+        files.pack(side='right')
+        ttk.Button(files, text='Open spoiler.txt', command=self.open_spoiler_text).pack(side='left')
+        ttk.Button(files, text='Export…', command=self.export_spoiler).pack(side='left', padx=(8, 0))
+        self.spoiler_hide = ttk.Button(row, text='Hide again', style='Link.TButton', command=self.reset_spoiler)
+        parent = self.card(page, fill='both', expand=True)
+        filters = self.buttons(parent, pady=(0, 10))
+        self.spoiler_switch = theme.Segmented(filters, [('zones', 'By zone'), ('playthrough', 'Progression playthrough')],
+                                              self.set_spoiler_view)
+        self.spoiler_switch.pack(side='left')
+        theme.search_entry(filters, self.spoiler_search, 'Search a location, a reward…', width=30).pack(side='left', padx=(12, 0))
+        ttk.Checkbutton(filters, text='Minor items', variable=self.spoiler_minor,
+                        command=self.render_spoiler).pack(side='right')
         self.spoiler_search.trace_add('write', lambda *args: self.render_spoiler())
-        self.spoiler_views = ttk.Notebook(parent)
+        # Views without visible tabs: the segmented switch above selects them.
+        self.spoiler_views = ttk.Notebook(parent, style='Pages.TNotebook')
         self.spoiler_views.pack(fill='both', expand=True)
         self.spoiler_trees = {}
+        # Widths that fit the minimum window (1040 px); the first two columns take the rest.
         views = [('zones', 'By zone', 'Zone / location',
-                  [('item', 'Reward', 240), ('original', 'Originally', 180), ('sphere', 'Sphere', 70), ('kind', 'Type', 140)]),
-                 ('playthrough', 'Progression playthrough', 'Sphere / location', [('item', 'Reward', 300)])]
+                  [('item', 'Reward', 170), ('original', 'Originally', 130), ('sphere', 'Sphere', 66), ('kind', 'Type', 100)]),
+                 ('playthrough', 'Progression playthrough', 'Sphere / location', [('item', 'Reward', 260)])]
         for key, title, heading, columns in views:
             frame = ttk.Frame(self.spoiler_views)
             self.spoiler_views.add(frame, text=title)
             tree = ttk.Treeview(frame, columns=[c for c, _, _ in columns], show='tree headings', selectmode='browse')
             tree.heading('#0', text=heading, anchor='w')
-            tree.column('#0', width=360, minwidth=200, stretch=True)
+            tree.column('#0', width=220, minwidth=140, stretch=True)
             for column, text, width in columns:
                 tree.heading(column, text=text, anchor='w')
-                tree.column(column, width=width, minwidth=60, stretch=(column == 'item'))
+                tree.column(column, width=width, minwidth=50, stretch=(column == 'item'))
             tree.tag_configure('major', foreground=self.colors['text'])
             tree.tag_configure('minor', foreground=self.colors['muted'])
             bar = ttk.Scrollbar(frame, orient='vertical', command=tree.yview)
@@ -1659,13 +2680,74 @@ class Application:
             self.spoiler_trees[key] = tree
         self.spoiler_summary = tk.StringVar()
         ttk.Label(parent, textvariable=self.spoiler_summary, style='Small.TLabel').pack(anchor='w', pady=(8, 0))
+        # While hidden, a blurred table and the reveal card cover the views.
+        cover = self.spoiler_cover = tk.Canvas(parent, highlightthickness=0, background=self.colors['surface'])
+        cover.bind('<Configure>', lambda event: self.draw_spoiler_cover())
+        card = self.spoiler_card = ttk.Frame(cover, style='CoverCard.TFrame', padding=theme.CARD_PADDING)
+        self.spoiler_card_title, self.spoiler_card_text = tk.StringVar(), tk.StringVar()
+        ttk.Label(card, textvariable=self.spoiler_card_title, style='Heading.TLabel').pack(anchor='w')
+        ttk.Label(card, textvariable=self.spoiler_card_text, style='Muted.TLabel', wraplength=360,
+                  justify='left').pack(anchor='w', pady=(4, 12))
+        self.spoiler_card_buttons = ttk.Frame(card)
+        self.spoiler_card_buttons.pack(anchor='w')
+        cover.create_window(0, 0, window=card, anchor='center', tags='card')
+        self.set_spoiler_cover('none')
+
+    def set_spoiler_view(self, key):
+        self.spoiler_switch.set(key)
+        self.spoiler_views.select(list(self.spoiler_trees).index(key))
+
+    def draw_spoiler_cover(self):
+        """Grey bars where the rows would be: the table is there, its words are not."""
+        cover = self.spoiler_cover
+        width, height = cover.winfo_width(), cover.winfo_height()
+        cover.delete('rows')
+        widths = (0.46, 0.31, 0.38, 0.27, 0.42, 0.35, 0.29, 0.44, 0.33, 0.4)
+        for index, y in enumerate(range(14, height, 30)):
+            fraction = widths[index % len(widths)]
+            for x0, part in ((16, fraction * 0.55), (width * 0.48, fraction * 0.6), (width * 0.82, 0.1)):
+                color = self.colors['line'] if index % 4 else self.colors['field_hover']
+                cover.create_rectangle(x0, y, x0 + width * part, y + 9, fill=color, outline='', tags='rows')
+        cover.tag_lower('rows')
+        cover.coords('card', width / 2, min(height / 2, 190))
+
+    def set_spoiler_cover(self, state):
+        """'none' (no seed), 'hidden', 'confirm' (asked once, in place) or None (revealed)."""
+        for child in self.spoiler_card_buttons.winfo_children():
+            child.destroy()
+        if state is None:
+            self.spoiler_cover.place_forget()
+            if not self.spoiler_hide.winfo_manager():
+                self.spoiler_hide.pack(side='right', padx=(0, 12))
+            return
+        self.spoiler_hide.pack_forget()
+        buttons = self.spoiler_card_buttons
+        if state == 'none':
+            self.spoiler_card_title.set('No seed open')
+            self.spoiler_card_text.set('Open or create a seed: its spoiler lists every reward and where it is.')
+        elif state == 'hidden':
+            self.spoiler_card_title.set('The spoiler is hidden')
+            self.spoiler_card_text.set('It shows every reward of this seed and where it is. Reveal it only if you want to know.')
+            ttk.Button(buttons, text='Reveal the spoiler…', style='Accent.TButton',
+                       command=self.reveal_spoiler).pack(side='left')
+        else:
+            seed = (self.artifact_manifest or {}).get('settings', {}).get('seed') or 'this seed'
+            self.spoiler_card_title.set('Show every reward?')
+            self.spoiler_card_text.set(f'Every randomized reward of seed {seed} will be listed. You can hide it again, '
+                                       'but not forget it.')
+            ttk.Button(buttons, text='Yes, reveal', style='Accent.TButton', command=self.confirm_spoiler).pack(side='left')
+            ttk.Button(buttons, text='Cancel', command=lambda: self.set_spoiler_cover('hidden')).pack(side='left', padx=(8, 0))
+        self.spoiler_cover.place(in_=self.spoiler_views, relx=0, rely=0, relwidth=1, relheight=1)
+        tk.Misc.lift(self.spoiler_cover)
+
 
     def reset_spoiler(self):
         """Hide the spoiler again (new seed opened, or the player asked)."""
         self.spoiler = None
-        self.spoiler_info.set('Spoiler hidden. Click "Reveal the spoiler" to show every reward of this seed.'
-                              if self.artifact else 'Open a seed to read its spoiler.')
+        self.spoiler_info.set('Hidden until you reveal it.' if self.artifact else 'Open a seed to read its spoiler.')
+        self.set_spoiler_cover('hidden' if self.artifact else 'none')
         self.render_spoiler()
+
 
     def load_spoiler_report(self):
         if not self.artifact:
@@ -1673,18 +2755,20 @@ class Application:
         return spoiler_report.load_report(self.artifact, self.spoiler_roots())
 
     def reveal_spoiler(self):
-        if not self.artifact:
-            self.spoiler_info.set('First open a seed from Home.')
-            return
-        if not messagebox.askyesno('Reveal the spoiler', 'Show every randomized reward of this seed?'):
-            return
+        """Ask once, inside the page (no window)."""
+        self.set_spoiler_cover('confirm' if self.artifact else 'none')
+
+    def confirm_spoiler(self):
         try:
             self.spoiler = self.load_spoiler_report()
             self.spoiler_info.set(f'Seed {self.spoiler["seed"] or "?"} · identity {self.spoiler["seed_id"][:16]} · '
-                                  f'{len(self.spoiler["rows"])} shuffled locations · {self.spoiler["path"]}')
+                                  f'{len(self.spoiler["rows"])} shuffled locations')
+            self.set_spoiler_cover(None)
             self.render_spoiler()
         except Exception as error:
+            self.set_spoiler_cover('hidden')
             self.error(error)
+
 
     def spoiler_minor_item(self, label):
         return label.startswith(self.MINOR_ITEMS) or label == 'Deku Stick'
@@ -1728,17 +2812,19 @@ class Application:
             for location, item in entries:
                 tree.insert(node, 'end', text=location, values=(item,),
                             tags=('minor' if self.spoiler_minor_item(item) else 'major',))
+        for tree in self.spoiler_trees.values():
+            theme.fit_tree(tree, self.fonts)
         self.spoiler_summary.set(f'{shown} of {len(self.spoiler["rows"])} locations shown · '
                                  f'{len(self.spoiler["playthrough"])} progression spheres')
 
     def export_spoiler(self):
         try:
             report = self.load_spoiler_report()
-            name = filedialog.asksaveasfilename(defaultextension='.txt', filetypes=[('Text', '*.txt')],
-                                                initialfile='spoiler_' + (report['seed'] or report['seed_id'][:16]) + '.txt')
+            name = filedialog.asksaveasfilename(title='Export Spoiler Log', defaultextension='.txt', filetypes=[('Text', '*.txt')],
+                                                initialfile='spoiler_' + (report['seed'] or report['seed_id'][:16]) + '.txt', parent=getattr(self, 'root', None))
             if name:
                 spoiler_report.write_text(report, name)
-                self.status.set('Spoiler exported: ' + name)
+                self.notify('Spoiler exported: ' + name)
         except Exception as error:
             self.error(error)
 
@@ -1749,11 +2835,13 @@ class Application:
             if not path.is_file():
                 # Seeds generated before spoiler.txt existed: create it next to spoiler.json.
                 spoiler_report.write_text(report, path)
-            os.startfile(str(path))
+            open_in_file_manager(path)
         except Exception as error:
             self.error(error)
 
     def load_tracker(self):
+        if self.busy:
+            return
         self.tracker, self.current_checks = None, []
         self.tracker_details, self.tracker_signature = {}, None
         self.tracker_summary.set('Open a seed to show its locations.')
@@ -1765,7 +2853,26 @@ class Application:
             manifest, catalogue = read_artifact(self.artifact)
             self.current_checks = catalogue['checks']
             live = live_memory.LiveGameData() if live_memory.supported() else None
-            self.tracker = TrackerSession(self.artifact, self.slot.get(), save_path=self.save_path.get(), live=live)
+            manual_directory = None
+            if self.party_context:
+                ident = self.party_context['id']
+                self.slot.set('party-' + ident)
+                manual_directory = self.party_library.tracker_dir(ident)
+                # A save chosen manually must stay inside the active party's account.
+                if self.save_path.get() and not Path(self.save_path.get()).resolve().is_relative_to(
+                        Path(self.party_context['saves'])):
+                    self.save_path.set('')
+                    self.follow_newest_save()
+            self.tracker = TrackerSession(self.artifact, self.slot.get(), save_path=self.save_path.get(),
+                                          live=live, manual_directory=manual_directory)
+            if self.party_context:
+                imported = self.party_library.folder(self.party_context['id']) / 'imported-tracker.json'
+                if imported.is_file() and not self.tracker.manual.path.exists():
+                    checks = json.loads(imported.read_text(encoding='utf-8'))
+                    if checks.get('seed_id') == self.tracker.seed_id:
+                        for check in set(checks.get('completed', [])) & self.tracker.manual.allowed:
+                            self.tracker.manual.set_completed(check, True)
+                    imported.rename(imported.with_suffix('.imported'))
             self.connection_status.set('Reading at the latest save' if self.save_path.get() else 'Choose a progress.sav file to enable automatic tracking.')
             self.render_tracker()
             self.refresh_tracker()
@@ -1813,10 +2920,11 @@ class Application:
             tree = ttk.Treeview(tree_frame, columns=('state', 'reward', 'kind'), show='tree headings', selectmode='browse', height=9)
             self.tracker_trees[container] = tree
             tree.heading('#0', text='Zone / location', anchor='w')
-            tree.column('#0', width=350, minwidth=200, stretch=True)
-            for key, title, width in [('state', 'State', 125), ('reward', 'Reward', 210), ('kind', 'Type', 120)]:
+            # Widths that fit the minimum window (1040 px); the name and the reward take the rest.
+            tree.column('#0', width=250, minwidth=160, stretch=True)
+            for key, title, width in [('state', 'State', 130), ('reward', 'Reward', 150), ('kind', 'Type', 100)]:
                 tree.heading(key, text=title, anchor='w')
-                tree.column(key, width=width, minwidth=80, stretch=(key == 'reward'))
+                tree.column(key, width=width, minwidth=70, stretch=(key == 'reward'))
             for tag, color in theme.STATE_COLORS.items():
                 tree.tag_configure(tag, foreground=color)
             tree.tag_configure('zone', font=self.fonts.strong)
@@ -1830,7 +2938,7 @@ class Application:
                 completed, access = state.get('completed', False), state.get('access', 'unknown')
                 region = check.get('region') or 'Other'
                 region_numbers[region] = region_numbers.get(region, 0) + 1
-                bucket = 'done' if completed else 'available' if access == 'available' else 'blocked'
+                bucket = 'done' if completed else access if access in ('available', 'blocked') else 'unknown'
                 if self.tracker_filter != 'all' and bucket != self.tracker_filter:
                     continue
                 if completed and not self.show_completed.get():
@@ -1843,8 +2951,10 @@ class Application:
                 if query and query not in (region + ' ' + name + ' ' + kind + ' ' + reward).casefold():
                     continue
                 if region not in zones:
-                    zones[region] = tree.insert('', 'end', iid='zone::' + region, open=self.zone_open.get(region, bool(query)), text=region, values=(f'{done[region]} / {totals[region]}', f'{available[region]} available' if available[region] else '', ''), tags=('zone',))
-                label = 'Done' if completed else {'available': 'Available', 'partial': 'Partial zone', 'blocked': 'Blocked', 'unknown': 'Unknown'}.get(access, 'Unknown')
+                    zones[region] = tree.insert('', 'end', iid='zone::' + region, open=self.zone_open.get(region, bool(query)), text=' ' + region, image=self.zone_bar(done[region], totals[region]), values=(f'{done[region]} / {totals[region]}', f'{available[region]} available' if available[region] else '', ''), tags=('zone',))
+                state_key = 'done' if completed else access if access in theme.STATE_MARKS else 'unknown'
+                label = theme.STATE_MARKS[state_key] + '  ' + {'done': 'Done', 'available': 'Available', 'partial': 'Partial zone',
+                                                            'blocked': 'Blocked', 'unknown': 'Unknown'}[state_key]
                 if completed and state.get('source') == 'manual':
                     label += ' (manual)'
                 elif not completed and state.get('missing_souls'):
@@ -1852,8 +2962,11 @@ class Application:
                     label += ' • soul: ' + ', '.join(soul_name(s, False) for s in state['missing_souls'])
                 if not completed and state.get('untracked'):
                     label += ' • not tracked'
-                tree.insert(zones[region], 'end', iid=check['id'], text=name, values=(label, reward, kind), tags=('done' if completed else access,))
+                box = 'check_locked' if state.get('observed') else 'check_on' if completed else 'check_off'
+                tree.insert(zones[region], 'end', iid=check['id'], text=' ' + name, image=self.images[box],
+                            values=(label, reward, kind), tags=(state_key,))
                 visible += 1
+            theme.fit_tree(tree, self.fonts)
             tree.bind('<<TreeviewOpen>>', lambda event, widget=tree: self.remember_zone(widget, True))
             tree.bind('<<TreeviewClose>>', lambda event, widget=tree: self.remember_zone(widget, False))
             if selected and tree.exists(selected[0]):
@@ -1865,20 +2978,30 @@ class Application:
                 tree.update_idletasks()
                 tree.yview_moveto(self.tracker_scroll[container])
             def toggle(event=None, widget=tree):
+                if self.busy or self.tracker is None:
+                    return 'break'
                 selection = widget.selection()
                 if selection and not selection[0].startswith('zone::'):
                     ident = selection[0]
                     try:
                         if self.tracker.check_state(ident).get('observed'):
-                            self.status.set('This collection is confirmed by the save; its state updates automatically.')
+                            self.notify('The save confirms this location: its box follows the game.')
                             return 'break'
                         self.tracker.set_completed(ident, not self.tracker.check_state(ident).get('completed', False))
                         self.render_tracker()
                     except Exception as error:
                         self.error(error)
                     return 'break'
+            def click(event, widget=tree):
+                # The box at the start of a row marks it; the rest of the row only selects it.
+                ident = widget.identify_row(event.y)
+                if not ident or ident.startswith('zone::') or not widget.identify_element(event.x, event.y).endswith('image'):
+                    return None
+                widget.selection_set(ident)
+                widget.focus(ident)
+                return toggle(widget=widget)
+            tree.bind('<Button-1>', click)
             tree.bind('<space>', toggle)
-            tree.bind('<Double-1>', toggle)
             if not visible:
                 ttk.Label(container, text='No location matches the filters.', style='Muted.TLabel').pack(anchor='w', pady=(5, 0))
         if self.tracker:
@@ -1886,14 +3009,17 @@ class Application:
             count_access = sum(not state.get('completed') and state.get('access') == 'available' for state in states.values())
             count_unknown = sum(not state.get('completed') and state.get('access', 'unknown') == 'unknown' for state in states.values())
             count_partial = sum(not state.get('completed') and state.get('access') == 'partial' for state in states.values())
+            count_blocked = sum(not state.get('completed') and state.get('access') == 'blocked' for state in states.values())
             total = len(self.current_checks)
             self.tracker_counts = {'done': count_done, 'total': total, 'available': count_access}
-            for key, value in [('available', count_access), ('blocked', total - count_done - count_access), ('done', count_done), ('all', total)]:
+            for key, value in [('available', count_access), ('blocked', count_blocked),
+                               ('unknown', count_unknown + count_partial), ('done', count_done), ('all', total)]:
                 self.counters[key][1].configure(text=str(value))
             self.tracker_summary.set({
                 'keys': 'Small keys: found / total, updated when the game saves. Boss key: real time.',
                 'souls': 'A family soul is listed in every zone where its enemies appear.',
-            }.get(self.tracker_filter, f'Double-click a location to mark it by hand.   {count_partial} in a partial zone · {count_unknown} unknown'))
+            }.get(self.tracker_view, 'Tick the box of a location to mark it by hand; a greyed box is confirmed by the save.'
+                  + (f'   Unknown includes {count_partial} in a partly reachable zone.' if count_partial else '')))
         else:
             self.tracker_counts = None
             for frame, count, label in self.counters.values():
@@ -1901,6 +3027,7 @@ class Application:
         self.render_keys()
         self.render_souls()
         self.place_view_tabs()
+        self.update_tracker_notice()
         self.render_home_list(states)
         self.update_home()
         self.update_hud(states)
@@ -1912,7 +3039,7 @@ class Application:
         zones = self.tracker.souls() if self.tracker else []
         owned = {name for _, entries in zones for name, has in entries if has}
         names = {name for _, entries in zones for name, _ in entries}
-        self.counters['souls'][1].configure(text=f'{len(owned)}/{len(names)}' if names else '–')
+        self.view_switch.parts['souls'][1].configure(text=f'Souls  {len(owned)}/{len(names)}' if names else 'Souls')
         if not zones:
             self.souls_shown = None
             return
@@ -1951,19 +3078,23 @@ class Application:
         tree.yview_moveto(scroll)
 
     def place_view_tabs(self):
-        """The Keys and Souls tabs exist only when the seed has keys / souls to show."""
+        """The Keys and Souls views exist only when the seed has keys / souls to show."""
         has = {'keys': bool(self.keys_shown), 'souls': bool(self.souls_shown)}
-        previous = self.counters['all'][0]
-        for key in ('keys', 'souls'):
-            frame = self.counters[key][0]
-            if has[key] and not frame.winfo_manager():
-                frame.pack(side='left', padx=(0, 6), after=previous)
-            elif not has[key] and frame.winfo_manager():
-                frame.pack_forget()
-            if has[key]:
-                previous = frame
-        if self.tracker_filter in has and not has[self.tracker_filter]:
-            self.set_tracker_filter('all')
+        for key, present in has.items():
+            self.view_switch.show(key, present)
+        if self.tracker_view in has and not has[self.tracker_view]:
+            self.set_tracker_view('locations')
+
+    def zone_bar(self, done, total, width=48):
+        """Progress image drawn before a zone name (one image per filled width, kept)."""
+        filled = round(width * done / total) if total else 0
+        if done and not filled:
+            filled = 1   # something found shows
+        cache = self.__dict__.setdefault('zone_bars', {})
+        if filled not in cache:
+            cache[filled] = theme.progress_bar(filled, width)
+        return cache[filled]
+
 
     def render_keys(self):
         """The dungeon keys card: small keys found / total and the boss key, per dungeon."""
@@ -1972,7 +3103,7 @@ class Application:
         rows = self.tracker.keys() if self.tracker else []
         small = [s for _, s, _ in rows if s]
         found, total = sum(s[0] for s in small), sum(s[1] for s in small)
-        self.counters['keys'][1].configure(text=f'{found}/{total}' if small else '–')
+        self.view_switch.parts['keys'][1].configure(text=f'Keys  {found}/{total}' if small else 'Keys')
         if not rows:
             self.keys_shown = None
             return
@@ -2012,7 +3143,7 @@ class Application:
 
     def toggle_hud(self):
         if os.name != 'nt':
-            self.status.set('The in-game overlay only exists on Windows.')
+            self.notify('The in-game overlay only exists on Windows.')
             return
         try:
             if not self.hud:
@@ -2042,7 +3173,7 @@ class Application:
             self.zone_open[item[len('zone::'):]] = value
 
     def set_all_zones(self, value):
-        if self.tracker_filter == 'souls':
+        if self.tracker_view == 'souls':
             for zone, _ in (self.tracker.souls() if self.tracker else []):
                 self.souls_open['souls::' + zone] = value
             if self.souls_tree and self.souls_tree.winfo_exists():
@@ -2153,8 +3284,9 @@ class Application:
                 elif kind == 'update-error':
                     silent = payload[1] and self.update_silent
                     self.updating = False
+                    self.show_status_bar(False)
                     if not silent:
-                        messagebox.showerror('Update', str(payload[0]))
+                        self.error('Update failed: ' + str(payload[0]))
                 elif kind == 'ap-change':
                     self.render_archipelago()
                 elif kind == 'progress':
@@ -2165,11 +3297,16 @@ class Application:
                     self.log.configure(state='disabled')
                 else:
                     self.busy = False
-                    self.progress.stop()
-                    self.progress.pack_forget()
+                    self.show_status_bar(False)
                     for button in (self.generate_button, self.qol_button):
                         button.state(['!disabled'])
                     if kind == 'error':
+                        self.render_parties()
+                        if self.party_job_paused:
+                            self.party_job_paused = False
+                            if not self.restore_party():
+                                self.load_tracker()
+                                self.start_turbo()
                         self.error(payload)
                     else:
                         callback, value = payload
@@ -2179,7 +3316,7 @@ class Application:
                             self.error(error)
         except queue.Empty:
             pass
-        self.root.after(100, self.poll)
+        self._schedule_after(100, self.poll)
 
     def save_extra_emulators(self):
         text = self.extra_emulators.get().strip()
@@ -2191,7 +3328,7 @@ class Application:
     def check_for_updates(self, silent):
         if self.updating == 'install':
             if not silent:
-                messagebox.showinfo('Update', 'The update is being downloaded.')
+                self.notify('The update is being downloaded.')
             return
         if self.updating == 'check':
             self.update_silent = self.update_silent and silent   # a click shows the running check's answer
@@ -2202,7 +3339,7 @@ class Application:
         def worker():
             try:
                 self.events.put(('update-found', (updater.latest_release(experimental=experimental), silent)))
-            except updater.UpdateError as error:
+            except Exception as error:   # any failure must release ``self.updating``
                 self.events.put(('update-error', (error, silent)))
         threading.Thread(target=worker, daemon=True).start()
 
@@ -2211,7 +3348,7 @@ class Application:
         self.updating = False
         if release is None:
             if not silent:
-                messagebox.showinfo('Update', f'You have the latest version ({APP_VERSION}).')
+                self.notify(f'You have the latest version ({APP_VERSION}).')
             return
         notes = release.notes.strip()
         notes = ('\n\n' + (notes[:600] + '…' if len(notes) > 600 else notes)) if notes else ''
@@ -2220,42 +3357,71 @@ class Application:
         elif not updater.is_newer(release.version, APP_VERSION):
             notes = ('\n\nThis is the latest stable version: it replaces the experimental version you have. '
                      'A seed made with the experimental version may not work with it.') + notes
+        title = f'Version {release.version} is available (you have {APP_VERSION})'
         if not updater.can_self_update():
-            if messagebox.askyesno('Update available', f'Version {release.version} is available (you have '
-                                   f'{APP_VERSION}).{notes}\n\nOpen the release page?'):
-                webbrowser.open(release.page)
+            self.show_notice('info', title, notes.strip(), [('Open the release page', lambda: webbrowser.open(release.page)),
+                                                             ('Not now', self.clear_notices)])
             return
-        if not messagebox.askyesno('Update available', f'Version {release.version} is available (you have '
-                                   f'{APP_VERSION}).{notes}\n\nDownload and install it now? The application '
-                                   'restarts; your seeds and settings are kept.'):
-            return
+        self.show_notice('info', title, (notes.strip() + '\n\n' if notes.strip() else '')
+                         + 'The application restarts after the installation; your seeds and settings are kept.',
+                         [('Download and install', lambda: self.install_update(release)), ('Not now', self.clear_notices)])
+
+    def install_update(self, release):
+        self.clear_notices()
         if self.busy:
-            messagebox.showinfo('Operation running', 'Wait for the generation or analysis to finish, then check again.')
+            self.notify('Wait for the generation to finish, then check again.')
             return
         self.updating = 'install'
         self.status.set(f'Downloading version {release.version}…')
+        self.show_status_bar(True)
 
         def worker():
             try:
                 self.events.put(('update-installed', updater.install(release, lambda m: self.events.put(('progress', m)))))
-            except updater.UpdateError as error:
+            except Exception as error:   # any failure must release ``self.updating``
                 self.events.put(('update-error', (error, False)))
         threading.Thread(target=worker, daemon=True).start()
 
     def update_installed(self, target):
         self.updating = False
-        self.status.set('Update installed.')
-        if messagebox.askyesno('Update installed', 'The new version is installed. Restart now?') and self.close():
-            updater.restart(target)   # only once this instance is gone: never two running
+        self.show_status_bar(False)
+        def restart():
+            if self.close():
+                updater.restart(target)   # only once this instance is gone: never two running
+        self.show_notice('info', 'The new version is installed', 'Restart to use it.',
+                         [('Restart now', restart), ('Later', self.clear_notices)])
 
     def error(self, error):
-        self.status.set(str(error))
-        messagebox.showerror('Operation failed', str(error))
+        """A banner in the current page: the problem, then what helps (no window)."""
+        text = str(error)
+        title, _, rest = text.partition('\n')
+        actions = []
+        if any(word in text for word in ('NUP', 'mods folder', 'Setup')):
+            actions.append(('Open Setup', lambda: self.show_page('setup')))
+        actions.append(('Copy the details', lambda: self.copy_text(text)))
+        log = error_log()
+        try:
+            recent = log.is_file() and datetime.now().timestamp() - log.stat().st_mtime < 120
+        except OSError:
+            recent = False
+        if recent:
+            actions.append(('Open the error log', lambda: self.open_path(log)))
+        self.show_notice('error', title, rest.strip(), actions)
+
+    def open_path(self, path):
+        try:
+            if os.name == 'nt':
+                os.startfile(str(path))
+            else:
+                webbrowser.open(Path(path).resolve().as_uri())
+        except OSError as error:
+            self.show_notice('error', 'Could not open ' + str(path), str(error))
+
 
     def close(self):
         """Close the application; False when the player kept it open."""
         if self.busy:
-            messagebox.showinfo('Operation running', 'Wait for the generation or analysis to finish before closing.')
+            self.notify('Wait for the generation to finish before closing.')
             return False
         if self.hotkey_thread_id:
             ctypes.windll.user32.PostThreadMessageW(self.hotkey_thread_id, 0x0012, 0, 0)
@@ -2271,6 +3437,7 @@ class Application:
             self.ap_client.stop()
         self.save_extra_emulators()
         self.closed = True
+        self._cancel_all_after()
         self.root.destroy()
         return True
 

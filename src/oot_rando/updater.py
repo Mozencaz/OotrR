@@ -61,34 +61,14 @@ class Release:
     signature_url: str
 
 
-def parse_version(text):
-    """(major, minor, patch) of 'v1.2.3' / '1.2' / '1.2.3-beta'; None if not a version."""
-    match = re.match(r'v?(\d+)(?:\.(\d+))?(?:\.(\d+))?', (text or '').strip())
-    return tuple(int(part or 0) for part in match.groups()) if match else None
-
-
-def is_prerelease(text):
-    """Whether a version has a pre-release suffix ('1.2.0-beta.1')."""
-    return bool(re.match(r'v?\d+(?:\.\d+){0,2}-\S', (text or '').strip()))
-
-
-def version_key(text):
-    """Sort key of a version, pre-releases before their release (semver):
-    1.2.0-alpha < 1.2.0-beta.1 < 1.2.0-beta.2 < 1.2.0-rc.1 < 1.2.0 < 1.2.1-beta.1. None if not a version."""
-    core = parse_version(text)
-    if core is None:
-        return None
-    match = re.match(r'v?\d+(?:\.\d+){0,2}-([0-9A-Za-z.-]+)', text.strip())
-    if not match:
-        return core, 1, ()
-    parts = tuple((0, int(part), '') if part.isdigit() else (1, 0, part.lower())
-                  for part in match.group(1).split('.') if part)
-    return core, 0, parts
-
-
-def is_newer(candidate, current=__version__):
-    new, old = version_key(candidate), version_key(current)
-    return bool(new and old and new > old)
+from oot_rando.versions import (  # noqa: F401  (moved to oot_rando.versions, re-exported)
+    parse_version,
+    is_prerelease,
+    version_key,
+    is_newer,
+)
+from oot_rando.ed25519 import verify
+from oot_rando.update_key import PUBLIC_KEY
 
 
 def asset_suffix(platform=sys.platform):
@@ -105,7 +85,6 @@ def executable():
 
 def public_key():
     """Release signing key of this build (32 bytes), or None."""
-    from oot_rando.update_key import PUBLIC_KEY
     try:
         key = bytes.fromhex(PUBLIC_KEY)
     except ValueError:
@@ -118,7 +97,8 @@ def can_self_update():
 
 
 def tls_context():
-    """TLS context that also finds the distribution's certificates from a frozen Linux build."""
+    """System trust plus bundled public roots, including in portable builds."""
+    import certifi
     context = ssl.create_default_context()
     if not context.get_ca_certs() and sys.platform.startswith('linux'):
         # A bundled OpenSSL may look for certificates where this distribution keeps none.
@@ -126,6 +106,9 @@ def tls_context():
             if os.path.isfile(path):
                 context.load_verify_locations(path)
                 break
+    # System stores can be empty or outdated. Keep their trusted roots while
+    # adding the portable CA bundle used by Archipelago's official clients.
+    context.load_verify_locations(cafile=certifi.where())
     return context
 
 
@@ -208,7 +191,6 @@ def verify_signature(sums, signature, key=None):
     """Whether ``signature`` (raw 64 bytes, or base64) signs ``sums`` with the release key."""
     import base64
     import binascii
-    from oot_rando.ed25519 import verify
     key = key if key is not None else public_key()
     if key is None:
         return False
@@ -250,9 +232,13 @@ def _extract(archive, name, exe_name):
 def replace_executable(target, data):
     """Put ``data`` in place of ``target`` (the running executable), keeping ``target.old``."""
     new, old = target.with_name(target.name + '.new'), target.with_name(target.name + '.old')
-    new.write_bytes(data)
-    if os.name != 'nt':
-        new.chmod(0o755)
+    try:
+        new.write_bytes(data)
+        if os.name != 'nt':
+            new.chmod(0o755)
+    except OSError as error:   # disk full, read-only folder, file held by an antivirus...
+        new.unlink(missing_ok=True)
+        raise UpdateError(f'Cannot write the new version next to {target.name}: {error}') from None
     try:
         if old.exists():
             old.unlink()

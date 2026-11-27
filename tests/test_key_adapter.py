@@ -8,6 +8,7 @@ import unittest
 
 from oot_rando.logic import rando_options
 from oot_rando.patching import key_adapter as k
+from oot_rando.formats.evfl_tools import params_by_event, parse_flow
 
 NUP = os.environ.get('OOT_NUP')
 
@@ -123,13 +124,12 @@ class NupTests(unittest.TestCase):
             k.check_dungeon_data(self.read(GAMEDATA), [{'kind': 'ring', 'gamedata': 'DungeonInfo.Nowhere.SmallKeyNum'}])
 
     def test_hook_checks_each_key_at_every_item_get(self):
-        from oot_rando.patching.event_patch import _flow, _snapshot
         from oot_rando.patching.qol_patches import ocarina_guide_on_get
         source = ocarina_guide_on_get(self.read(k.ACTION_GUIDE_FLOW))[0]
         records = k.key_records(['Small Key Ring (Water Temple)', 'Boss Key (Forest Temple)',
                                  'Map (Forest Temple)'])
         raw, report = k.add_key_hook(source, records)
-        chart = _flow(raw).flowchart
+        chart = parse_flow(raw).flowchart
         events = {e.name: e for e in chart.events}
         start = {e.name: e for e in chart.entry_points}['ActionGuide'].main_event.v
         self.assertEqual(start.name, report[0]['start'])
@@ -157,8 +157,8 @@ class NupTests(unittest.TestCase):
         self.assertEqual(mark.params.data['GameDataName'], 'RandoKeyRing.WaterTemple')
         self.assertEqual(mark.nxt.v.name, 'RandoOcarinaHeld')   # then the vanilla get flow
         self.assertEqual(done.cases[0].v.name, 'RandoOcarinaHeld')
-        before = _snapshot(_flow(source))
-        after = _snapshot(_flow(raw))
+        before = params_by_event(parse_flow(source))
+        after = params_by_event(parse_flow(raw))
         self.assertEqual({n: v for n, v in after.items() if n in before}, before)
         with self.assertRaises(ValueError):
             k.add_key_hook(raw, records)

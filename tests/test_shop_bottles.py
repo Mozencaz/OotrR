@@ -4,6 +4,7 @@ import os
 import unittest
 
 from oot_rando.patching import shop_bottles
+from oot_rando.formats.evfl_tools import parse_flow
 
 NUP = os.environ.get('OOT_NUP')
 
@@ -27,9 +28,8 @@ class WithGame(unittest.TestCase):
         self.raw = decompress(nup.read(members[shop_bottles.DISPLAY_SHOP_FLOW]), dictionaries(nup))
 
     def test_full_bottles_take_the_plain_item_branches(self):
-        from oot_rando.patching.event_patch import _flow
         raw, report = shop_bottles.patch_display_shop(self.raw)
-        events = {e.name: e for e in _flow(raw).flowchart.events}
+        events = {e.name: e for e in parse_flow(raw).flowchart.events}
         for name, (plain, contents) in shop_bottles.BRANCHES.items():
             with self.subTest(switch=name):
                 guard = events[name].data.cases[shop_bottles.BOTTLE_CATEGORY].v
@@ -43,7 +43,7 @@ class WithGame(unittest.TestCase):
                 # Native bottle contents (fish, potions...) still need an empty bottle.
                 self.assertEqual(guard.name, contents)
                 # Other categories untouched.
-                original = {e.name: e for e in _flow(self.raw).flowchart.events}[name]
+                original = {e.name: e for e in parse_flow(self.raw).flowchart.events}[name]
                 for key, case in original.data.cases.items():
                     if key != shop_bottles.BOTTLE_CATEGORY:
                         self.assertEqual(events[name].data.cases[key].v.name, case.v.name)

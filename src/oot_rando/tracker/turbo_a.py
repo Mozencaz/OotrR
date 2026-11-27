@@ -43,6 +43,7 @@ import time
 from pathlib import Path
 
 from oot_rando.pc_port import is_port_folder, is_port_process, options_ini, port_exe
+from oot_rando.paths import data_dir
 
 # Hookshot's pad codes (gpu/vk/vk_api.h HOS_PAD_*) -> XInput wButtons masks.
 # Triggers are axes (bLeftTrigger / bRightTrigger > 64 in Hookshot).
@@ -320,7 +321,6 @@ class TurboA:
         self.presses = 0
         self.last_hold = ''
         self.remapped = False
-        from oot_rando.paths import data_dir
         self.log_path = Path(log_path) if log_path else data_dir() / 'turbo.log'
         self.state_path = Path(state_path) if state_path else data_dir() / 'app' / 'turbo_binds.json'
         self.game_running = game_running   # () -> bool; default: a PC port process (Hookshot, Longshot...)

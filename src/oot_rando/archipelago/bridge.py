@@ -16,16 +16,34 @@ from collections import Counter
 import copy
 import hashlib
 import json
+from oot_rando.game.extra_sources import area_locations
+from oot_rando.game.remake_world import PROGRESSIVE
+from oot_rando.game.remake_world import source_age
+from oot_rando.game.remake_world import zone_label
+from oot_rando.logic import rando_options
+from oot_rando.logic.rando_options import AP_APP_SECTION
+from oot_rando.logic.rando_options import OPTIONS
+from oot_rando.logic.rando_options import validate
+from oot_rando.logic.rules import age_member
+from oot_rando.logic.world import World
+from oot_rando.patching.ap_item import ap_item
+from oot_rando.patching.ap_mailbox import records
+from oot_rando.patching.soul_adapter import chest_requirements
+from oot_rando.randomizer.full_randomizer import check_name
+from oot_rando.randomizer.full_randomizer import entry_zone
+from oot_rando.randomizer.full_randomizer import prepare
+from oot_rando.randomizer.full_randomizer import starting_unsupported
+from oot_rando.randomizer.full_randomizer import vname
 
 GAME = 'OoT Remake'
-CATALOG_VERSION = 2   # 2: readable location names (game/check_names.py)
+CATALOG_VERSION = 3   # 3: native AI combat dependencies for soul progression
 PATCH_FORMAT = 'oot-remake-archipelago'
 PATCH_VERSION = 1
 PATCH_SUFFIX = '.aprmk'
 # Item standing in for another player's item: given by any location form.
 FOREIGN_STANDIN = 'Rupee (1)'
 # Remake options that are not exposed to Archipelago (fixed, or replaced by an AP common option).
-AP_SKIPPED = {'accessibility'}
+AP_SKIPPED = {'accessibility', 'fake_item_traps'}
 FILLER = ('Rupee', 'Rupees (', 'Deku Nuts (', 'Deku Stick', 'Arrows (', 'Bombs (', 'Deku Seeds (', 'Bombchus (',
           'Map (', 'Compass (', 'Remake: ', 'Recovery Heart', 'Ice Trap')
 
@@ -40,6 +58,8 @@ def scan_fingerprint(groups, enemies, extra):
     Room locks of an enemy linked straight to its shutters (``'direct'``) only add a
     Presence to those shutters at generation: the soul-bound enemies and the logic are
     the same, so they stay out of the fingerprint and earlier patches remain valid.
+    Native ``combat`` evidence stays IN the fingerprint: old AP placements may
+    contain soul deadlocks and must be regenerated with a rebuilt apworld.
     """
     enemies = [dict(enemy, locks=[lock for lock in enemy['locks'] if not lock.get('direct')])
                if any(lock.get('direct') for lock in enemy.get('locks') or ()) else enemy
@@ -68,7 +88,6 @@ def ap_option_specs():
     ``open_forest`` is a setting of the application, not of the full randomizer:
     it is added here because it changes the logic.
     """
-    from oot_rando.logic import rando_options
     specs = [{'name': 'open_forest', 'kind': 'bool', 'label': 'Open the way (Kokiri Forest exit)',
               'default': True, 'values': [False, True], 'help': 'Mido no longer blocks the forest exit.'}]
     for option in rando_options.OPTIONS:
@@ -84,7 +103,6 @@ def ap_option_specs():
 
 def full_options(values):
     """AP option values (by remake name) → (full randomizer options, open_forest)."""
-    from oot_rando.logic import rando_options
     values = dict(values)
     open_forest = bool(values.pop('open_forest', True))
     options = rando_options.defaults()
@@ -96,7 +114,6 @@ def full_options(values):
 
 def player_yaml(values, open_forest, name='Player'):
     """Archipelago player YAML of the ``OoT Remake`` game for these application settings."""
-    from oot_rando.logic import rando_options
     values = rando_options.validate(values, supported_only=True)
     current = dict(values, open_forest=open_forest)
     safe = ''.join(ch for ch in name if ch.isalnum() or ch in '_-') or 'Player'
@@ -118,17 +135,44 @@ def player_yaml(values, open_forest, name='Player'):
     return '\n'.join(lines) + '\n'
 
 
+def to_ap_yaml(values, name='Player', open_forest=True):
+    """Archipelago YAML of the ``OoT Remake`` game (the multiworld player YAML).
+
+    The options Archipelago does not take (or takes in another form) follow in an
+    ``OoT Remake application`` section, which Archipelago ignores and
+    :func:`oot_rando.logic.rando_options.from_ap_yaml` reads back, so the export round-trips exactly.
+    """
+    values = validate(values, supported_only=True)
+    exposed = {spec['name'] for spec in ap_option_specs()} | {'start_inventory_from_pool'}
+    lines = [player_yaml(values, open_forest, name).rstrip('\n'),
+             '# Options of the OoT Randomizer application, ignored by Archipelago:',
+             AP_APP_SECTION + ':']
+    for option in OPTIONS:
+        if option.name in exposed:
+            continue
+        value = values[option.name]
+        if option.name == 'logic_tricks':
+            text = '[]' if value == 'none' else json.dumps(value)  # read back as a trick list
+        elif option.kind == 'items':
+            text = json.dumps(value, ensure_ascii=False)
+        elif option.kind == 'list':
+            text = json.dumps(list(value), ensure_ascii=False)
+        elif isinstance(value, bool):
+            text = 'true' if value else 'false'
+        else:
+            text = json.dumps(value if isinstance(value, str) else str(value), ensure_ascii=False)
+        lines.append(f'  {option.name}: {text}')
+    return '\n'.join(lines) + '\n'
+
+
 # ------------------------------------------------------------------ catalog
 def location_name(data, entry, gid):
     """Same name as the tracker and the spoiler (``full_randomizer.check_name``)."""
-    from oot_rando.randomizer.full_randomizer import _entry_zone, check_name
-    from oot_rando.game.remake_world import zone_label
-    return check_name(entry, gid, zone_label(_entry_zone(data, entry, gid)) or entry['folder'])
+    return check_name(entry, gid, zone_label(entry_zone(data, entry, gid)) or entry['folder'])
 
 
 def _catalog_variants():
     """Option sets whose union covers every location and item the remake can shuffle."""
-    from oot_rando.logic import rando_options
     base = rando_options.defaults()
     everything = dict(base, shuffle_chests=True, shuffle_kokiri_sword=True, shuffle_remake_items=True,
                       shopsanity='4', tokensanity='all', shuffle_scrubs='low', shuffle_freestanding_items='all',
@@ -148,7 +192,6 @@ def _catalog_variants():
 
 def build_catalog(data, groups, enemies, extra, game_build, progress=None):
     """Catalog shipped in the apworld. ``data`` is a :class:`World`."""
-    from oot_rando.randomizer.full_randomizer import prepare
     report = progress or (lambda message: None)
     names, items = {}, set(data.item_table)
     for index, options in enumerate(_catalog_variants()):
@@ -196,8 +239,6 @@ class PlayerWorld:
     CACHE_SIZE = 4096
 
     def __init__(self, catalog, values, seed_key):
-        from oot_rando.logic.world import World
-        from oot_rando.randomizer.full_randomizer import prepare, vname
         data = World()
         if data.fingerprint() != catalog['world']:
             raise ValueError('The apworld logic does not match its catalog: rebuild the apworld.')
@@ -233,10 +274,6 @@ class PlayerWorld:
         These are tracker estimates, not new progression locations. Unknown areas
         stay unreachable rather than inheriting Archipelago's always-true rule.
         """
-        from oot_rando.game.extra_sources import area_locations
-        from oot_rando.game.remake_world import source_age
-        from oot_rando.logic.rules import age_member
-        from oot_rando.patching.soul_adapter import chest_requirements
         if all(self.in_logic.values()):
             return {}
         logic = self.c.logic
@@ -288,8 +325,6 @@ class PlayerWorld:
         opening; a progressive copy takes a level of the family, so it must come
         from the pool (the number of levels is fixed).
         """
-        from oot_rando.game.remake_world import PROGRESSIVE
-        from oot_rando.randomizer.full_randomizer import starting_unsupported
         names = set(extra) | set(from_pool)
         bad = sorted(n for n in names if starting_unsupported(n))
         if bad:
@@ -315,7 +350,6 @@ class PlayerWorld:
 
     def can_hold(self, gid, item=None):
         """Whether location ``gid`` can give ``item`` (None: another player's item)."""
-        from oot_rando.patching.ap_item import ap_item
         return self.c.allowed(ap_item('?') if item is None else item, gid)
 
     def reach(self, counts):
@@ -351,7 +385,6 @@ class PlayerWorld:
             raise ValueError('Every shuffled location must hold an item.')
         # Every item found in another world must be one the game can be handed
         # (patching.ap_mailbox): fail at generation, not with a softlock in game.
-        from oot_rando.patching.ap_mailbox import records
         records(remote)
         return {'format': PATCH_FORMAT, 'version': PATCH_VERSION, 'game': GAME, 'game_build': game_build,
                 'world': self.catalog['world'], 'scan': self.catalog['scan'],
@@ -414,7 +447,8 @@ def check_patch(patch):
     if not isinstance(placements, dict) or len(placements) > MAX_ENTRIES:
         raise ValueError('Invalid Archipelago patch: placements.')
     for gid, placement in placements.items():
-        if not isinstance(gid, str) or len(gid) > MAX_NAME or not isinstance(placement, dict)                 or type(placement.get('own')) is not bool:
+        if (not isinstance(gid, str) or len(gid) > MAX_NAME or not isinstance(placement, dict)
+                or type(placement.get('own')) is not bool):
             raise ValueError(f'Invalid placement in the Archipelago patch: {str(gid)[:80]}')
         _text(placement.get('item'), f'placement {gid}')
         for key in ('player', 'game'):
@@ -442,37 +476,17 @@ def check_patch(patch):
     return patch
 
 
-def settings_from_patch(patch, skulltulas_always_present=False):
-    """Application settings that build the mod of this patch (full randomizer only, skips on).
-
-    ``skulltulas_always_present`` only changes this game (no placement): a local choice.
-    """
-    from oot_rando.randomizer.randomizer_core import SKIP_OPTIONS, Settings
-    from oot_rando.game.randomizer_categories import CATEGORIES
-    check_patch(patch)
-    from oot_rando.logic import rando_options
-    options = dict(patch['options'])
-    options.setdefault('spiritual_stones', rando_options.UNRECORDED['spiritual_stones'])
-    seed = f'AP {patch.get("seed_name", "")} {patch.get("slot_name", "")}'.strip()[:256]
-    return Settings(seed=seed, randomize_chests=False, open_forest=bool(patch['open_forest']),
-                    categories=dict.fromkeys(CATEGORIES, False), full=options,
-                    archipelago=patch, skulltulas_always_present=bool(skulltulas_always_present),
-                    **dict.fromkeys(SKIP_OPTIONS, True)).validate()
-
-
 def _label(placement):
     return f'{placement["item"]} ({placement.get("player", "?")})'
 
 
 def assigned_items(patch):
     """gid → item to place in this game (another player's item → its Archipelago medallion)."""
-    from oot_rando.patching.ap_item import ap_item
     return {gid: (p['item'] if p['own'] else ap_item(_label(p))) for gid, p in patch['placements'].items()}
 
 
 def foreign_items(patch):
     """Planner item of each foreign item → (item name, player), for the get-item texts."""
-    from oot_rando.patching.ap_item import ap_item
     return {ap_item(_label(p)): (p['item'], p.get('player', '?'))
             for p in patch['placements'].values() if not p['own']}
 

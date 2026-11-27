@@ -4,6 +4,7 @@ import os
 import unittest
 
 from oot_rando.patching import song_adapter as songs
+from oot_rando.formats.evfl_tools import parse_flow
 
 NUP = os.environ.get('OOT_NUP')
 
@@ -125,8 +126,7 @@ class WithGame(unittest.TestCase):
         cls.nup.stream.close()
 
     def events(self, raw):
-        from oot_rando.patching.event_patch import _flow
-        return {e.name: e for e in _flow(raw).flowchart.events}
+        return {e.name: e for e in parse_flow(raw).flowchart.events}
 
     def test_every_song_location_can_give_any_item_as_text(self):
         from evfl.event import SubFlowEvent
@@ -168,9 +168,8 @@ class WithGame(unittest.TestCase):
 
     def test_teaching_entries_play_without_adding(self):
         from evfl.event import ActionEvent
-        from oot_rando.patching.event_patch import _flow
         raw = songs.add_teaching_entries(self.read(songs.TEACHING_FLOW_PATH))
-        flow = _flow(raw).flowchart
+        flow = parse_flow(raw).flowchart
         entries = {e.name: e for e in flow.entry_points}
         for name in songs.TEACHING_REPLACED.values():
             seen, todo, actions = set(), [entries[name].main_event.v], []

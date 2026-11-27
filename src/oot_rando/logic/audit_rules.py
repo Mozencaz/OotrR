@@ -29,6 +29,13 @@ from collections import defaultdict
 from contextlib import contextmanager
 from pathlib import Path
 from oot_rando.paths import data_dir
+from oot_rando.formats.inspect_nup import Nup
+from oot_rando.formats.inspect_resources import dictionaries
+from oot_rando.game.extra_sources import match_sources
+from oot_rando.game.extra_sources import scan_world
+from oot_rando.game.remake_world import match_locations
+from oot_rando.game.remake_world import zone_label
+from oot_rando.game.world_maps import effective_members
 
 AGES = ('child', 'adult')
 AGE_LABELS = {'child': 'child', 'adult': 'adult'}
@@ -301,8 +308,6 @@ def _without_remake_fixes(enabled):
 def matched_entries(data, logic, groups, extra, options):
     """Chest groups and positioned sources matched to AP locations (exact or group)."""
     import copy
-    from oot_rando.game.remake_world import match_locations
-    from oot_rando.game.extra_sources import match_sources
     matches, _ = match_locations(groups, data, logic, options['chest_matching'])
     for entry in matches.values():
         entry.setdefault('source', 'chest')
@@ -322,11 +327,10 @@ def run_audit(data, maps, groups, extra, options=None, without_fixes=False, matc
     """
     from oot_rando.logic import rando_options
     from oot_rando.logic.rules import Logic
-    from oot_rando.randomizer.full_randomizer import ap_settings
     options = dict(options or rando_options.defaults(), chest_matching=matching)
     options = rando_options.validate(options, supported_only=True)
     with _without_remake_fixes(without_fixes):
-        logic = Logic(data, ap_settings(options, True))
+        logic = Logic(data, rando_options.ap_settings(options, True))
     oracle = Oracle(data, logic)
     points = hint_points(maps)
     report = []
@@ -349,7 +353,6 @@ def run_audit(data, maps, groups, extra, options=None, without_fixes=False, matc
 
 
 def to_markdown(result):
-    from oot_rando.game.remake_world import zone_label
     summary = result['summary']
     lines = ['# Audit of the AP rules against the remake data', '',
              'Clues read from the maps, tested against the AP logic (necessity test). '
@@ -392,10 +395,6 @@ def main(argv=None):
     parser.add_argument('--output', default=None, help='report folder')
     args = parser.parse_args(argv)
     from oot_rando.logic.world import World
-    from oot_rando.game.extra_sources import scan_world
-    from oot_rando.formats.inspect_nup import Nup
-    from oot_rando.formats.inspect_resources import dictionaries
-    from oot_rando.game.world_maps import effective_members
     nup_path = Path(args.nup or os.environ.get('OOT_NUP', ''))
     if not nup_path.is_file():
         parser.error('game .nup file not found')

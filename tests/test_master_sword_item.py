@@ -6,7 +6,7 @@ import unittest
 
 from oot_rando.formats import byml_codec as codec
 from oot_rando.formats.inspect_resources import sarc
-from oot_rando.game.item_forms import _pack_path, _table_components, resolve_components
+from oot_rando.game.item_forms import pack_path, _table_components, resolve_components
 from oot_rando.patching import master_sword_item as master
 
 
@@ -60,19 +60,19 @@ class NativeMasterSword(unittest.TestCase):
         self.assertIn('Item_GetDemo', components['ASInfoRef'])
         self.assertEqual(components['ActorNameRef'],
                          resolve_components(self.pack(master.WEAPON), master.WEAPON, codec)['ActorNameRef'])
-        model = codec.load(files[_pack_path(components['ModelInfoRef'])])['root']
+        model = codec.load(files[pack_path(components['ModelInfoRef'])])['root']
         self.assertEqual(model['ModelProjectName'], master.WEAPON)
         self.assertEqual(model['FmdbName'], master.WEAPON)
-        animation = codec.load(files[_pack_path(components['AnimationRef'])])['root']
+        animation = codec.load(files[pack_path(components['AnimationRef'])])['root']
         self.assertEqual(animation['AnimationResources'], master.ANIMATIONS)
         self.assertIn('Model/Item_Common_Animation.anim.bfres.zs', self.members)
         self.assertIn(f'Model/{master.WEAPON}.{master.WEAPON}.bfres.zs', self.members)
         table = _table_components(files, components['GameParameterTableRef'], codec)
-        equipment = codec.load(files[_pack_path(table['PlayerEquipmentActor'])])['root']
+        equipment = codec.load(files[pack_path(table['PlayerEquipmentActor'])])['root']
         self.assertEqual(equipment, {'Adult': f'Work/Actor/{master.WEAPON}.engine__actor__ActorParam.gyml'})
-        pouch = codec.load(files[_pack_path(components['PouchContentRef'])])['root']
+        pouch = codec.load(files[pack_path(components['PouchContentRef'])])['root']
         self.assertEqual(pouch['PouchActor'], equipment['Adult'])
-        self.assertIn(_pack_path(pouch['$parent']), files)
+        self.assertIn(pack_path(pouch['$parent']), files)
 
     def test_new_references_resolve_and_all_three_rows_preserve_native_data(self):
         modified, new = master.build_files(self.read)
@@ -91,7 +91,7 @@ class NativeMasterSword(unittest.TestCase):
         self.assertEqual(components['ActorNameRef'],
                          resolve_components(self.pack(master.WEAPON), master.WEAPON, codec)['ActorNameRef'])
         for key in ('ModelInfoRef', 'AnimationRef', 'PouchContentRef', 'GameParameterTableRef'):
-            path = _pack_path(components[key])
+            path = pack_path(components[key])
             self.assertTrue(path in files or path in self.members, path)
         for name, path in master.RSDB_FILES.items():
             before = codec.load(self.read(path))['root']

@@ -4,8 +4,8 @@ import os
 import unittest
 
 from oot_rando.patching import special_item_shuffle as s
-from oot_rando.patching.event_patch import _flow, _snapshot, patch_event_params
-from oot_rando.patching.qol_patches import _predecessors
+from oot_rando.patching.event_patch import patch_event_params
+from oot_rando.formats.evfl_tools import links_to, params_by_event, parse_flow
 
 NUP = os.environ.get('OOT_NUP')
 
@@ -54,7 +54,7 @@ class NativeFlows(unittest.TestCase):
         path = s.FLOWS[index]
         source = self.read(path)
         raw, report = s.patch_flow(path, source)
-        chart = _flow(raw).flowchart
+        chart = parse_flow(raw).flowchart
         return source, raw, chart, {e.name: e for e in chart.events}, report
 
     def test_all_native_flows_replay_and_reject_second_application(self):
@@ -64,7 +64,7 @@ class NativeFlows(unittest.TestCase):
                 source = self.read(path)
                 raw, report = s.patch_flow(path, source)
                 self.assertEqual((raw, report), s.patch_flow(path, source))
-                before, after = _snapshot(_flow(source)), _snapshot(_flow(raw))
+                before, after = params_by_event(parse_flow(source)), params_by_event(parse_flow(raw))
                 if path == s.FLOWS[0]:
                     before['Event115']['IsEquipDIrect'] = False
                 self.assertEqual({k: after[k] for k in before}, before)
@@ -77,7 +77,7 @@ class NativeFlows(unittest.TestCase):
                                     [('Event115', 'Actor', s.SWORD, 'Item_Token_Gerudo')])
         source, _ = add_collection_markers(source, {'Event115': 'RandoCollectedMasterSword'})
         raw, _ = s.patch_flow(s.FLOWS[0], source)
-        events = {e.name: e for e in _flow(raw).flowchart.events}
+        events = {e.name: e for e in parse_flow(raw).flowchart.events}
         gift = events['Event115']
         self.assertEqual(gift.data.params.data['Actor'], 'Item_Token_Gerudo')
         self.assertFalse(gift.data.params.data['IsEquipDIrect'])
@@ -86,7 +86,7 @@ class NativeFlows(unittest.TestCase):
 
     def test_vanilla_display_is_unreachable(self):
         _, _, chart, events, report = self.patched(1)
-        self.assertFalse(_predecessors(chart, events['Event117']))
+        self.assertFalse(links_to(chart, events['Event117']))
         self.assertIn('Event117', report['bypassed'])
         _, _, _, events, _ = self.patched(1)
         self.assertIsNone(events['Event136'].data.nxt.v)
@@ -97,7 +97,7 @@ class NativeFlows(unittest.TestCase):
         source = self.read(path)
         with self.assertRaises(ValueError):
             s.patch_flow(path, source)
-        events = {e.name: e for e in _flow(source).flowchart.events}
+        events = {e.name: e for e in parse_flow(source).flowchart.events}
         self.assertEqual(events['Event137'].data.nxt.v.name, 'Event173')
         self.assertEqual(events['Event173'].data.params.data['Actor'], s.SWORD)
         self.assertEqual(events['Event173'].data.params.data['Num'], 1)
@@ -120,11 +120,11 @@ class NativeFlows(unittest.TestCase):
                     self.assertEqual(guard.data.params.data, {'Actor': s.SWORD, 'Num': 1})
                     self.assertEqual(guard.data.cases[0].v.name, owned)
                     self.assertEqual(guard.data.cases[1].v.name, missing)
-                    self.assertTrue(_predecessors(chart, guard))
+                    self.assertTrue(links_to(chart, guard))
                     # Every incoming native link to the action now goes through
                     # inventory ownership; missing inventory never enters it.
                     self.assertEqual([(e.name, kind, key) for e, kind, key in
-                                      _predecessors(chart, events[owned])], [(guard.name, 'case', 0)])
+                                      links_to(chart, events[owned])], [(guard.name, 'case', 0)])
                     self.assertIsNotNone(guard.data.actor.v.params)
 
     def test_era_change_drops_a_stored_unowned_master_sword(self):
@@ -182,7 +182,7 @@ class NativeFlows(unittest.TestCase):
         for stored in ('', s.KOKIRI_SWORD):
             with self.subTest(stored=stored):
                 # Native flow reproduces both the fallback and stale-storage bug.
-                self.assertEqual(restored_weapon(_flow(source).flowchart, stored, False), s.KOKIRI_SWORD)
+                self.assertEqual(restored_weapon(parse_flow(source).flowchart, stored, False), s.KOKIRI_SWORD)
                 self.assertEqual(restored_weapon(chart, stored, False), '')
                 self.assertEqual(restored_weapon(chart, stored, True), s.KOKIRI_SWORD)
         self.assertIn('RandoMasterSwordOwned_KokiriEraFallback', report['guards'])
@@ -198,9 +198,9 @@ class NativeFlows(unittest.TestCase):
         self.assertEqual(guard.data.params.data, {'Actor': s.SWORD, 'Num': 1})
         self.assertEqual(guard.data.cases[0].v.name, 'Event9')
         self.assertNotIn(1, guard.data.cases)
-        self.assertEqual([(e.name, kind, key) for e, kind, key in _predecessors(chart, events['Event9'])],
+        self.assertEqual([(e.name, kind, key) for e, kind, key in links_to(chart, events['Event9'])],
                          [(guard.name, 'case', 0)])
-        self.assertEqual([(e.name, kind, key) for e, kind, key in _predecessors(chart, guard)],
+        self.assertEqual([(e.name, kind, key) for e, kind, key in links_to(chart, guard)],
                          [('Event37', 'case', 1)])
         self.assertIn(guard.name, report['guards'])
 

@@ -12,7 +12,7 @@ import tempfile
 from oot_rando.formats.inspect_nup import Nup
 from oot_rando.formats.inspect_resources import Byml, dictionaries, decompress
 from oot_rando.randomizer.randomizer_core import Settings, generate, MAP, ADULT_MAP, STATIC
-from oot_rando.randomizer.randomizer_services import read_artifact
+from oot_rando.randomizer.artifact import read_artifact
 from oot_rando.game.world_maps import effective_members, SAFE_CHESTS
 from oot_rando.patching.qol_patches import GUARD, WALL, REACTION, AREAS, LOGIC_GROUP
 

@@ -42,8 +42,9 @@ def check_supported_game(nup):
                          f'game and its update from the console again, without mods.')
 MAP = 'Banc/KokiriForest/KokiriForest_Child_Dynamic.bcett.byml.zs'
 RESTBL = 'System/Resource/ResourceSizeTable.Product.111.Nin_Ounce_NVN2.rsizetable.zs'
-CHESTS = {10831981390482426294: 'TBox_Rupee_Green', 4555665598794293658: 'TBox_Rupee_Blue',
-          9725242744547055868: 'TBox_Rupee_Blue', 12786193094758345086: 'TBox_Rupee_Blue'}
+from oot_rando.catalog.kokiri_chests import (  # noqa: F401  (moved to oot_rando.catalog.kokiri_chests, re-exported)
+    CHESTS,
+)
 POOL = ['TBox_Rupee_Green', 'TBox_Rupee_Blue', 'TBox_Rupee_Red', 'TBox_Rupee_Purple',
         'TBox_Rupee_Gold', 'TBox_DekuNutBundle', 'TBox_DekuSeedBundle',
         'TBox_ArrowBundle_Small', 'TBox_ArrowBundle_Medium', 'TBox_ArrowBundle_Large',

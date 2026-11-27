@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from oot_rando.tracker.save_reader import (decode_progress, load_snapshot, SaveFormatError, SaveChangedError,
+from oot_rando.formats.save_file import (decode_progress, load_snapshot, SaveFormatError, SaveChangedError,
                          MAGIC, FORMAT_VERSION, PROGRESS_TYPE_HASH)
 
 
@@ -82,7 +82,7 @@ class SaveReaderTests(unittest.TestCase):
             path = Path(directory) / 'progress.sav'
             path.write_bytes(fixture())
             stat = path.stat()
-            with patch('oot_rando.tracker.save_reader._read_once', side_effect=[(fixture(), stat), (fixture(boolean=0), stat)]):
+            with patch('oot_rando.formats.save_file._read_once', side_effect=[(fixture(), stat), (fixture(boolean=0), stat)]):
                 with self.assertRaises(SaveChangedError):
                     load_snapshot(path, attempts=1)
 

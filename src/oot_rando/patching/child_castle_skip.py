@@ -1,3 +1,4 @@
+from oot_rando.formats.evfl_tools import event_params_of, params_by_event, parse_flow
 """Child Hyrule Castle made optional (``skip_child_zelda``).
 
 A new game starts in the state the castle leaves behind in vanilla: Malon met,
@@ -90,7 +91,7 @@ def start_step_params(read_flow, door_ready=False):
     ``read_flow(path)``: the game's bytes of a flow. Each params dict is the native
     event's, with ``IsIgnoreChallengeProgressUI`` true. ``door_ready`` keeps the
     no-stone escape at Step03 instead of replaying earlier DoorOfTime requests."""
-    from oot_rando.patching.story_fixes import _Chart, _params
+    from oot_rando.patching.story_fixes import _Chart
     charts, result = {}, []
     for name, (path, event, challenge, step) in zip(step_event_names(), START_STEPS):
         if door_ready and challenge == 'DoorOfTime':
@@ -98,7 +99,7 @@ def start_step_params(read_flow, door_ready=False):
         if path not in charts:
             charts[path] = _Chart(read_flow(path))
         native = charts[path].event(event, 'ActionEvent')
-        params = _params(native)
+        params = event_params_of(native)
         if (native.data.actor_action.v.v != STEP_ACTION or str(native.data.actor.v.identifier) != STEP_ACTOR
                 or params.get('ChallengeName') != challenge or params.get('StepName') != step):
             raise ValueError(f'Unexpected native quest request: {path} {event}')
@@ -111,7 +112,7 @@ def add_start_steps(raw, steps, after=OPENING_ANCHOR):
 
     Returns (bytes, [event names])."""
     from evfl.util import make_index
-    from oot_rando.patching.story_fixes import _Chart, _params
+    from oot_rando.patching.story_fixes import _Chart
     flow = _Chart(raw)
     anchor = flow.events.get(after)
     if anchor is None or not hasattr(anchor.data, 'nxt'):
@@ -123,7 +124,7 @@ def add_start_steps(raw, steps, after=OPENING_ANCHOR):
     result, events = flow.write()
     chain = events[after].data.nxt.v
     for name, params in steps:
-        if chain is None or chain.name != name or _params(chain) != params:
+        if chain is None or chain.name != name or event_params_of(chain) != params:
             raise ValueError('Castle skip requests wrongly chained.')
         chain = chain.data.nxt.v
     return result, [name for name, _ in steps]
@@ -226,9 +227,8 @@ def kokiri_schedule(raw):
 
 def kokiri_talk(raw):
     """Talk flow bytes whose castle branches wait for the Deku Tree. Returns (bytes, [events])."""
-    from oot_rando.patching.event_patch import _flow, _snapshot
-    flow = _flow(raw)
-    expected = _snapshot(flow)
+    flow = parse_flow(raw)
+    expected = params_by_event(flow)
     changed = []
     for event in flow.flowchart.events:
         params = getattr(getattr(event, 'data', None), 'params', None)
@@ -244,6 +244,6 @@ def kokiri_talk(raw):
     stream = io.BytesIO()
     flow.write(stream)
     result = stream.getvalue()
-    if _snapshot(_flow(result)) != expected:
+    if params_by_event(parse_flow(result)) != expected:
         raise ValueError('Kokiri talk patch changed other parameters.')
     return result, changed

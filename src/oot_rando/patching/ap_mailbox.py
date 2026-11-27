@@ -32,6 +32,9 @@ In-game test 12/11 (Hookshot): signal → pose and text at once. A consumable ac
 import copy
 import hashlib
 import io
+from oot_rando.game.item_forms import form_actor
+from oot_rando.game.remake_world import PROGRESSIVE
+from oot_rando.game.remake_world import item_actor
 
 PREFIX = 'RandoAP_'
 RECV, GOT = 'RandoAP.Recv.', 'RandoAP.Got.'
@@ -54,8 +57,6 @@ def record_key(player, location):
 
 def records(remote):
     """One record per item of this game found in another world (the patch's ``remote``)."""
-    from oot_rando.game.item_forms import form_actor
-    from oot_rando.game.remake_world import PROGRESSIVE
     result, seen = [], set()
     for entry in remote:
         key = record_key(entry['player'], entry['location'])
@@ -106,7 +107,6 @@ def remote_actor(item):
     received ones too, see :func:`key_items`), never the generic remake keys, which the
     game credits to the dungeon Link stands in (none outside a dungeon).
     """
-    from oot_rando.game.remake_world import item_actor
     from oot_rando.patching.key_adapter import BOSS_KEY_DUNGEONS, DUNGEON_FOLDER, boss_actor
     if item.startswith('Boss Key ('):
         folder = DUNGEON_FOLDER.get(item[len('Boss Key ('):-1])
@@ -279,8 +279,8 @@ def add_analyzed_rows(info_raw, items, current, dispatch=False):
     template = copy.deepcopy(by_id[TEMPLATE_ANALYZED])
     plain = copy.deepcopy(template)
     if dispatch:
-        from oot_rando.patching.event_info import _cached_charts
-        current = _cached_charts(current)
+        from oot_rando.patching.event_info import cached_charts
+        current = cached_charts(current)
         items = [{'event': DISPATCH, 'style': 'get'}] if items else []
     gets = [record for record in items if record['style'] in ('get', 'progressive')]
     if gets:
@@ -327,7 +327,7 @@ def ainb_to_binary(document):
     return result
 
 
-def _input(name, value, output=False):
+def ainb_input(name, value, output=False):
     return {'Name': name, 'Default Value': value, 'Node Index': -1, 'Output Index': 0,
             'Flags': ['Uses Default', 'Is Output'] if output else ['Uses Default']}
 
@@ -375,8 +375,8 @@ def patch_main_update(raw, items, dispatch=False):
             groups.append(group)
         query_i, selector_i, both_i, request_i, clear_i, idle_i = range(len(nodes), len(nodes) + 6)
         query = user(query_i, 'SeqQueryGetNonStructGameDataBool', {
-            'Int': [_input('GameDataIndex', -1, True)], 'Bool': [_input('IsDirect', True)],
-            'String': [_input('GameDataFullName', record['recv'])]},
+            'Int': [ainb_input('GameDataIndex', -1, True)], 'Bool': [ainb_input('IsDirect', True)],
+            'String': [ainb_input('GameDataFullName', record['recv'])]},
             {'Bool': [{'Name': 'Value', 'Is Output': True}]}, ['Is Query'],
             {'Bool': [{'Name': 'OutputOnlyOnEnter', 'Default Value': False, 'Flags': []}]})
         selector = copy.deepcopy(selector_model)
@@ -390,11 +390,11 @@ def patch_main_update(raw, items, dispatch=False):
         both.update({'Node Index': both_i, 'GUID': guid(both_i), 'Flags': [],
                      'Plugs': {'Child': [{'Node Index': request_i, 'Name': ''}, {'Node Index': clear_i, 'Name': ''}]}})
         request = user(request_i, 'SeqOneShotRequestEvent', {
-            'Bool': [_input('IsBancParamValue', False, True)], 'String': [_input('EventName', record['event'])]},
+            'Bool': [ainb_input('IsBancParamValue', False, True)], 'String': [ainb_input('EventName', record['event'])]},
             properties=once)
         clear = user(clear_i, 'SeqOneShotSetNonStructGameDataBool', {
-            'Int': [_input('GameDataIndex', -1, True)], 'Bool': [_input('Value', False)],
-            'String': [_input('GameDataFullName', record['recv'])]}, properties=once)
+            'Int': [ainb_input('GameDataIndex', -1, True)], 'Bool': [ainb_input('Value', False)],
+            'String': [ainb_input('GameDataFullName', record['recv'])]}, properties=once)
         idle = copy.deepcopy(dummy)
         idle.update({'Node Index': idle_i, 'GUID': guid(idle_i)})
         nodes.extend([query, selector, both, request, clear, idle])

@@ -3,6 +3,7 @@ import _src_path  # noqa: F401  (src on sys.path)
 import hashlib
 import io
 import json
+import ssl
 import tarfile
 import tempfile
 import unittest
@@ -34,6 +35,25 @@ def release():
 
 
 class UpdaterTest(unittest.TestCase):
+    def test_tls_bundle_works_without_system_certificates(self):
+        # Frozen builds must still trust public roots on a machine with an empty store.
+        empty = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        self.assertEqual(empty.cert_store_stats()['x509_ca'], 0)
+        with patch.object(updater.ssl, 'create_default_context', return_value=empty), \
+                patch.object(updater.sys, 'platform', 'win32'):
+            context = updater.tls_context()
+        self.assertGreater(context.cert_store_stats()['x509_ca'], 0)
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
+
+    def test_tls_bundle_keeps_system_trust(self):
+        import certifi
+        from unittest.mock import Mock
+        context = Mock()
+        with patch.object(updater.ssl, 'create_default_context', return_value=context):
+            self.assertIs(updater.tls_context(), context)
+        context.load_verify_locations.assert_called_once_with(cafile=certifi.where())
+
     def test_versions(self):
         self.assertEqual(updater.parse_version('v0.10.2'), (0, 10, 2))
         self.assertEqual(updater.parse_version('1.2'), (1, 2, 0))
@@ -148,6 +168,17 @@ class UpdaterTest(unittest.TestCase):
             self.assertFalse(target.with_name(target.name + '.new').exists())
             updater.replace_executable(target, b'newer')   # a leftover .old is replaced
             self.assertEqual(target.with_name(target.name + '.old').read_bytes(), b'new')
+
+    def test_replace_failure_to_write_is_an_update_error(self):
+        # An OSError escaping here left the GUI believing an update was still running.
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / 'OoT-Randomizer.exe'
+            target.write_bytes(b'old')
+            with patch.object(Path, 'write_bytes', side_effect=OSError(28, 'No space left on device')):
+                with self.assertRaisesRegex(updater.UpdateError, 'Cannot write'):
+                    updater.replace_executable(target, b'new')
+            self.assertEqual(target.read_bytes(), b'old')
+            self.assertFalse(target.with_name(target.name + '.new').exists())
 
     def test_install_needs_frozen_build(self):
         if not updater.can_self_update():

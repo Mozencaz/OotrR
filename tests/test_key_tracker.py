@@ -2,8 +2,8 @@
 import _src_path  # noqa: F401  (src on sys.path)
 import unittest
 
-from oot_rando.patching.key_adapter import (APPLIED_PREFIX, RING_DUNGEONS, TRACKED_BOSS_KEYS, dungeon_keys,
-                                            key_tracking)
+from oot_rando.game.tracking_metadata import key_tracking
+from oot_rando.patching.key_adapter import APPLIED_PREFIX, RING_DUNGEONS, TRACKED_BOSS_KEYS, dungeon_keys
 from oot_rando.patching.soul_adapter import murmur3
 
 

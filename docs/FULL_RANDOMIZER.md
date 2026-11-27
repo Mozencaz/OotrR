@@ -9,7 +9,7 @@ and logic are checked statically (`python -m oot_rando verify`); items marked
 
 | Option | Source | Write into the game |
 |---|---|---|
-| **Chests** (`shuffle_chests`) | every chest, major items included | `Dynamic.Drop__DropActor` of the chest |
+| **Chests** (`shuffle_chests`) | every chest, major items included, and the Market Treasure Chest Game first prize | `Dynamic.Drop__DropActor` of the chest |
 | **Gold Skulltulas** (`tokensanity`: dungeons / overworld / all) | 100 skulltulas = the 100 AP locations | `Drop__DropActor` added to the enemy (native instance parameter); every item but the token is dropped by a pickup built on the token (see below) |
 | **Shops** (`shopsanity`: 1 to 8 items per shop, random 1–4, or Whole shops) | 64 stalls across 8 shops, masks excluded | stall `Gyaml`; fixed price of 10 rupees; bought once |
 | **Freestanding items** (`shuffle_freestanding_items`) | non-respawning heart pieces, rupees and hearts | item `Gyaml` |
@@ -44,9 +44,11 @@ shuffled reward only once (`repeatable_adapter.py`), then go back to their vanil
   Regenerate seeds to apply this fix. **Not validated in game.**
 * **Bows and elemental arrows**: the normal bow menu actor uses `Bow`, correcting
   its native `IceArrow` assignment. Ice Arrows remain a separate pool item when
-  their chest is shuffled. Standalone Fire, Ice and Light Arrows cannot be equipped;
-  their combined bow-and-arrow entries retain adult usability once a bow is held
-  (`patching/elemental_arrows.py`). **Not validated in game.**
+  their chest is shuffled. Fire, Ice and Light Arrows retain their native adult
+  menu selection. Disabling the standalone entries blocked selection even with
+  a bow and magic; generator 0.12.17 restores them (`patching/elemental_arrows.py`).
+  Logic still requires adult Link, the corresponding arrows, a bow and magic.
+  Regenerate seeds to apply the fix. **Fix not yet validated in game.**
 * **Bomb refills never grant a bomb bag**: bombs and bombchus have their native
   `SmallBagActor` automatic grant cleared in every embedded pouch component,
   including generated world, drop and shop packs (`patching/bomb_refills.py`).
@@ -61,6 +63,49 @@ shuffled reward only once (`repeatable_adapter.py`), then go back to their vanil
   non-progressive item, replacing filler), scarce (at most 3 bottles, half the
   hearts), minimal (one bottle, no hearts, double defense or capacity upgrades). The
   number of shuffled locations never changes.
+* **Fake item traps** (`fake_item_traps`, Items tab, `none` by default, not offered to
+  Archipelago). `some`: one fake copy of each major item of the pool (`catalog/traps.py`:
+  hookshot, bow, slingshot, boomerang, bomb bag, hammer, boots, strength, scale, lens,
+  magic, elemental arrows, spells, ocarina, Kokiri Sword, Mirror Shield, tunics, Stone
+  of Agony). `plentiful`: two copies of each of them, plus one of each medallion,
+  spiritual stone and song (in the pool or not). Each trap replaces a filler item
+  (rupees and ammunition, lowest value first; when filler runs out, the first copies
+  of the major items come first, then the dungeon rewards and songs, then the second
+  copies). Traps go into chests and ground checks (freestanding items, Gold
+  Skulltulas, pots, rocks, bushes, crates), never NPC gifts, scrubs or shops, whose
+  items may be given without the get event that writes the trap's `IsGet` flag (as
+  for the souls). They are junk for the logic. A trap is a pouch actor
+  `Item_Trap_<code>` (`<code>2` for a second copy: each copy has its own flags and
+  freezes once) built like the
+  souls, with the model, pose, name and description of the item it imitates (songs
+  have no description: their name stands in); its get
+  text says "Too bad, it's a trap!" (English and French; other languages read the
+  English text). Every item get ends in `ActionGuide/ActionGuide`: once a trap's
+  `IsGet` flag is set and its saved `RandoTrap.<code>` is not,
+  `GameSystemActor.EventTriggerRequestCreateConditionSensor` spawns
+  `RandoIceTrapSensor` (`patching/fake_traps.py`), the event the Sun's Song uses for
+  its own sensor. The copy carries the vanilla ice-trap chest attack (`Obj_TBox_A_04`,
+  damage element `Frozen`) and hits the player in a 1.5 m cylinder around Link
+  instead of enemies within 12 m: an enemy attack sensor (`Enemy_BabyDodongo`'s
+  `EnemyAttack` layer, `HitToPlayer` mask, `EnemyAttackReceipt` contacts) owned by an
+  object (`ObjectCommon` affiliation, as the trap chest and Twinrova's ice field).
+  Its own AI waits 30 frames (the end of the get event), attacks for 30 frames, then
+  removes the sensor. Each trap freezes once. Child Link cannot be frozen in the
+  vanilla game (`Player_Child` `ConditionParam`: `IsEnableFrozen: false`): with traps
+  in the seed it is turned on, so any ice attack can freeze child Link too. Earlier
+  tests were all made as child Link, which explains why the hits only hurt him. In
+  game (27/11) the first version, which kept the Sun's Song hit setup, did not touch
+  Link; the second, attacking at once, hurt him just after the text without freezing
+  him; with the child freeze on, he froze with no ice shell around him. His ELink
+  user (`Player`) plays `@Blank` for `Condition_Frozen` and `Condition_Frozen_End`.
+  With traps, adult Link's trees for those calls are grafted into it
+  (`formats/xlink.py`, `ELink2/elink2.Product.110.belnk`, the copy the game loads).
+  The shatter is copied as is; it shows in game (27/11). The adult shell is a grid
+  on the equipped weapon and its kind, with adult items only, so child Link matched
+  no cell and got no shell. He gets its whole-body branch (`全身凍結`: 16 poses and
+  the cap pieces) directly. The game only has the adult emitter sets
+  (`Ply_Frozen_*_Adult`), so the shell is sized for adult Link. **Not validated in
+  game**: the shell on child Link.
 * **Maps and compasses "Start with", small keys / boss keys "Removed"**: the saved
   `DungeonInfo.<folder>` values are written at the end of the opening
   (`event_patch.add_start_values`, `key_adapter.start_dungeon_values`):
@@ -170,8 +215,10 @@ the new hours; regenerate the seed and use the updated apworld to apply this.
 
 ## Market lost dog from the start (`lost_dog.py`)
 
-The quest's `DependFlagName` and both Kakariko gate readers in the Market dog/chase
-module now read `Sequence_IsChildhood`. The native schedules, time checks, dog
+The quest's `DependFlagName`, both Kakariko gate readers in the Market dog/chase
+module and the gate reader of the random-appear dog pool module
+(`HrlMarket_Child_Dog_Prefab_7574`, which spawns the dog at its random Market
+spots) now read `Sequence_IsChildhood`. The native schedules, time checks, dog
 identification and return sequence remain intact. The first reward tests
 `SubEvent_FindRichard_GetHeartPiece`, set after its handover; subsequent returns
 give the native blue rupee. The tracker collection marker still runs only after
@@ -202,6 +249,15 @@ set when the arrival event runs. Requests for
 backward. Regenerate a seed to apply these changes. **Not validated in game.**
 
 ## Multi-level mini-games (`minigame_rewards.py`)
+
+The **Treasure Chest Game** first prize is part of `shuffle_chests`. Its special
+shop chest (`Market#16881481538337649070`) contributes one ordinary Piece of Heart
+to the pool and uses the `Market Treasure Chest Game Reward` Lens of Truth rule.
+Both its content and Lens preview are shuffled, and its opening is tracked through
+the original minigame event. The native completion flag still selects a separate
+red-rupee chest on repeat wins; intermediate key and rupee chests stay vanilla.
+Requires a newly generated seed (generator 0.12.18+) and a rebuilt AP world for
+multiworld. Static resource and logic checks pass; an in-game pilot remains needed.
 
 The first success hands over the prizes of every level (they are separate checks), and
 the saved progress jumps to the end so that later wins only pay the repeat reward.
@@ -342,13 +398,36 @@ away. Every copy is now a *token* that becomes the next level in game:
 
 ## Enemy souls (`soul_adapter.py`)
 
-Modes `bosses`, `regional`, `all` (46 souls, 845 enemies). `Presence` is added to
+Modes `bosses`, `regional`, `all` (8 boss souls, 26 regional souls or 47 family souls
+in the current build). `Presence` is added to
 enemies without an existing condition; `Item_Soul_*` items (key item template of
 the Forest Medallion, 3D model of the Poe soul); RSDB rows `ActorInfo`,
 `GameActorInfo`, `PouchActorInfo`; saved flags `IsGet.Item_Soul_*`; RESTBL entries;
 get texts (`<actor>_Name/_Caption/_GetMessage/_GetCaption` in
 `ActorMsg/PouchContent.msbt` of the 16 languages, via `msbt.py`) — without them
 the dialogue box stayed empty and blocked the game. A new save is required.
+
+Native combat dependencies are scanned by `game/combat.py`: map counters,
+AI groups, used enemy defeat outputs (including generic actor controllers)
+and nested logic modules. Script-created chests need not have `SpawnType=1`.
+Their actor IDs associate the fight with its actual reward, including merged
+child/adult chest variants. The Royal Family's Tomb requires the Keese soul
+before its song can be collected; hiding a shutter does not prove a scripted
+passage is open. See [the complete native inventory](SOUL_COMBAT_AUDIT.md) and
+its machine-readable `soul_combat_audit.json`.
+
+Solo fill and replay must recover **every soul** from real pickups, even with
+minimal accessibility. No soul is assumed during final validation. The first
+child route to the Door of Time follows these combat requirements, rejecting
+Song of Time in the Royal Tomb when the Keese soul can only be found as adult.
+Existing seed files remain readable, but their placements are not repaired:
+regenerate them. Archipelago needs a rebuilt `.apworld` and new placements;
+native combat evidence intentionally changes the scan fingerprint.
+
+The requested behavior of doors when a required soul is missing is specified in
+[the room door policy](SOUL_ROOM_DOOR_POLICY.md). That policy distinguishes safe
+entry/retreat from combat-gated exits and preserves native key locks. It is a
+specification; its physical door-control changes are not implemented yet.
 
 ## Logic safety rules
 
@@ -372,8 +451,10 @@ the dialogue box stayed empty and blocked the game. A new save is required.
   wallets, scales…): each copy gives the level above the one Link holds, so the
   n-th copy found is level n, as the AP logic counts them (see *Progressive items*
   below). `progressive_order` and `progressive_strict` no longer change anything.
-- Souls: entering a dungeon requires the souls of the families present; a boss
-  room requires the boss soul; conditional chests require the souls of their map.
+- Souls: entering a dungeon conservatively requires the souls of its mechanical
+  enemies and native combat groups; a boss room requires the boss soul.
+  Native combat rewards require their group's souls, even without a conditional
+  chest flag. Conditional chests also require the souls of their map.
   Excluded from souls: Poes, Stalchildren, Leevers, Gerudo, gold skulltulas,
   Ganon, business scrubs, story enemies.
 
@@ -417,6 +498,25 @@ is independent of Zelda's escape below. The solver applies its exit rule in Pyth
 preserving the world's fingerprint. Missing stored values mean `song`, and that value
 is omitted from stored settings to preserve earlier seed identities. Behaviour in game
 still needs confirmation.
+
+### Adult start (`starting_age` = `adult`)
+
+A new game begins as adult Link at the Temple of Time pedestal. The engine still loads
+Kokiri Forest first: the opening's seed marker, starting items and start values are
+written there as usual, then `Opening_Introduction` (right after its own quest request,
+`Event8`) sets `Sequence_IsChildhood` to false and reserves the banc change to
+`Market_Adult`, a copy of the native `Market_Child_Field_ChildToAdult` arrival (boot event
+`Dm_TimeTemple_0085`). The forest introduction no longer plays (`patching/adult_start.py`).
+
+* The Door of Time is open: `open_door_of_time` is forced on when the option is validated,
+  so the existing opening and pedestal fixes apply and time travel works both ways.
+* Link holds the Master Sword (`Weapon_Sword_Master`, added to the silent starting pouch
+  items): putting the sword back at the pedestal needs it. Every other starting item is the
+  `start_inventory_from_pool` choice; nothing else is given.
+* The solver already knows the option (`Root Exits`: starting age or `Time Travel`); the
+  child side only opens once the pedestal's `Time Travel` is reached.
+* `random` stays unavailable. New save required. The gameplay chain is built from the
+  native flows' dumps only, no game file was run: to be confirmed in game.
 
 Before accepting a local seed, generation and replay independently sweep its actual
 placements from the starting inventory with every `Time Travel` grant disabled.
@@ -546,6 +646,12 @@ outside the maps are not covered (except chest events).
     bean planting is also out of logic, including for the adult volcano heart.
 16. **Cuccos**: with 3 to bring back, the cucco lady's request says 3, her "left to find"
     count starts at 3, and she gives her reward once 3 are in the pen.
+17. **Fake item traps** (`fake_item_traps`): open a chest holding a trap. The real
+    item's model and name show, then "Too bad, it's a trap!", then Link is frozen
+    once; the same trap never freezes again (reload included). Check that a Kokiri
+    or Zora nearby is not frozen and that Link can move again. With `plentiful`, also
+    pick a trap on the ground (freestanding item, skulltula token), a second copy of
+    the same item (it freezes too), and a medallion or song trap.
 
 Known limits: some NPCs decide "already given" from the vanilla item (e.g. silver
 scale for the diving game) and can give their new item again; shop texts of

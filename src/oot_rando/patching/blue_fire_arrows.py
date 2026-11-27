@@ -6,7 +6,7 @@ import json
 from oot_rando.formats import byml_codec as byml
 from oot_rando.formats.inspect_resources import sarc
 from oot_rando.patching.ap_mailbox import ainb_to_binary
-from oot_rando.patching.repeatable_adapter import _default, _guid
+from oot_rando.patching.repeatable_adapter import ainb_default, stable_guid
 from oot_rando.patching.soul_adapter import murmur3
 
 ARROW_PACK = 'Pack/Actor/NormalArrow.pack.zs'
@@ -47,14 +47,14 @@ def _patched(document):
 
     def add(template, purpose):
         node = copy.deepcopy(nodes[template])
-        node.update({'Node Index': len(nodes), 'GUID': _guid(IDENTIFIER + '/' + purpose)})
+        node.update({'Node Index': len(nodes), 'GUID': stable_guid(IDENTIFIER + '/' + purpose)})
         nodes.append(node)
         return node
 
     # Same interface as the native query in _LocalModule_7498b5490eff, node 1.
     hit = add(3, 'hit')
     hit['Name'] = 'QuerySensorHitIsHitAttackIdentifier'
-    hit['Parameters'] = {'Inputs': {'String': [_default('AttackIdentifier', IDENTIFIER)]},
+    hit['Parameters'] = {'Inputs': {'String': [ainb_default('AttackIdentifier', IDENTIFIER)]},
                          'Outputs': {'Bool': [{'Name': 'Bool', 'Is Output': True}]}}
 
     def disjunction(left, output, right, purpose):

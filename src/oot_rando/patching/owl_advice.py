@@ -1,3 +1,4 @@
+from oot_rando.formats.evfl_tools import event_params_of, links_to
 """Skip Kaepora's field tutorials while retaining his optional transport services.
 
 The dream-world NPC is a separate game service, not a field tutorial. In particular,
@@ -57,11 +58,11 @@ def field_step_after_escape(raw, steps):
     ``steps``: the challenge table (:func:`oot_rando.patching.quest_guard.challenge_steps`).
     Returns (bytes, report)."""
     from oot_rando.patching import quest_guard
-    from oot_rando.patching.story_fixes import _Chart, _params
+    from oot_rando.patching.story_fixes import _Chart
     flow = _Chart(raw)
     flow.fresh(FIELD_STEP)
     escape = flow.event(ESCAPE_STEP01, 'ActionEvent')
-    params = _params(escape)
+    params = event_params_of(escape)
     if (escape.data.actor_action.v.v != quest_guard.STEP_ACTION
             or params.get('ChallengeName') != 'Goto_HyruleCastle' or params.get('StepName') != 'Step01'
             or escape.data.nxt.v is None):
@@ -85,17 +86,16 @@ def field_step_after_escape(raw, steps):
 def skip_first_field_advice(raw):
     """Run the first field arrival's environment/quest work, without the two owl scenes."""
     from evfl.util import make_index
-    from oot_rando.patching.story_fixes import _Chart, _params
-    from oot_rando.patching.qol_patches import _predecessors
+    from oot_rando.patching.story_fixes import _Chart
     flow = _Chart(raw)
     report = {}
     for name, scene, following in (('Event59', 'Dm_HrlField_0005', 'Event217'),
                                     ('Event12', 'Dm_HrlField_0010', 'Event96')):
         old = flow.event(name, 'ActionEvent')
-        if (old.data.actor_action.v.v != 'EventTransition' or _params(old).get('EventName') != scene
+        if (old.data.actor_action.v.v != 'EventTransition' or event_params_of(old).get('EventName') != scene
                 or old.data.nxt.v.name != following):
             raise ValueError('Unexpected first owl scene: ' + name)
-        links = _predecessors(flow.chart, old)
+        links = links_to(flow.chart, old)
         if not links:
             raise ValueError('First owl scene already bypassed: ' + name)
         # Set the flag here, not in OpeningEvent: the native first-arrival work must
@@ -119,12 +119,12 @@ def _short_ride(raw, lake):
     """Keep the native yes/no flight choice and all loading, warp and Cucco cleanup."""
     from evfl.event import SubFlowEvent
     from evfl.util import make_index
-    from oot_rando.patching.story_fixes import _Chart, _params
+    from oot_rando.patching.story_fixes import _Chart
     flow = _Chart(raw)
     flow.fresh('RandoOwlRideInit')
     question = flow.event('Event13', 'ActionEvent')
-    if (question.data.actor_action.v.v != 'EventTalk' or _params(question).get('ChoiceNumber') != 2
-            or not _params(question).get('IsCloseDialog')):
+    if (question.data.actor_action.v.v != 'EventTalk' or event_params_of(question).get('ChoiceNumber') != 2
+            or not event_params_of(question).get('IsCloseDialog')):
         raise ValueError('Unexpected owl ride choice.')
     entries = {e.name: e for e in flow.chart.entry_points}
     if entries['Talk'].main_event.v.name != ('Event27' if lake else 'Event41'):
@@ -168,12 +168,12 @@ def short_lake_ride(raw):
 def skip_dream_advice(raw):
     """The field owl unlocks the Dream World silently; its game service stays available."""
     from evfl.util import make_index
-    from oot_rando.patching.story_fixes import _Chart, _params
+    from oot_rando.patching.story_fixes import _Chart
     flow = _Chart(raw)
     flow.fresh('RandoOwlDreamReady')
     unlock = flow.event('Event55', 'ActionEvent')
     if (unlock.data.actor_action.v.v != 'EventTriggerSetGameDataBool'
-            or _params(unlock) != {'GameDataName': 'DreamWorld_Open', 'Value': True, 'Index': -1}):
+            or event_params_of(unlock) != {'GameDataName': 'DreamWorld_Open', 'Value': True, 'Index': -1}):
         raise ValueError('Unexpected owl Dream World unlock.')
     # Refuse to omit any additional persistent/inventory side effect on another build.
     for event in flow.chart.events:

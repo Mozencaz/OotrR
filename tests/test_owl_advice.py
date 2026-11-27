@@ -4,6 +4,7 @@ import os
 import unittest
 
 from oot_rando.patching import owl_advice as owl
+from oot_rando.formats.evfl_tools import event_params_of, links_to, parse_flow
 
 
 class OwlFlags(unittest.TestCase):
@@ -49,8 +50,7 @@ class NativeOwls(unittest.TestCase):
 
     @staticmethod
     def chart(raw):
-        from oot_rando.patching.event_patch import _flow
-        return _flow(raw).flowchart
+        return parse_flow(raw).flowchart
 
     def test_all_premarked_flags_are_native_saved_bools(self):
         from oot_rando.formats.inspect_resources import Byml
@@ -63,7 +63,6 @@ class NativeOwls(unittest.TestCase):
     def test_field_arrival_sequence_is_what_the_start_replaces(self):
         # Goto_HyruleCastle_Kaepora_00: its saved effects are the start values, its
         # pouch gift a starting item, its quest step the escape flow's new request.
-        from oot_rando.patching.story_fixes import _params
         chart = self.chart(self.read(owl.CASTLE_FLOW))
         entry = next(e for e in chart.entry_points if e.name == 'Goto_HyruleCastle_Kaepora_00')
         seen, stack, flags, played, pouch, steps = set(), [entry.main_event.v], {}, set(), [], []
@@ -75,7 +74,7 @@ class NativeOwls(unittest.TestCase):
             data = event.data
             action = getattr(getattr(data, 'actor_action', None), 'v', None)
             action = getattr(action, 'v', action)
-            params = _params(event) if hasattr(data, 'params') else {}
+            params = event_params_of(event) if hasattr(data, 'params') else {}
             if action == 'EventTriggerSetGameDataBool':
                 flags[params['GameDataName']] = params['Value']
             elif action == 'EventTransition':
@@ -98,16 +97,15 @@ class NativeOwls(unittest.TestCase):
 
     def test_field_step_follows_the_deku_tree_escape(self):
         from oot_rando.patching.quest_guard import CHALLENGES, challenge_steps
-        from oot_rando.patching.story_fixes import _params
         steps = challenge_steps(self.read(CHALLENGES))
         raw = self.read(owl.ESCAPE_FLOW)
         patched, report = owl.field_step_after_escape(raw, steps)
         events = {e.name: e for e in self.chart(patched).events}
         original = next(e for e in self.chart(raw).events if e.name == owl.ESCAPE_STEP01)
         guard = events[owl.ESCAPE_STEP01].data.nxt.v
-        self.assertEqual(_params(guard), {'GameDataName': owl.FIELD_STEP_SKIP})
+        self.assertEqual(event_params_of(guard), {'GameDataName': owl.FIELD_STEP_SKIP})
         request = events[owl.FIELD_STEP]
-        self.assertEqual(_params(request), dict(_params(original), StepName='Step02',
+        self.assertEqual(event_params_of(request), dict(event_params_of(original), StepName='Step02',
                                                 IsIgnoreCompletedChallenge=True, IsIgnoreChallengeProgressUI=True))
         resume = original.data.nxt.v.name
         self.assertEqual(request.data.nxt.v.name, resume)
@@ -117,13 +115,12 @@ class NativeOwls(unittest.TestCase):
             owl.field_step_after_escape(patched, steps)
 
     def test_first_field_scenes_mark_played_then_run_original_continuations(self):
-        from oot_rando.patching.qol_patches import _predecessors
         raw = self.read(owl.CASTLE_FLOW)
         patched, report = owl.skip_first_field_advice(raw)
         before, after = self.chart(raw), self.chart(patched)
         events = {e.name: e for e in after.events}
         for name, details in report.items():
-            self.assertFalse(_predecessors(after, events[name]))
+            self.assertFalse(links_to(after, events[name]))
             seen = events['RandoOwlSeen' + name]
             self.assertEqual(seen.data.actor_action.v.v, 'EventTriggerSetGameDataBool')
             self.assertEqual(seen.data.params.data,

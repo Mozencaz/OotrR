@@ -1,7 +1,10 @@
+# Running from the sources: the dependencies of pyproject.toml plus the "overlay" extra
+# (tests/test_dependencies.py keeps both files in step). Exact build versions: packaging/constraints.txt.
 zstandard>=0.23,<1
 evfl>=1.3,<2
 ainb==0.2.17
 websockets>=13,<16
+certifi>=2024.2.2
 # In-game overlay icons: decoded from the player's RomFS (tracker/icon_extract.py) and shown with Tk.
 Pillow>=10,<14
 texture2ddecoder>=1.0.5,<2

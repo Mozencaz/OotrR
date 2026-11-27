@@ -5,6 +5,7 @@ import unittest
 
 from oot_rando.formats import byml_codec
 from oot_rando.patching import chest_flags
+from oot_rando.formats.evfl_tools import parse_flow
 
 NUP = os.environ.get('OOT_NUP')
 ROWS = {'Dm_SY_TreasureboxSmall': {'__RowId': 'Dm_SY_TreasureboxSmall', 'EntryPointName': 'Success',
@@ -88,14 +89,13 @@ class GameFlow(unittest.TestCase):
         from oot_rando.formats.inspect_nup import Nup
         from oot_rando.formats.inspect_resources import decompress, dictionaries
         from oot_rando.game.world_maps import effective_members
-        from oot_rando.patching.event_patch import _flow
         nup = Nup(NUP)
         d = dictionaries(nup)
         path = 'Event/EventFlow/Dm_SY_TreasureboxSmall.bfevfl.zs'
         raw = decompress(nup.read(effective_members(nup)[path]), d)
         records = [{'event': 'RandoChest_1', 'entry': 'Success_MidoHouse', 'flag': 'RandoCheck.x.A#1', 'flow': path},
                    {'event': 'RandoChest_2', 'entry': 'Success', 'flag': 'RandoCheck.x.A#2', 'flow': path}]
-        chart = _flow(chest_flags.add_entries(raw, records)).flowchart
+        chart = parse_flow(chest_flags.add_entries(raw, records)).flowchart
         entries = {e.name: e for e in chart.entry_points}
         for record in records:
             mark = entries[record['event']].main_event.v
@@ -103,7 +103,7 @@ class GameFlow(unittest.TestCase):
             run = mark.data.nxt.v
             self.assertEqual((run.data.entry_point_name, run.data.res_flowchart_name), (record['entry'], ''))
             self.assertEqual([chart.events[i] for i in entries[record['event']]._sub_flow_event_indices], [run])
-        self.assertEqual(len(entries), len(_flow(raw).flowchart.entry_points) + 2)
+        self.assertEqual(len(entries), len(parse_flow(raw).flowchart.entry_points) + 2)
 
 
 if __name__ == '__main__':

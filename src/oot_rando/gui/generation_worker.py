@@ -2,12 +2,21 @@
 import multiprocessing
 
 
+class WorkerError(RuntimeError):
+    """A failure inside the worker process; ``trace`` is its traceback there."""
+
+    def __init__(self, message, trace=''):
+        super().__init__(message)
+        self.trace = trace
+
+
 def _entry(send, function, args):
     try:
         result = function(*args, progress=lambda message: send.send(('progress', message)))
         send.send(('done', result))
     except Exception as error:
-        send.send(('error', str(error)))
+        import traceback
+        send.send(('error', (str(error), traceback.format_exc())))
     finally:
         send.close()
 
@@ -32,7 +41,8 @@ def run_in_process(function, args, progress):
                 process.join()
                 return payload
             else:
-                raise RuntimeError(payload)
+                message, trace = payload
+                raise WorkerError(message, trace)
     finally:
         send.close()
         receive.close()
@@ -45,7 +55,7 @@ def run_in_process(function, args, progress):
 
 def _generate(nup, mods, settings, archive, progress):
     from oot_rando.randomizer.randomizer_core import Settings
-    from oot_rando.randomizer.randomizer_services import generate_in_mods
+    from oot_rando.randomizer.mods_folder import generate_in_mods
     return generate_in_mods(nup, mods, Settings.from_dict(settings), progress, archive=archive)
 
 

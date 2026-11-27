@@ -4,6 +4,7 @@ import os
 import unittest
 
 from oot_rando.patching import game_defaults, quest_guard, world_openings as w
+from oot_rando.formats.evfl_tools import event_params_of
 
 NUP = os.environ.get('OOT_NUP')
 
@@ -140,7 +141,7 @@ class ZoraFountain(unittest.TestCase):
 
     def test_open_kakariko_with_no_stones_keeps_both_quest_guards(self):
         from oot_rando.logic import rando_options
-        from oot_rando.patching.story_fixes import _Chart, _params
+        from oot_rando.patching.story_fixes import _Chart
         options = dict(rando_options.defaults(), open_kakariko='open', spiritual_stones='door')
         data, files, reports = w.apply_openings(
             options, self.read, self.read(game_defaults.GAMEDATA), self.read(quest_guard.CHALLENGES))
@@ -155,7 +156,7 @@ class ZoraFountain(unittest.TestCase):
             for event, _, resume in report['guarded'][w.DOOR_FLOW]:
                 guards = [e for e in chart.events
                           if getattr(e.data, 'actor_query', None) is not None
-                          and _params(e).get('GameDataName') == report['expression']
+                          and event_params_of(e).get('GameDataName') == report['expression']
                           and 1 in e.data.cases and e.data.cases[1].v.name == event]
                 self.assertEqual(len(guards), 1)
                 self.assertEqual(guards[0].data.cases[0].v.name if 0 in guards[0].data.cases else None,

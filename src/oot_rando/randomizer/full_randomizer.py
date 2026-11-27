@@ -5,17 +5,32 @@ SHA-256 counter based (rejection sampling), independent of Python's ``random``.
 """
 from collections import Counter, defaultdict
 import hashlib
-from types import SimpleNamespace
+from dataclasses import dataclass
+from typing import Callable
 
 from oot_rando.logic.rules import Logic, age_member, vanilla_placements
 from oot_rando.logic import rando_options
-from oot_rando.game.remake_world import (PROGRESSIVE, BASE_REQUIRED, STATIC_TIER_SOURCES, item_actor,
+from oot_rando.logic.rando_options import ap_settings  # noqa: F401  (moved to logic, re-exported)
+from oot_rando.game.remake_world import (PROGRESSIVE, BASE_REQUIRED, STATIC_TIER_SOURCES, static_tier_gid, item_actor,
                           match_locations, coverage_summary, FOLDER_DUNGEON,
-                          ZONE_LABELS, TRACKED_TYPES, location_zone, source_age, zone_label)
+                          ZONE_LABELS, TRACKED_TYPES, location_zone, source_age, zone_label,
+                          TREASURE_GAME_REWARD)
 from oot_rando.game.item_forms import can_take, form_actor, underwater_actor
 from oot_rando.game.extra_sources import match_sources, area_locations
 from oot_rando.patching.soul_adapter import plan_souls, chest_requirements, soul_label
 from oot_rando.patching.song_adapter import POSE_AFTER_CUTSCENE, is_song_actor, song_allowed
+from oot_rando.game.extra_sources import BOSS_HEARTS
+from oot_rando.game.extra_sources import CHILD_WALLET
+from oot_rando.game.extra_sources import scrub_price
+from oot_rando.game.remake_world import FOLDER_AP_DUNGEON as _AP_DUNGEON
+from oot_rando.game.remake_world import rule_members
+from oot_rando.patching.key_adapter import BOSS_KEY_DUNGEONS
+from oot_rando.patching.key_adapter import RING_DUNGEONS
+from oot_rando.patching.key_adapter import ring_item
+from oot_rando.patching.key_adapter import small_key_item
+from oot_rando.patching.key_adapter import small_key_item as _small_key
+from oot_rando.patching.key_adapter import start_logic_items
+from oot_rando.catalog.traps import is_trap_item, planned_traps
 
 FILLER_PRIORITY = ('Rupee (1)', 'Rupees (5)', 'Deku Nuts (5)', 'Deku Stick (1)', 'Arrows (5)', 'Bombs (5)',
                    'Rupees (20)', 'Arrows (10)', 'Deku Seeds (30)', 'Bombchus (5)', 'Arrows (30)',
@@ -65,6 +80,27 @@ def apply_item_pool(pool, value, relevant, never_extra=()):
     elif value == 'minimal':
         keep_at_most(EMPTY_BOTTLES, 1)
         keep_at_most(MINIMAL_REMOVED, 0)
+    return pool
+
+
+def add_fake_traps(pool, spare, level='some'):
+    """The traps of option value ``level`` (``catalog.traps.planned_traps``) in ``pool``.
+
+    ``spare``: filler item -> copies that may be replaced. Each trap takes the place of
+    one of them, lowest value first, so the number of items never changes; without
+    filler left, the remaining traps are not added. Traps are not progression: the
+    logic ignores them.
+    """
+    pool, spare = list(pool), Counter(spare)
+    rank = {name: index for index, name in enumerate((GREEN_RUPEE,) + FILLER_PRIORITY)}
+    for trap in planned_traps(pool, level):   # most important first, when filler runs out
+        fillers = sorted(+spare, key=lambda i: (rank.get(i, len(rank)), i))
+        if not fillers:
+            break
+        cheapest = fillers[0]
+        spare[cheapest] -= 1
+        # The last copy goes: the pool order stays stable (as in balance_pool).
+        pool[len(pool) - 1 - pool[::-1].index(cheapest)] = trap
     return pool
 
 
@@ -176,6 +212,19 @@ CASTLE_JUNK = 'Rupee (1)'
 CASTLE_SONG = 'Zeldas Lullaby'
 
 
+# Adult start (patching/adult_start.py): the first-adult cinematics never play (not at the start,
+# nor when travelling back and forth later), so Rauru's Light Medallion and the Master Sword
+# pull cannot be collected. Both checks hold a green rupee; their items are shuffled elsewhere
+# (the Master Sword is the player's from the start unless it is shuffled).
+ADULT_START_CHECKS = ('Links Pocket', 'ToT Master Sword')
+
+
+def adult_start_check(entry, options):
+    ap = list(entry.get('ap') or ())
+    return (options.get('starting_age') == 'adult' and len(ap) == 1 and ap[0] in ADULT_START_CHECKS
+            and entry.get('source') in ('boss', 'master_sword'))
+
+
 def skipped_castle_check(entry):
     """True for a check of the child castle grounds or one of the castle's gifts."""
     ap = list(entry.get('ap') or ())
@@ -219,27 +268,42 @@ def vname(group_id):
     return 'Remake|' + group_id
 
 
-def ap_settings(options, open_forest):
-    values = {name: options[name] for name in ('open_kakariko', 'open_door_of_time', 'door_of_time_requirement', 'zora_fountain',
-                                               'spiritual_stones', 'gerudo_fortress', 'open_gerudo_valley_bridge',
-                                               'starting_age', 'bridge', 'trials',
-                                               'shuffle_ganon_bosskey', 'big_poe_count', 'chicken_count',
-                                               'free_scarecrow', 'shuffle_child_trade', 'logic_rules',
-                                               'shuffle_master_sword', 'shuffle_gerudo_card',
-                                               'logic_no_night_tokens_without_suns_song',
-                                               'skip_child_zelda')}
-    values['open_forest'] = 'closed_deku' if open_forest else 'closed'
-    # AP rules' ``keysanity``: false lets one Fire Temple door open without its key
-    # ("Fire Temple Lower Locked Door": (Small Key, 8) or not keysanity), OoTR's
-    # "a vanilla key may sit behind its own door". Shuffled small keys are key rings
-    # here (one item, every key at once): the ring itself could go behind that door
-    # (Discord 16/11: Fire Temple ring on Volvagia, boss key chest past the door).
-    values['keysanity'] = options.get('shuffle_smallkeys', 'vanilla') != 'vanilla'
-    return values
+# Ring-dungeon spots checked in game as reachable without any key (remake_world.KNOWN_CHEST_GROUPS).
+KEY_FREE_SPOTS = frozenset({'Fire Temple Near Boss Chest', 'Forest Temple First Room Chest'})
 
 
 class FillError(ValueError):
     pass
+
+
+@dataclass
+class FillContext:
+    """Everything :func:`prepare` derives from the options before a fill (read by ``plan``,
+    ``plan_assigned``, the Archipelago bridge and the tests)."""
+    data: object                  # logic.world.World
+    options: dict                 # validated complete-mode options
+    settings: dict                # settings of the AP rules (rando_options.ap_settings)
+    logic: object                 # logic.rules.Logic, with the remake's extra requirements
+    matches: dict                 # group id -> matched source entry (every source in scope)
+    shuffled: dict                # group id -> entry of the sources that take a shuffled item
+    pool: list                    # items to place, one per shuffled source
+    relevant: set                 # items the logic can need
+    progression: list             # relevant items of the pool, placed first
+    logic_locations: list         # shuffled group ids that are locations of the logic (sorted)
+    restricted_dungeon: dict      # dungeon-bound item -> (zone rule, dungeon)
+    allowed: Callable             # allowed(item, group id): placement rule of a source
+    sweep: Callable               # sweep(placements, extra items) -> (state, collected, spheres)
+    base: dict                    # AP location -> vanilla item (logic.rules.vanilla_placements)
+    souls: dict                   # soul plan (patching.soul_adapter.plan_souls)
+    unmatched_ap: list            # AP locations without a remake source
+    natives: dict                 # group id -> unshuffled source giving a fixed progressive level
+    starting: object              # Counter of the items held at start (removed keys, starting items)
+    report: Callable              # progress callback
+    start_items: list
+    start_actors: list
+    castle_junk: list             # skipped child castle sources: always junk
+    is_key: Callable
+    is_mapcompass: Callable
 
 
 def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress=None, forced=None,
@@ -261,7 +325,7 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
     sources = enabled_sources(options)
     if extra:
         import copy as _copy
-        chosen = {gid: _copy.deepcopy(e) for gid, e in extra.items() if source_in_scope(e, sources)}
+        chosen = {gid: _copy.deepcopy(e) for gid, e in extra.items() if source_in_scope(e, sources) or adult_start_check(e, options)}
         used = {l for e in matches.values() if e['kind'] in ('exact', 'group') for l in e['ap']}
         match_sources(chosen, data, probe, used)
         for gid, entry in chosen.items():
@@ -276,7 +340,6 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
     location_requirements = {k: set(v) for k, v in souls['location_requirements'].items()}
     # Scrubs keep their remake price with 'regular': above the child wallet, buying
     # needs the first wallet upgrade (the AP rules do not know these prices).
-    from oot_rando.game.extra_sources import scrub_price, CHILD_WALLET
     for gid, entry in matches.items():
         if entry['source'] == 'scrub' and entry['kind'] != 'junk':
             entry['price_after'] = scrub_price(options['shuffle_scrubs'], seed_key, entry)
@@ -287,9 +350,21 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
         # Upgrades given by NPCs (bullet bag, bomb bag, quiver…) need the base
         # item in the remake: the logic must not treat them as the first copy.
         for family in BASE_REQUIRED:
-            for location in probe.location_names():
+            for location in sorted(probe.location_names()):
                 if data.vanilla_item(location) == family and data.location_type(location) != 'Chest':
                     location_requirements.setdefault(location, set()).add(family)
+    # A key ring may only land where its dungeon's doors cannot lock it in: the matching of
+    # remake sources to AP locations never checked the remake's own chain locks, so every
+    # location of a ring dungeon needs one key of it (the ring), except verified spots.
+    for _folder in key_ring_folders(options, seed_key):
+        for _region in data.regions:
+            # Boss rooms carry no dungeon tag: they lie behind the dungeon's own doors too.
+            if (_region.get('dungeon') == _AP_DUNGEON.get(_folder)
+                    or (_region['region_name'].endswith('Boss Room')
+                        and BOSS_HEARTS.get(_folder) in _region.get('locations', {}))):
+                for _location in _region.get('locations', {}):
+                    if _location not in KEY_FREE_SPOTS:
+                        location_requirements.setdefault(_location, set()).add(_small_key(_folder))
     logic = Logic(data, settings, souls['exit_requirements'], location_requirements)
     relevant = set(logic.referenced) | set(souls['items'])
 
@@ -315,7 +390,6 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
                 key_dungeons.add(item)
 
     # --- key rings and dungeon-specific boss keys (key_adapter) ---------------
-    from oot_rando.patching.key_adapter import RING_DUNGEONS, BOSS_KEY_DUNGEONS, ring_item, small_key_item
     ring_folders = key_ring_folders(options, seed_key)
     ring_keys = {small_key_item(folder): ring_item(folder) for folder in ring_folders}
     specific_boss = options['shuffle_bosskeys'] in ('any_dungeon', 'keysanity')
@@ -326,7 +400,6 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
     ring_dungeon_keys = {small_key_item(folder) for folder in RING_DUNGEONS}
     # "Removed" keys: every key is held from the start (start_dungeon_values), the
     # key chests hold filler instead.
-    from oot_rando.patching.key_adapter import start_logic_items
     removed_keys = start_logic_items(options)
 
     def in_scope(entry):
@@ -404,7 +477,6 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
         if entry['kind'] in ('exact', 'group'):
             for location in entry['ap']:
                 base[location] = None
-        from oot_rando.game.remake_world import rule_members
         logic.virtual[vname(entry['id'])] = rule_members(entry) + list(entry.get('guards', []))
         if entry['id'] not in shuffled:
             base[vname(entry['id'])] = entry['vanilla']
@@ -496,6 +568,8 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             item = POOL_FILLER
         if item == 'Rutos Letter' and ruto_letter_removed(options):
             item = 'Bottle'
+        if item == 'Master Sword' and adult_start_check(entry, options) and not options.get('shuffle_master_sword'):
+            item = POOL_FILLER   # held from the start (randomizer_core.starting_pouch_items)
         pool.append(item)
 
     def removable(item):
@@ -539,8 +613,17 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
         # Every shuffled castle check holds a green rupee, reserved in the pool.
         castle_junk = sorted(g for g in shuffled if skipped_castle_check(shuffled[g]))
         pool.extend([CASTLE_JUNK] * len(castle_junk))
+    adult_junk = sorted(g for g in shuffled if adult_start_check(shuffled[g], options))
+    pool.extend([CASTLE_JUNK] * len(adult_junk))
+    castle_junk = castle_junk + adult_junk
     # Whatever was added or replaced above: exactly one item per shuffled check.
     pool = balance_pool(pool, len(shuffled), removable, keep={CASTLE_JUNK: len(castle_junk)})
+    if options.get('fake_item_traps', 'none') != 'none':
+        # The castle junk stays reserved for its checks.
+        # Only plain filler (rupees, ammunition…) leaves; the castle junk stays reserved.
+        junk = {GREEN_RUPEE, *FILLER_PRIORITY}
+        spare = Counter(i for i in pool if i in junk and removable(i)) - Counter({CASTLE_JUNK: len(castle_junk)})
+        pool = add_fake_traps(pool, spare, options['fake_item_traps'])
     logic_locations =sorted(g for g in shuffled if vname(g) in logic.virtual)
     restricted_dungeon = {}   # item -> (zone rule, dungeon)
     for item in set(pool):
@@ -571,10 +654,11 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             canonical_cache[key] = item_actor(item, shuffled[gid]['folder'])
         return canonical_cache[key]
 
-    castle_junk_set = set(castle_junk) if options.get('skip_child_zelda') else None
+    castle_junk_set = set(castle_junk)
+    castle_skipped = bool(options.get('skip_child_zelda'))
 
     def allowed(item, gid):
-        if castle_junk_set and gid in castle_junk_set:
+        if gid in castle_junk_set:
             return item == CASTLE_JUNK
         rule, dungeon = restricted_dungeon.get(item, (None, None))
         if rule == 'dungeon' and folder_dungeon[gid] != dungeon:
@@ -585,7 +669,7 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
             return False
         actor = canonical(item, gid)
         song_mode = options.get('shuffle_song_items', 'song')
-        if castle_junk_set is not None and item == CASTLE_SONG:
+        if castle_skipped and item == CASTLE_SONG:
             # The castle skipped, Impa's song has no song location left: it goes
             # anywhere a song can be given, whatever the song mode.
             song_mode = 'everywhere'
@@ -620,7 +704,7 @@ def prepare(data, options, groups, enemies, seed_key, open_forest=True, progress
         state = logic.new_state(inventory)
         return _sweep_with_requirements(logic, placements, state)
 
-    return SimpleNamespace(
+    return FillContext(
         data=data, options=options, settings=settings, logic=logic, matches=matches, shuffled=shuffled,
         pool=pool, relevant=relevant, progression=progression, logic_locations=logic_locations,
         restricted_dungeon=restricted_dungeon, allowed=allowed, sweep=sweep, base=base, souls=souls,
@@ -644,10 +728,12 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
     if forced is not None:
         state, collected, spheres = sweep(forced)
         child_missing = child_door_missing(c, forced)
+        soul_missing = sorted(item for item in souls['items'] if not state.has(item))
         sphere_of = {loc[len('Remake|'):]: index for index, sphere in enumerate(spheres)
                      for loc in sphere if loc.startswith('Remake|')}
-        return {'beatable': state.has('Triforce') and not child_missing,
+        return {'beatable': state.has('Triforce') and not child_missing and not soul_missing,
                 'before_adult_missing': child_missing, 'spheres': sphere_of, 'sphere_count': len(spheres),
+                'unreachable_souls': soul_missing,
                 'unreachable': sorted(g for g in logic_locations if vname(g) not in collected),
                 'progressive': progressive_plan(forced, c.natives),
                 # Read by verify: the chests left in place get their opening flag too.
@@ -661,8 +747,10 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
         rest_counter = Counter(rest)
         rest_counter[CASTLE_JUNK] -= len(c.castle_junk)
         # Dungeon-bound items outside the logic (maps, compasses) first, in
-        # chests the logic cannot use whenever possible.
-        for item in rng.shuffle([i for i in rest if i in restricted_dungeon]):
+        # chests the logic cannot use whenever possible; then the fake item traps
+        # (chests and ground checks, item_forms.can_take).
+        for item in (rng.shuffle([i for i in rest if i in restricted_dungeon])
+                     + rng.shuffle([i for i in rest if is_trap_item(i)])):
             free = [g for g in shuffled if g not in placed and allowed(item, g)]
             junk_free = [g for g in free if vname(g) not in logic.virtual]
             if not free:
@@ -708,6 +796,10 @@ def plan(data, options, groups, enemies, seed_key, open_forest=True, progress=No
         if not state.has('Triforce'):
             last_error = 'victory not guaranteed'
             continue
+        soul_missing = sorted(item for item in souls['items'] if not state.has(item))
+        if soul_missing:
+            last_error = 'Unreachable enemy souls: ' + ', '.join(soul_missing)
+            continue
         if options['accessibility'] == 'full':
             missing = [g for g in logic_locations if vname(g) not in collected]
             if missing:
@@ -746,8 +838,6 @@ STARTING_UNSUPPORTED = ('Map (', 'Compass (', 'Small Key (', 'Boss Key (', 'Smal
 
 def key_ring_folders(options, seed_key):
     """Dungeon folders whose small keys become a key ring."""
-    from oot_rando.patching.key_adapter import RING_DUNGEONS
-    from oot_rando.game.remake_world import FOLDER_DUNGEON
     folders = sorted(RING_DUNGEONS)
     mode = options['key_rings']
     if mode == 'all':
@@ -833,7 +923,6 @@ def plan_assigned(data, options, groups, enemies, seed_key, assigned, open_fores
 
 
 def _dungeon_name(folder):
-    from oot_rando.game.remake_world import FOLDER_DUNGEON
     return FOLDER_DUNGEON.get(folder)
 
 
@@ -883,7 +972,7 @@ def native_sources(matches, shuffled, extra=None):
                 and entry.get('source', 'chest') in FIXED_LEVEL_SOURCES and entry['variants']):
             natives[gid] = entry
     for location, (family, tier) in STATIC_TIER_SOURCES.items():
-        gid = 'npc#' + location
+        gid = static_tier_gid(location)
         entry = (extra or {}).get(gid)
         if gid in shuffled or entry is None or entry['kind'] == 'junk':
             continue   # a junk gift has no reliable event to change: it stays native
@@ -981,7 +1070,9 @@ def _result(data, logic, options, matches, shuffled, placed, natives, sphere_of,
             'tracking_logic': {
                 'settings': logic.settings,
                 'exits': [[a, b, sorted(items)] for (a, b), items in logic.extra_exit_requirements.items()],
-                'locations': {name: sorted(items) for name, items in logic.extra_location_requirements.items()},
+                # Sorted: the requirements are gathered from sets (no stable order across processes).
+                'locations': {name: sorted(items)
+                              for name, items in sorted(logic.extra_location_requirements.items())},
                 'virtual': {name: list(members) for name, members in logic.virtual.items()}}}
 
 
@@ -991,9 +1082,9 @@ REPEATABLE = ('pots', 'bushes', 'rocks', 'crates', 'beehives', 'trees')
 def check_name(entry, gid, zone=None):
     """Name of a check: its AP location when it has its own, else where it stands
     (``game/check_names.py``: KF_sarias_house_heart_1), else its AP location (NPC gifts)."""
-    from oot_rando.game.check_names import entry_label
+    from oot_rando.game.check_names import entry_label, _LABEL_OVERRIDES
     if entry['kind'] == 'exact' and entry['ap']:
-        return entry['ap'][0]
+        return _LABEL_OVERRIDES.get(entry['ap'][0], entry['ap'][0])
     label = entry_label(entry)
     if label:
         return label
@@ -1014,7 +1105,7 @@ def covered_locations(entry, gid):
     return covered
 
 
-def _entry_zone(data, entry, gid):
+def entry_zone(data, entry, gid):
     if entry['ap'] and (entry['kind'] in ('exact', 'group') or entry['folder'] not in ZONE_LABELS):
         return location_zone(data, entry['ap'][0])
     if entry['folder'] in ZONE_LABELS:
@@ -1034,9 +1125,10 @@ def tracker_checks(data, matches, shuffled):
         entry = matches[gid]
         source = entry.get('source', 'chest')
         covered.update(covered_locations(entry, gid))
-        zone = _entry_zone(data, entry, gid)
+        zone = entry_zone(data, entry, gid)
         if entry['kind'] == 'exact' and entry['ap']:
-            name = entry['ap'][0]
+            from oot_rando.game.check_names import _LABEL_OVERRIDES
+            name = _LABEL_OVERRIDES.get(entry['ap'][0], entry['ap'][0])
         else:
             name = check_name(entry, gid, zone_label(zone))
             age = source_age(entry['variants'])
@@ -1048,7 +1140,7 @@ def tracker_checks(data, matches, shuffled):
                        'collection_state': 'unverified', 'logic': entry['kind']})
     for location in sorted(data.location_table):
         areas = data.location_areas(location)
-        if location in covered or data.location_type(location) not in TRACKED_TYPES:
+        if location in covered or location in UNTRACKED_LOCATIONS or data.location_type(location) not in TRACKED_TYPES:
             continue
         if data.location_type(location) in ORIGINAL_ONLY_TYPES and not _is_reward(data.vanilla_item(location)):
             # Rupees, hearts and ammo of the original game's pots, crates, beehives
@@ -1068,6 +1160,8 @@ def tracker_checks(data, matches, shuffled):
     return checks
 
 
+# AP locations with no readable trace in the remake (absent from the spoiler, unticked by the tracker).
+UNTRACKED_LOCATIONS = frozenset({'Gift from Sages'})
 ORIGINAL_ONLY_TYPES = {'Freestanding', 'Pot', 'FlyingPot', 'Crate', 'SmallCrate', 'Beehive', 'RupeeTower'}
 _JUNK_PREFIXES = ('Rupee', 'Rupees', 'Recovery Heart', 'Deku Nuts', 'Deku Stick', 'Deku Seeds', 'Arrows',
                   'Bombs', 'Bombchus', 'Fairy', 'Magic Jar')
@@ -1101,6 +1195,10 @@ def _patches(entry):
             result.append({'resource': variant['resource'],
                            'path': ['Actors', variant['index'], 'Dynamic', 'Drop__DropActor'],
                            'before': variant['before']})
+            if entry['id'] == TREASURE_GAME_REWARD:
+                result.append({'resource': variant['resource'],
+                               'path': ['Actors', variant['index'], 'Dynamic', 'DropViewActor'],
+                               'before': variant['dynamic']['DropViewActor']})
     return result
 
 

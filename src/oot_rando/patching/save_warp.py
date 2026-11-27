@@ -10,9 +10,9 @@ Time (adult).
   usual save screen (``Save.module``).
 * Save screen: with the flag, "Save" clears it (the save never holds it), saves as Save
   does, capturing its slot in ``CaptionData.SelectedSavePathIndex`` before the write,
-  leaves the menu as the load screen does before a load (overlay closed; pre-game pause
-  turned into the game
-  pause), sets the flag again and ends with ``Warp``. The plus menu then runs its load
+  waits for the auto save and caption managers as the plus menu does before a load
+  (else the load reads the previous save), leaves the menu as the load screen does
+  before a load (overlay closed; pre-game pause turned into the game pause), sets the flag again and ends with ``Warp``. The plus menu then runs its load
   (``_LocalModule_bde133631675``): the vanilla load of that save (the flag is gone once it
   is read back), into the warp destination. Cancel (and B) clear the flag.
 * The load prepares the screens first, then enters a separate decision state. Each
@@ -47,6 +47,9 @@ falls back on the caller's position in the other bancs.
 import copy
 import struct
 import uuid
+from oot_rando.formats import byml_codec
+from oot_rando.formats import msbt
+from oot_rando.formats.inspect_resources import sarc
 
 SAVE_WARP_FLAG = 'RandoSaveWarp'
 ON_LOAD_MODULE = 'Sequence/OnLoadBancParam.module.ainb'
@@ -366,16 +369,12 @@ def add_system_button(raw):
 
 
 def patch_layout_archive(sarc_raw):
-    from oot_rando.formats import byml_codec
-    from oot_rando.formats.inspect_resources import sarc
     files = dict(sarc(sarc_raw))
     files[SYSTEM_LAYOUT] = add_system_button(files[SYSTEM_LAYOUT])
     return byml_codec.build_sarc(files)
 
 
 def add_button_text(sarc_raw, text=BUTTON_TEXT):
-    from oot_rando.formats import byml_codec, msbt
-    from oot_rando.formats.inspect_resources import sarc
     files = dict(sarc(sarc_raw))
     message = msbt.load(files[MENU_TEXT])
     if 'Pa_System_00-Pa_Button_04-T_Btn_00' not in message.labels:
@@ -562,9 +561,22 @@ def _select_written_save(document):
                  plugs={'Int': [{'Node Index': slot, 'Name': 'Value'}]})
 
 
+def _wait_saves(document):
+    """What the plus menu does before any of its loads (``ConfirmationLoad.module``): wait
+    for the auto save manager, then for the caption manager to be stable. The save just
+    written is only then readable; a load started earlier reads the previous one."""
+    nodes = document['Nodes']
+    wait_auto = next(n for n in nodes if n['Name'] == 'SeqExecuteWaitAutoSave')
+    auto = _node(document, 'UserDefined', 'SeqExecuteWaitAutoSave', 'wait-auto-save',
+                 inputs=copy.deepcopy(wait_auto['Parameters']['Inputs']))
+    stable = _node(document, 'UserDefined', 'SeqExecuteWaitCaptionMgrStable', 'wait-caption-stable')
+    return _simultaneous(document, 'wait-auto-save-any', [auto]), stable
+
+
 def patch_save(raw):
     """With the flag, "Save" captures its slot and saves (the flag cleared during the save),
-    leaves the menu as the load screen does, sets the flag and ends with ``Warp``."""
+    waits for the save to be readable, leaves the menu as the load screen does, sets the
+    flag and ends with ``Warp``."""
     document = _document(raw)
     nodes = document['Nodes']
     choice = nodes[0]['Plugs']['Child']
@@ -579,7 +591,7 @@ def patch_save(raw):
     end = _node(document, 'Element_StateEnd', '', 'end-warp', flags=['Is Root Node'],
                 properties={'String': [{'Name': 'TransitionCommand', 'Default Value': 'Warp', 'Flags': []}]})
     after = _sequential(document, 'after-save',
-                        [35, 23, 56, _leave_menu(document),
+                        [35, 23, 56, *_wait_saves(document), _leave_menu(document),
                          _set_bool(document, 'flag-on', SAVE_WARP_FLAG, True)],
                         transition=end, root=True)
     save = _sequential(document, 'save', [_set_bool(document, 'flag-off', SAVE_WARP_FLAG, False),
@@ -649,7 +661,6 @@ def rewire_on_load(raw):
 
 def set_always_start(raw, value):
     """GameBancParam with ``IsAlwaysStartFromStartPos`` set to ``value``."""
-    from oot_rando.formats import byml_codec
     document = byml_codec.load(raw)
     if ALWAYS_START in document['root']:
         raise ValueError('GameBancParam already sets ' + ALWAYS_START)
@@ -668,7 +679,6 @@ def patch_save_warp(read, messages=(), read_archive=None):
         files[LAYOUT_ARCHIVE] = patch_layout_archive(read_archive(LAYOUT_ARCHIVE))
         for path in messages:
             files[path] = add_button_text(read_archive(path))
-    from oot_rando.formats import byml_codec
     parents = {}
     for name in ZONES + VANILLA_LOAD:
         parent = byml_codec.load(read(banc_param(name)))['root'].get('$parent')

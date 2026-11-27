@@ -4,7 +4,7 @@ import os
 import unittest
 
 from oot_rando.patching import shop_hours as shops
-from oot_rando.patching.event_patch import _flow, _snapshot
+from oot_rando.formats.evfl_tools import params_by_event, parse_flow
 
 
 @unittest.skipUnless(os.environ.get('OOT_NUP'), 'OOT_NUP not set')
@@ -66,12 +66,12 @@ class ShopHours(unittest.TestCase):
         for spec in shops.SERVICES:
             with self.subTest(flow=spec[0]):
                 path = 'Event/EventFlow/' + spec[0] + '.bfevfl.zs'
-                source = _flow(self.read(path))
+                source = parse_flow(self.read(path))
                 result, _ = shops.service_all_hours(self.read(path), spec)
-                patched = _flow(result)
+                patched = parse_flow(result)
                 old = {e.name: e for e in source.flowchart.events}
                 new = {e.name: e for e in patched.flowchart.events}
-                self.assertEqual(_snapshot(source), _snapshot(patched))
+                self.assertEqual(params_by_event(source), params_by_event(patched))
                 for name, event in old.items():
                     if hasattr(event.data, 'cases'):
                         expected = {k: v.v.name if v.v else None for k, v in event.data.cases.items()}

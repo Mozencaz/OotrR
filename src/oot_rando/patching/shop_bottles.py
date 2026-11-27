@@ -16,7 +16,8 @@ shop). For those actors only, both switches now take the branch of a plain item
 contents keep their branch. Validated in game 19/11 (Ruto's Letter bought in the
 Kokiri shop with no empty bottle).
 """
-from oot_rando.patching.story_fixes import _Chart, _case
+from oot_rando.patching.story_fixes import _Chart
+from oot_rando.formats.evfl_tools import case_target
 
 DISPLAY_SHOP_FLOW = 'Event/EventFlow/DisplayShop.bfevfl.zs'
 # Pouch actors of the full bottles the randomizer can put on a shelf.
@@ -37,10 +38,10 @@ def patch_display_shop(raw):
         switch = flow.event(name, 'SwitchEvent')
         if switch.data.actor_query.v.v != 'EventQueryCheckShopSelectItemName':
             raise ValueError('Unexpected shop item switch: ' + name)
-        contents, plain = _case(switch, BOTTLE_CATEGORY), flow.events.get(plain_name)
+        contents, plain = case_target(switch, BOTTLE_CATEGORY), flow.events.get(plain_name)
         if contents is None or contents.name != contents_name or plain is None:
             raise ValueError('Unexpected bottle branch in the shop flow: ' + name)
-        if not any(_case(switch, key) is plain for key in switch.data.cases if key != BOTTLE_CATEGORY):
+        if not any(case_target(switch, key) is plain for key in switch.data.cases if key != BOTTLE_CATEGORY):
             raise ValueError('Plain item branch not found in the shop flow: ' + name)
         following = contents
         for actor in reversed(FULL_BOTTLES):
@@ -50,12 +51,12 @@ def patch_display_shop(raw):
         report[name] = {'plain': plain_name, 'contents': contents_name, 'guard': following.name}
     result, events = flow.write()
     for name, (plain_name, contents_name) in BRANCHES.items():
-        guard = _case(events[name], BOTTLE_CATEGORY)
+        guard = case_target(events[name], BOTTLE_CATEGORY)
         for actor in FULL_BOTTLES:
             if (guard is None or guard.data.params.data.get('Value') != actor
-                    or _case(guard, 0) is None or _case(guard, 0).name != plain_name):
+                    or case_target(guard, 0) is None or case_target(guard, 0).name != plain_name):
                 raise ValueError('Full bottle guard not written: ' + name)
-            guard = _case(guard, 1)
+            guard = case_target(guard, 1)
         if guard is None or guard.name != contents_name:
             raise ValueError('Bottle contents branch lost: ' + name)
     return result, report

@@ -8,7 +8,7 @@ from oot_rando.formats.byml_writer import patch_strings
 from oot_rando.formats.inspect_resources import Byml
 from oot_rando.patching.qol_patches import (NOCTURNAL_FIELD, NOCTURNAL_SKULLTULA_MAPS, is_nocturnal_skulltula,
                                             nocturnal_skulltula_edits)
-from oot_rando.randomizer.randomizer_core import Settings, settings_identity
+from oot_rando.randomizer.randomizer_core import Settings, settings_from_patch, settings_identity
 
 NUP = os.environ.get('OOT_NUP')
 
@@ -62,8 +62,7 @@ class SettingsTests(unittest.TestCase):
         Settings('night', randomize_chests=False, open_forest=False, skulltulas_always_present=True).validate_supported()
 
     def test_archipelago_patch_keeps_it_local(self):
-        from oot_rando.archipelago import bridge
-        self.assertIn('skulltulas_always_present', bridge.settings_from_patch.__code__.co_varnames)
+        self.assertIn('skulltulas_always_present', settings_from_patch.__code__.co_varnames)
 
 
 @unittest.skipUnless(NUP, 'OOT_NUP absent')

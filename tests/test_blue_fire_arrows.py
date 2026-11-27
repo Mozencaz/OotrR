@@ -5,6 +5,7 @@ from collections import Counter
 import os
 import unittest
 
+from oot_rando.archipelago.bridge import to_ap_yaml
 from oot_rando.formats import byml_codec as b
 from oot_rando.formats.inspect_resources import sarc
 from oot_rando.patching import blue_fire_arrows as a
@@ -20,7 +21,7 @@ class OptionsAndLogic(unittest.TestCase):
         self.assertTrue(next(s for s in ap_option_specs() if s['name'] == 'blue_fire_arrows'))
         for enabled in (False, True):
             values = options.validate({'blue_fire_arrows': enabled}, supported_only=True)
-            parsed, ignored = options.from_ap_yaml(options.to_ap_yaml(values))
+            parsed, ignored = options.from_ap_yaml(to_ap_yaml(values))
             self.assertFalse(ignored)
             self.assertEqual(parsed['blue_fire_arrows'], enabled)
             self.assertEqual(full_options({'blue_fire_arrows': enabled})[0]['blue_fire_arrows'], enabled)
@@ -156,6 +157,22 @@ class Resources(unittest.TestCase):
                     self.assertEqual(selected(28), 45)
                     self.assertEqual(selected(45), 31)
                     self.assertEqual(selected(children[0]['Node Index']), 5)
+
+    def test_grown_ai_gets_room_in_the_resource_table(self):
+        """The shared AI has its own RESTBL entry: once it outgrew it, no red ice loaded."""
+        from oot_rando.game.resource_allocations import allocation
+        from oot_rando.patching.randomize_kokiri import RESTBL
+        from oot_rando.randomizer.randomizer_core import compress_changed, grow_resource_table
+        read = lambda path: self.nup.read(self.nup.latest('romfs/' + path))  # noqa: E731
+        extra = {p: fix(self.read(p)) for p, fix in a.resource_fixes()}
+        files, growths = {}, {}
+        compress_changed(extra, files, growths, read, self.d)
+        grow_resource_table(files, growths, {}, read, self.d)
+        game, seed = self.read(RESTBL), self.decompress(files[RESTBL], self.d)
+        size = len(sarc(extra[a.ICE_PACKS[0]])[a.AI])
+        self.assertGreater(size, allocation(game, a.AI))   # the bug: the patched AI did not fit
+        self.assertGreaterEqual(allocation(seed, a.AI),
+                                allocation(game, a.AI) + size - len(sarc(self.read(a.ICE_PACKS[0]))[a.AI]))
 
     def test_unknown_or_partial_graph_is_rejected(self):
         import ainb

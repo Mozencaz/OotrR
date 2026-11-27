@@ -68,16 +68,8 @@ class GameMapTests(unittest.TestCase):
     """On the game: Ruto's bottle and the Lake Hylia / Zora's Fountain bottoms are under water."""
 
     def test_known_spots(self):
-        from oot_rando.formats.inspect_nup import Nup
-        from oot_rando.formats.inspect_resources import dictionaries
-        from oot_rando.game.extra_sources import scan_world
-        from oot_rando.game.world_maps import effective_members
-        nup = Nup(os.environ['OOT_NUP'])
-        try:
-            d, members = dictionaries(nup), effective_members(nup)
-            _, _, _, extra = scan_world(nup, d, members)
-        finally:
-            nup.stream.close()
+        from game_fixture import scan_world
+        _, _, _, extra = scan_world()
         wet = {gid for gid, entry in extra.items() if any(v.get('underwater') for v in entry['variants'])}
         letter = [gid for gid in extra if '#letter#' in gid]
         self.assertTrue(letter and set(letter) <= wet)

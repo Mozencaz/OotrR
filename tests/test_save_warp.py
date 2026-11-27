@@ -238,6 +238,13 @@ class GameTests(unittest.TestCase):
         after = nodes[save]['Plugs']['Transition'][0]['Node Index']
         steps = [p['Node Index'] for p in nodes[after]['Plugs']['Child']]
         self.assertEqual(steps[:3], [35, 23, 56])
+        # The save is readable only once the managers are done, as ConfirmationLoad waits.
+        wait_auto = [nodes[p['Node Index']] for p in nodes[steps[3]]['Plugs']['Child']]
+        self.assertEqual(nodes[steps[3]]['Node Type'], 'Element_Simultaneous')
+        self.assertEqual([n['Name'] for n in wait_auto], ['SeqExecuteWaitAutoSave'])
+        self.assertEqual(wait_auto[0]['Parameters'], vanilla[26]['Parameters'])
+        self.assertEqual(nodes[steps[4]]['Name'], 'SeqExecuteWaitCaptionMgrStable')
+        steps = steps[:3] + steps[5:]
         # Leaving the menu, as LoadCheck.module before the menu's load.
         overlay, paused = [p['Node Index'] for p in nodes[steps[3]]['Plugs']['Child']]
         self.assertEqual(strings(nodes[overlay])['ScreenName'], 'SystemOverlay_00')

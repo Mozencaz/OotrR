@@ -74,6 +74,12 @@ class GenerationWorkerTests(unittest.TestCase):
             run_in_process(failing_task, (), messages.append)
         self.assertEqual(messages, ['before error'])
 
+    def test_worker_error_keeps_its_traceback(self):
+        with self.assertRaises(RuntimeError) as caught:
+            run_in_process(failing_task, (), lambda _: None)
+        self.assertIn('failing_task', caught.exception.trace)
+        self.assertIn('Traceback', caught.exception.trace)
+
     def test_worker_crash_does_not_leave_the_job_waiting(self):
         with self.assertRaisesRegex(RuntimeError, 'exit 7'):
             run_in_process(crashed_task, (), lambda _: None)

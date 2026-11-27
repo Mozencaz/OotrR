@@ -2,6 +2,8 @@
 import struct
 import zstandard as zstd
 
+from oot_rando.formats.byml_codec import c_string
+
 
 def sarc(data):
     if data[:4] != b'SARC':
@@ -54,7 +56,7 @@ class Byml:
     def string_table(self, off):
         if not off:
             return []
-        return [self.data[off+self.u32(off+4+i*4):].split(b'\0',1)[0].decode() for i in range(self.u24(off+1))]
+        return [c_string(self.data, off+self.u32(off+4+i*4)) for i in range(self.u24(off+1))]
 
     def value(self, typ, off):
         val = self.u32(off)

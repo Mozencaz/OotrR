@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Resolves the tag to create from an optional requested version.
 #   resolve_version.sh [VERSION]
-# Empty VERSION -> the version of pyproject.toml. Accepts "1.2.3" or "v1.2.3"
+# Empty VERSION -> the project version (src/oot_rando/__init__.py, also read by pyproject.toml). Accepts "1.2.3" or "v1.2.3"
 # (optionally with a suffix: v1.2.3-beta.1). Fails if the tag already exists on origin.
 # Writes version=1.2.3 and tag=v1.2.3 to $GITHUB_OUTPUT.
 set -euo pipefail
 
-project=$(sed -n 's/^version *= *"\(.*\)"/\1/p' pyproject.toml | head -n1)
+project=$(sed -n 's/^__version__ *= *"\(.*\)"/\1/p' src/oot_rando/__init__.py | head -n1)
 requested="${1:-}"
 version="${requested:-$project}"
 version="${version#v}"
@@ -17,15 +17,10 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
 fi
 tag="v$version"
 
-package=$(sed -n 's/^__version__ *= *"\(.*\)"/\1/p' src/oot_rando/__init__.py | head -n1)
-if [[ "$package" != "$project" ]]; then
-    echo "::error::pyproject.toml ($project) and src/oot_rando/__init__.py ($package) disagree."
-    exit 1
-fi
 # The built application reports __version__ and its updater compares it with the
 # release tag: a tag above it would make every build offer itself as an update.
 if [[ "$version" != "$project" ]]; then
-    echo "::error::$tag does not match the project version ($project). Bump pyproject.toml and src/oot_rando/__init__.py first."
+    echo "::error::$tag does not match the project version ($project). Bump src/oot_rando/__init__.py first."
     exit 1
 fi
 

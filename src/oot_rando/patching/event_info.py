@@ -25,6 +25,8 @@ Field arrival lists that event, so from an item get the transition never started
 ``ActionGuide_IsRequestOcarina`` (not saved: cleared by a reload) stayed true.
 """
 import copy
+from oot_rando.formats.evfl_tools import parse_flow
+from oot_rando.formats import byml_codec
 
 GAME_ANALYZED_EVENT_INFO = 'RSDB/GameAnalyzedEventInfo.Product.111.rstbl.byml.zs'
 FLOWS = 'Event/EventFlow/'
@@ -49,13 +51,12 @@ def flow_name(path):
 
 
 def _chart(raw):
-    from oot_rando.patching.event_patch import _flow
     if raw is None or hasattr(raw, 'entry_points'):
         return raw
-    return _flow(raw).flowchart
+    return parse_flow(raw).flowchart
 
 
-def _cached_charts(current):
+def cached_charts(current):
     """Decode each flow once for this analysis, without retaining seed data globally."""
     charts = {}
 
@@ -210,10 +211,9 @@ def add_subflow_dependencies(info_raw, event_settings_root, added, current):
     seed (changed or vanilla), or None. A row is completed when the entry it plays
     makes a new call, or when it lists a changed flowchart that makes one (any entry).
     """
-    from oot_rando.formats import byml_codec
     if not added:
         return info_raw, {}
-    current = _cached_charts(current)
+    current = cached_charts(current)
     memo = {}
     by_entry = {key: closure(calls, current, memo) for key, calls in added.items()}
     for key, flows in by_entry.items():
@@ -275,8 +275,8 @@ def new_transitions(modified, original):
     ``modified``: {flow name: raw}; ``original(name)``: vanilla raw, or None. Through
     external sub-flows too.
     """
-    original = _cached_charts(original)
-    now = _cached_charts(lambda name: modified[name] if name in modified else original(name))
+    original = cached_charts(original)
+    now = cached_charts(lambda name: modified[name] if name in modified else original(name))
     memo_now, memo_before, added = {}, {}, {}
     for name, raw in modified.items():
         for entry in entry_names(now(name)):
@@ -295,7 +295,6 @@ def add_child_events(info_raw, event_settings_root, added, current):
     flowchart that does (any entry). Each new event comes with the events it lists in
     turn (the vanilla Hyrule Field arrival lists Dm_SY_Ocarina's own children too).
     """
-    from oot_rando.formats import byml_codec
     if not added:
         return info_raw, {}
     document = byml_codec.load(info_raw)

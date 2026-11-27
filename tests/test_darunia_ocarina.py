@@ -4,11 +4,11 @@ import os
 import unittest
 
 from oot_rando.patching import story_fixes as s
-from oot_rando.patching.event_patch import _flow, _snapshot
+from oot_rando.formats.evfl_tools import params_by_event, parse_flow
 
 
 def ocarina_route(raw, after_saria, given):
-    chart = _flow(raw).flowchart
+    chart = parse_flow(raw).flowchart
     event = next(e for e in chart.entry_points if e.name == 'Get_StoneOfFire_PlayOcarina').main_event.v
     for _ in range(20):
         if event.name in ('Event193', 'Event278'):
@@ -37,8 +37,8 @@ class DaruniaOcarina(unittest.TestCase):
                 with self.subTest(after_saria=after_saria, given=given):
                     expected = 'Event278' if after_saria and given else 'Event193'
                     self.assertEqual(ocarina_route(raw, after_saria, given), expected)
-        before, after = _snapshot(_flow(source)), _snapshot(_flow(raw))
+        before, after = params_by_event(parse_flow(source)), params_by_event(parse_flow(raw))
         self.assertEqual({k: v for k, v in after.items() if k in before}, before)
-        events = {e.name: e for e in _flow(source).flowchart.events}
+        events = {e.name: e for e in parse_flow(source).flowchart.events}
         self.assertEqual(set(events['Event115'].data.cases) - set(events['Event159'].data.cases),
                          {6, 7, 8, 9, 10, 11})

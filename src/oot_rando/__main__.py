@@ -121,9 +121,10 @@ def apworld(argv):
 
 
 def ap_install(argv):
-    from oot_rando.archipelago.bridge import load_patch, settings_from_patch
+    from oot_rando.archipelago.bridge import load_patch
+    from oot_rando.randomizer.randomizer_core import settings_from_patch
     from oot_rando.paths import data_dir
-    from oot_rando.randomizer.randomizer_services import generate_in_mods
+    from oot_rando.randomizer.mods_folder import generate_in_mods
     if len(argv) != 3:
         print('Usage: ap-install PATCH.aprmk GAME.nup MODS_FOLDER')
         return 2
@@ -154,6 +155,11 @@ def selftest(argv):
         for name in modules:
             importlib.import_module(name)
         report['modules'] = len(modules)
+        from oot_rando.updater import tls_context
+        # Exercise CA data loading inside the frozen executable, not just imports.
+        report['tls_ca_certificates'] = tls_context().cert_store_stats()['x509_ca']
+        if not report['tls_ca_certificates']:
+            raise RuntimeError('No trusted TLS certificate authorities in this build')
         from oot_rando.logic.rules import Logic
         from oot_rando.logic.world import World
         world = World()

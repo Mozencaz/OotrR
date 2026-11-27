@@ -13,6 +13,7 @@ For N Big Poes, ``Event70`` compares against 100 × (N − 1) and ``Event265`` l
 those points through (at most 400, below the new threshold). Not validated in game.
 """
 import io
+from oot_rando.formats.evfl_tools import params_by_event, parse_flow
 
 FLOW = 'Npc_Hylia_048_BottleShop'
 REWARD_EVENT, REWARD_POINTS = 'Event70', 900
@@ -31,12 +32,11 @@ def thresholds(count):
 
 def patch_flow(raw, count):
     """Collector flow asking for ``count`` Big Poes. Returns new bytes (unchanged for 10)."""
-    from oot_rando.patching.event_patch import _flow, _snapshot
     if count == VANILLA_COUNT:
         return raw
-    flow = _flow(raw)
+    flow = parse_flow(raw)
     events = {e.name: e for e in flow.flowchart.events}
-    expected = _snapshot(flow)
+    expected = params_by_event(flow)
     for name, (before, after) in thresholds(count).items():
         params = getattr(getattr(events.get(name), 'data', None), 'params', None)
         if params is None or params.data.get('GameDataName') != POINTS or params.data.get('Value') != before:
@@ -46,6 +46,6 @@ def patch_flow(raw, count):
     stream = io.BytesIO()
     flow.write(stream)
     result = stream.getvalue()
-    if _snapshot(_flow(result)) != expected:
+    if params_by_event(parse_flow(result)) != expected:
         raise ValueError('Big Poe patch changed other parameters.')
     return result

@@ -28,7 +28,7 @@ shuffled song is given that way, so nothing appears in Link's hands:
 
 Song cutscenes are started by quest steps, not by the song itself, except the
 windmill man (adult): he plays Song of Storms' cutscene only while
-``IsGet.Item_Melody_StormSong`` is false. When songs are shuffled, his checks read
+``IsGet.Item_Melody_StormSong`` is false. When songs are shuffled, his checks parse_flow
 the check's own collection flag instead, so the location stays available after
 Song of Storms was found elsewhere.
 
@@ -36,33 +36,16 @@ Not validated in game.
 """
 import io
 
-# AP song item -> (remake actor, MelodyType of Dm_SY_Ocarina).
-SONGS = {
-    'Zeldas Lullaby': ('Item_Melody_ZeldaLullaby', 0), 'Eponas Song': ('Item_Melody_EponaSong', 1),
-    'Sarias Song': ('Item_Melody_SariaSong', 2), 'Suns Song': ('Item_Melody_SunSong', 3),
-    'Song of Time': ('Item_Melody_TimeSong', 4), 'Song of Storms': ('Item_Melody_StormSong', 5),
-    'Minuet of Forest': ('Item_Melody_ForestMinuet', 6), 'Bolero of Fire': ('Item_Melody_FireBolero', 7),
-    'Serenade of Water': ('Item_Melody_WaterSerenade', 8), 'Requiem of Spirit': ('Item_Melody_SpiritRequiem', 9),
-    'Nocturne of Shadow': ('Item_Melody_ShadowNocturne', 10), 'Prelude of Light': ('Item_Melody_LightPrelude', 11),
-}
-SONG_ACTOR_ITEMS = {actor: item for item, (actor, _) in SONGS.items()}
-MELODY_PREFIX = 'Item_Melody_'
-
-# Song locations: (AP location, give flow, give event, vanilla actor, teaching flows; None: the give flow).
-SONG_LOCATIONS = (
-    ('Song from Impa', 'Dm_MelodyGet_Zelda', 'Event111', 'Item_Melody_ZeldaLullaby', None),
-    ('Song from Malon', 'Dm_MelodyGet_Epona', 'Event11', 'Item_Melody_EponaSong', None),
-    ('Song from Saria', 'Dm_MelodyGet_Saria', 'Event109', 'Item_Melody_SariaSong', None),
-    ('Song from Royal Familys Tomb', 'Dm_MelodyGet_Sun_03', 'Event34', 'Item_Melody_SunSong', ('Dm_MelodyGet_Sun',)),
-    ('Song from Ocarina of Time', 'Dm_MelodyGet_Time', 'Event4', 'Item_Melody_TimeSong', None),
-    ('Song from Windmill', 'Dm_MelodyGet_Storm', 'Event29', 'Item_Melody_StormSong', None),
-    ('Sheik in Forest', 'Dm_MelodyGet_Forest', 'Event22', 'Item_Melody_ForestMinuet', None),
-    ('Sheik in Crater', 'Dm_MelodyGet_Fire', 'Event192', 'Item_Melody_FireBolero', None),
-    ('Sheik in Ice Cavern', 'Dm_MelodyGet_Water', 'Event29', 'Item_Melody_WaterSerenade', None),
-    ('Sheik at Colossus', 'Dm_MelodyGet_Spilit', 'Event17', 'Item_Melody_SpiritRequiem', None),
-    ('Sheik in Kakariko', 'Dm_MelodyGet_Shadow', 'Event21', 'Item_Melody_ShadowNocturne', None),
-    ('Sheik at Temple', 'Dm_MelodyGet_Shine', 'Event53', 'Item_Melody_LightPrelude', None),
+from oot_rando.catalog.songs import (  # noqa: F401  (moved to oot_rando.catalog.songs, re-exported)
+    SONGS,
+    SONG_ACTOR_ITEMS,
+    MELODY_PREFIX,
+    SONG_LOCATIONS,
+    is_song_actor,
+    song_gifts,
 )
+from oot_rando.formats.evfl_tools import params_by_event, parse_flow
+
 # Direct writes of a song's own flag in its cutscene (besides the silent add).
 SONG_FLAG_EVENTS = {'Sheik in Crater': (('Dm_MelodyGet_Fire', 'Event1', 'IsGet.Item_Melody_FireBolero'),)}
 # Queries that start (or describe) a song cutscene only while its song is missing.
@@ -106,15 +89,6 @@ SHUFFLE_MODES = ('shuffled', 'dungeon', 'any', 'everywhere')
 HELD_FORMS = ('chest', 'world')
 
 
-def is_song_actor(actor):
-    return isinstance(actor, str) and actor.startswith(MELODY_PREFIX)
-
-
-def song_gifts():
-    """Song locations in the ``EVENT_GIFTS`` format of ``extra_sources``."""
-    return tuple(('song', (ap,), (), ((stem, event, actor),)) for ap, stem, event, actor, _ in SONG_LOCATIONS)
-
-
 def location_flows(ap):
     for location, stem, _, _, teaching in SONG_LOCATIONS:
         if location == ap:
@@ -143,16 +117,6 @@ def display_event_name(event):
     return 'RandoTextGet_' + event
 
 
-def _flow(raw):
-    from oot_rando.patching.event_patch import _flow as read
-    return read(raw)
-
-
-def _snapshot(flow):
-    from oot_rando.patching.event_patch import _snapshot as snap
-    return snap(flow)
-
-
 def patch_flow(raw, ops):
     """Apply the song operations of one flow. Returns new bytes.
 
@@ -175,10 +139,10 @@ def patch_flow(raw, ops):
     from evfl.container import Container
     from evfl.event import ActionEvent, Event, SubFlowEvent
     from evfl.util import make_index, make_rindex
-    flow = _flow(raw)
+    flow = parse_flow(raw)
     chart = flow.flowchart
     events = {e.name: e for e in chart.events}
-    expected = _snapshot(flow)
+    expected = params_by_event(flow)
     wait = None
 
     def to_wait(event):
@@ -269,8 +233,8 @@ def patch_flow(raw, ops):
     stream = io.BytesIO()
     flow.write(stream)
     result = stream.getvalue()
-    checked = _flow(result)
-    if _snapshot(checked) != expected:
+    checked = parse_flow(result)
+    if params_by_event(checked) != expected:
         raise ValueError('Song patch changed other parameters.')
     written = {e.name: e for e in checked.flowchart.events}
     for name, _, _ in ops.get('text_get', ()):
@@ -354,7 +318,7 @@ def add_teaching_entries(raw):
 def site_kind(raw, event):
     """``'display'`` (text window call), ``'silent'`` or ``'other'`` for one give event."""
     from evfl.event import SubFlowEvent
-    events = {e.name: e for e in _flow(raw).flowchart.events}
+    events = {e.name: e for e in parse_flow(raw).flowchart.events}
     data = getattr(events.get(event), 'data', None)
     if isinstance(data, SubFlowEvent) and data.res_flowchart_name == GET_FLOW and data.entry_point_name in DISPLAY_ENTRIES:
         return 'display'

@@ -20,8 +20,13 @@ from pathlib import Path
 import shutil
 import struct
 
-from oot_rando.patching.soul_adapter import murmur3
-from oot_rando.tracker.save_reader import decode_progress, load_snapshot, SaveFormatError
+from oot_rando.catalog.hashing import murmur3
+from oot_rando.formats.save_file import decode_progress, load_snapshot, SaveFormatError
+from oot_rando.pc_port import KNOWN_EXES
+from oot_rando.pc_port import is_port_process
+from oot_rando.system import emulator_exes
+from oot_rando.versions import is_newer
+from oot_rando.versions import version_key
 
 BACKUP_SUFFIX = '.backup-'
 
@@ -92,8 +97,6 @@ def running_game(processes=None):
     """Exe name of a running game (PC port or emulator), or None.
 
     ``processes``: image paths of the running processes (default: the system's)."""
-    from oot_rando.pc_port import KNOWN_EXES, is_port_process
-    from oot_rando.tracker.live_memory import emulator_exes
     if processes is None:
         processes = process_images()
     names = set(KNOWN_EXES) | emulator_exes()
@@ -210,7 +213,7 @@ def saves_from(manifest):
     when unknown (every fix may be missing).
 
     A regenerated seed keeps the origin of the seed it replaced (``saves_from`` of its
-    manifest, :func:`oot_rando.randomizer.randomizer_services.generate_in_mods`): a save
+    manifest, :func:`oot_rando.randomizer.mods_folder.generate_in_mods`): a save
     is never assumed to hold the fixes of a version whose update the player declined.
     Otherwise the application that made the seed (``app_version``, none before 0.7.3)."""
     if not isinstance(manifest, dict):
@@ -224,7 +227,6 @@ def migration_values(manifest, previous=None):
     The fixes the saves may lack are those newer than :func:`saves_from` of the new seed
     when it recorded the origin of the game it continues, else of ``previous`` (manifest of
     the seed it replaced); unknown: every fix."""
-    from oot_rando.updater import is_newer
     since = manifest.get('saves_from') or saves_from(previous)
     values = dict(manifest.get('start_values') or {})
     for version, fix in sorted(SAVE_FIXES, key=lambda step: _version_order(step[0])):
@@ -238,7 +240,6 @@ def migration_values(manifest, previous=None):
 
 
 def _version_order(version):
-    from oot_rando.updater import version_key
     return version_key(version) or ((0, 0, 0), 0, ())
 
 
@@ -261,7 +262,7 @@ def migration_markers(manifest, previous=None):
         add(seed_marker_name(previous))
     if not manifest.get('save_seed_id') and isinstance(manifest.get('settings'), dict):
         from oot_rando.randomizer.randomizer_core import SEED_MARKER_PREFIX, Settings, settings_identity
-        from oot_rando.randomizer.randomizer_services import ACCEPTED_GENERATORS
+        from oot_rando.randomizer.artifact import ACCEPTED_GENERATORS
         try:
             settings = Settings.from_dict(manifest['settings'])
         except (KeyError, TypeError, ValueError):

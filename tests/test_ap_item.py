@@ -96,7 +96,7 @@ class Units(unittest.TestCase):
         self.assertEqual(count, 4)                   # 2 of 4 block columns, 2 block rows
         self.assertEqual(len(painted), len(data))
         for x, y, expected in ((0, 0, True), (1, 1, True), (2, 0, False), (3, 1, False)):
-            address = 0x200 + ap_item._block_address(x, y, 1, 1)
+            address = 0x200 + ap_item.block_address(x, y, 1, 1)
             self.assertEqual(painted[address:address + 16] == block, expected, (x, y))
         with self.assertRaises(ValueError):          # BC4 blocks are 8 bytes
             ap_item.paint_bntx(tiny_bntx(fmt=0x1d), lambda *b: block)

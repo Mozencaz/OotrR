@@ -41,15 +41,15 @@ settings) produces byte-identical files on Windows, on Linux and from the source
 | `Tag` (`tag.yml`) | manual (Actions tab → Run workflow, pick the branch) | creates the annotated tag `vX.Y.Z` on the head of the branch |
 | `Release` (`release.yml`) | manual | tests + builds, then tag `vX.Y.Z` and a GitHub release with `OoT-Randomizer-X.Y.Z-windows-x64.zip`, `OoT-Randomizer-X.Y.Z-linux-x64.tar.gz` and `SHA256SUMS.txt` |
 
-An empty version means the one in `pyproject.toml`. Any other version must
-equal it, and `pyproject.toml` must equal `oot_rando/__init__.py`: the release
-fails otherwise (the in-app updater compares `__version__` with the tag). An existing tag makes `Tag` and `Release` fail before
+An empty version means `__version__` of `src/oot_rando/__init__.py` (the only place
+the version is written; `pyproject.toml` reads it). Any other version must equal it:
+the release fails otherwise (the in-app updater compares `__version__` with the tag). An existing tag makes `Tag` and `Release` fail before
 any build. The release Linux binary is built on Ubuntu 22.04 (glibc ≥ 2.35).
 
 ### Stable and experimental channels
 
 - `main` = stable. Features are developed on branches and merged into `dev` by pull request.
-- `dev` = experimental. To publish an experimental build, bump `pyproject.toml` and
+- `dev` = experimental. To publish an experimental build, bump
   `src/oot_rando/__init__.py` on `dev` to `X.Y.Z-beta.N` (X.Y.Z = the next stable
   version), then run `Release` on the `dev` branch. A suffixed version is always
   published as a GitHub pre-release.

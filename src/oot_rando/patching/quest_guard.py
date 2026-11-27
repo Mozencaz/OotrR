@@ -20,7 +20,8 @@ Not validated in game.
 """
 from oot_rando.formats import byml_codec
 from oot_rando.patching.soul_adapter import murmur3
-from oot_rando.patching.story_fixes import _Chart, _params
+from oot_rando.patching.story_fixes import _Chart
+from oot_rando.formats.evfl_tools import event_params_of
 
 CHALLENGES = 'RSDB/Challenge.Product.111.rstbl.byml.zs'
 STEP_ACTION = 'EventExecuteProgressChallengeStep'
@@ -66,10 +67,10 @@ def check_expressions(gamedata_raw, names):
 def step_requests(raw, challenge):
     """[(event name, step name)] of the step requests of ``challenge`` in a flow."""
     chart = _Chart(raw).chart
-    return [(e.name, _params(e)['StepName']) for e in chart.events
+    return [(e.name, event_params_of(e)['StepName']) for e in chart.events
             if getattr(e.data, 'actor_action', None) is not None
             and e.data.actor_action.v.v == STEP_ACTION
-            and _params(e).get('ChallengeName') == challenge]
+            and event_params_of(e).get('ChallengeName') == challenge]
 
 
 def _relink(chart, target, replacement):
@@ -138,12 +139,12 @@ def guard_requests(raw, challenge, steps, wanted, expression, skip_when=True, ga
     requests = [e for e in flow.chart.events
                 if getattr(e.data, 'actor_action', None) is not None
                 and e.data.actor_action.v.v == STEP_ACTION
-                and _params(e).get('ChallengeName') == challenge]
-    unknown = [_params(e).get('StepName') for e in requests
-               if _params(e).get('StepName') not in order and _params(e).get('StepName') != 'Complete']
+                and event_params_of(e).get('ChallengeName') == challenge]
+    unknown = [event_params_of(e).get('StepName') for e in requests
+               if event_params_of(e).get('StepName') not in order and event_params_of(e).get('StepName') != 'Complete']
     if unknown:
         raise ValueError(f'{challenge}: steps missing from the challenge table: {unknown}')
-    targets = [e for e in requests if _params(e).get('StepName') in wanted]
+    targets = [e for e in requests if event_params_of(e).get('StepName') in wanted]
     if not targets:
         return raw, {'expression': expression, 'guarded': []}
     planned = []
@@ -176,5 +177,5 @@ def guard_requests(raw, challenge, steps, wanted, expression, skip_when=True, ga
         if (cases[run_key].v.name != step.name or (expected is None) != (skip_key not in cases)
                 or (expected is not None and cases[skip_key].v.name != expected)):
             raise ValueError('Quest guard wrongly chained: ' + step.name)
-        guarded.append((step.name, _params(step)['StepName'], resume.name if resume is not None else None))
+        guarded.append((step.name, event_params_of(step)['StepName'], resume.name if resume is not None else None))
     return result, {'expression': expression, 'guarded': guarded}

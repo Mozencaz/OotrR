@@ -9,6 +9,7 @@ from oot_rando.formats.byml_writer import patch_strings
 from oot_rando.formats.inspect_resources import Byml
 from oot_rando.logic import rando_options
 from oot_rando.patching import story_fixes as s
+from oot_rando.formats.evfl_tools import links_to, params_by_event, parse_flow
 
 NUP = os.environ.get('OOT_NUP')
 
@@ -125,12 +126,10 @@ class GameFlows(unittest.TestCase):
         return self.decompress(self.nup.read(self.nup.latest('romfs/' + path)), self.d)
 
     def chart(self, raw):
-        from oot_rando.patching.event_patch import _flow
-        return {e.name: e for e in _flow(raw).flowchart.events}
+        return {e.name: e for e in parse_flow(raw).flowchart.events}
 
     def check_kept(self, source, raw):
-        from oot_rando.patching.event_patch import _flow, _snapshot
-        before, after = _snapshot(_flow(source)), _snapshot(_flow(raw))
+        before, after = params_by_event(parse_flow(source)), params_by_event(parse_flow(raw))
         self.assertEqual({k: v for k, v in after.items() if k in before}, before)
 
     def test_darunia_gift_while_never_played(self):
@@ -532,8 +531,7 @@ class GameFlows(unittest.TestCase):
         # ClearCount holds (saves where the first race already counted as cleared).
         gate = events['RandoDampeResult']
         self.assertEqual({k: v.v.name for k, v in gate.data.cases.items()}, {0: 'Event275', 1: 'Event277'})
-        from oot_rando.patching.event_patch import _flow as flow_of
-        result = next(e for e in flow_of(raw).flowchart.entry_points if e.name == 'Result')
+        result = next(e for e in parse_flow(raw).flowchart.entry_points if e.name == 'Result')
         self.assertEqual(result.main_event.v.name, 'RandoDampeResult')
         # The race finish counts a clear only once the first prize is opened.
         finish = events['Event31'].data.nxt.v
@@ -544,13 +542,11 @@ class GameFlows(unittest.TestCase):
                          ('RandoDampeFirstPrizeOpened', s.DAMPE_FIRST_PRIZE))
         self.assertEqual(mark.data.nxt.v.name, 'Event95')
         # No live link reaches a Hookshot/Longshot check any more.
-        from oot_rando.patching.qol_patches import _predecessors
-        from oot_rando.patching.event_patch import _flow
-        chart = _flow(raw).flowchart
+        chart = parse_flow(raw).flowchart
         live = {e.name for e in chart.events if e.name not in s.DAMPE_HOOKSHOT_CHECKS}
         for name in s.DAMPE_HOOKSHOT_CHECKS:
             old = next(e for e in chart.events if e.name == name)
-            self.assertFalse([l for l in _predecessors(chart, old) if getattr(l[0], 'name', None) in live], name)
+            self.assertFalse([l for l in links_to(chart, old) if getattr(l[0], 'name', None) in live], name)
         # No reachable event of the race reads the Hookshot or Longshot any more.
         reachable, todo = set(), [p.main_event.v for p in chart.entry_points if p.main_event.v]
         while todo:
@@ -573,10 +569,9 @@ class GameFlows(unittest.TestCase):
     def test_kokiri_exit_guard_lowers_wall_after_deku_tree(self):
         # 16/11: Zelda met before the Deku Tree, the guard's last schedule state hid the
         # only talk that lowers the bridge wall.
-        from oot_rando.patching.event_patch import _flow
         source = self.read(s.KOKIRI_EXIT_FLOW)
         raw, report = s.kokiri_exit_guard_steps_aside(source)
-        entries = {e.name: e for e in _flow(raw).flowchart.entry_points}
+        entries = {e.name: e for e in parse_flow(raw).flowchart.entry_points}
         first = entries['KokiriForest_Npc_Kokiri_007_Child_BlockEnd_Talk'].main_event.v
         self.assertEqual((first.name, report['flag']), ('RandoExitWallUp', s.KOKIRI_EXIT_WALL))
         self.assertEqual(dict(first.data.params.data), {'GameDataName': s.KOKIRI_EXIT_WALL, 'Index': -1})
@@ -592,10 +587,9 @@ class GameFlows(unittest.TestCase):
     def test_link_goron_gives_tunic_outside_his_quest_step(self):
         # 19/11: the tunic only came at SageOfFire TalkDaruniaJr: never after the crater
         # (Bolero) moved the quest on, nor before Dodongo's Cavern.
-        from oot_rando.patching.event_patch import _flow
         source = self.read(s.LINK_GORON_FLOW)
         raw, report = s.link_goron_gives_tunic(source)
-        flow = _flow(raw).flowchart
+        flow = parse_flow(raw).flowchart
         entry = {e.name: e for e in flow.entry_points}[s.LINK_GORON_TALK]
         has = entry.main_event.v
         self.assertEqual(dict(has.data.params.data), {'Actor': s.GORON_TUNIC, 'Num': 1})
